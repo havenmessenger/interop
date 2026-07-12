@@ -1,0 +1,32 @@
+# cargo-audit configuration - auto-read by `cargo audit` (it reads `.cargo/audit.toml` relative to cwd).
+#
+# Each advisory below was verified against the LIVE resolved build graph (`cargo tree -i`), not assumed.
+# This crate (mimi-core) is pure MIMI/MLS provider logic + content codec - it contains NO cryptographic
+# primitives of its own; the advisories here are transitive, via the openmls MLS stack.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2026-0124 - `libcrux-chacha20poly1305` 0.0.7: panic on overlong ciphertext buffer (HIGH 8.2).
+    # NON-ACTIVATED LOCKFILE PHANTOM. It resolves into Cargo.lock only as an OPTIONAL backend dependency of
+    # `libcrux-aead` (an optional hpke-rs backend), but that backend feature is NOT enabled - this crate uses
+    # the RustCrypto backend (`openmls_rust_crypto` -> `hpke-rs-rust-crypto`). Verified: `cargo tree -i
+    # libcrux-chacha20poly1305` prints NOTHING under default / --all-features / --target all, so the crate is
+    # never compiled or linked. The AEAD actually used for a ChaCha suite is RustCrypto `chacha20poly1305`
+    # 0.10.1 (not vulnerable). No upstream bump is possible regardless: `hpke-rs-libcrux` 0.6.1 hard-pins
+    # `libcrux-aead = "=0.0.7"`, and there is zero gain in bumping an uncompiled crate. Re-evaluate if the
+    # libcrux hpke-rs backend is ever activated.
+    "RUSTSEC-2026-0124",
+
+    # RUSTSEC-2026-0173 - `proc-macro-error2` 2.0.1: unmaintained (warning).
+    # BUILD-TIME proc-macro only (pulled via the libcrux verification toolchain under `openmls_rust_crypto`).
+    # It does not appear in the shipped library artifact. Clears when the upstream toolchain drops it.
+    "RUSTSEC-2026-0173",
+
+    # RUSTSEC-2025-0134 - `rustls-pemfile` 2.2.0: unmaintained (warning, not a known vulnerability).
+    # Direct dependency of `mimi-hub` (`mimi-hub/src/tls.rs`, `rustls_pemfile::certs`/`private_key`) plus
+    # a transitive pull via `axum-server`. Verified usage: it parses the mTLS server certificate and
+    # private key from local, operator-supplied PEM files at startup, never attacker-controlled network
+    # input. No upstream fork with an equivalent API exists yet; re-evaluate if a real vulnerability
+    # (not just a maintenance-status warning) is filed against this version.
+    "RUSTSEC-2025-0134",
+]

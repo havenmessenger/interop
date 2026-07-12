@@ -1,0 +1,28 @@
+"""Template for _tell_scan_denylist.py — copy to _tell_scan_denylist.py (gitignored)
+and fill in your own project's sensitive literals. Do NOT commit the populated file.
+
+check_tell_scan.py imports SENSITIVE_PATTERNS from _tell_scan_denylist.py at runtime
+if present, and falls back to the committed script's generic secrets/PII/IP-range
+coverage if the sidecar is absent — so this file being missing degrades coverage
+rather than breaking the guard.
+
+Common categories a project might add here: internal tracker-ID prefixes, internal
+tooling/doc-path references, internal project-cadence or phase-numbering shorthand,
+personal names/usernames, or internal codenames — none of these belong in the
+committed script since they are project-specific, not generic secret shapes.
+"""
+
+import re
+
+SENSITIVE_PATTERNS = {
+    # "example label": re.compile(r"\bexample-sensitive-term\b", re.IGNORECASE),
+    # Example: internal phase/task-numbering shorthand, if your project has one.
+    # Anchor tightly to your own project's actual numbering shape (e.g. requiring a
+    # decimal sub-phase) so it doesn't collide with an unrelated public spec's own
+    # plain numbered-rule vocabulary your codebase may also cite.
+    # "internal phase numbering": re.compile(r"\bPHASE\d+\.\d+\b"),
+}
+
+# Optional: consumed by check_one_way_dep.py (guard 3) if your closed-source
+# consumer's name is itself sensitive. Leave as None if not needed.
+ONE_WAY_DEP_SENSITIVE_PATTERN = None  # re.compile(r"\byour_closed_source_consumer\b")

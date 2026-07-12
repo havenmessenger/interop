@@ -1,0 +1,20 @@
+title = "mimi-core Gitleaks Config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Confirmed false positives - verified not real secrets"
+paths = [
+    # VC-01 cross-implementation test vectors: deterministic, publicly-derived seed bytes
+    # (SHA-256 of a fixed ASCII string plus a case index) and the values computed from them.
+    # High-entropy 32-byte hex strings sitting next to field names like *_secret_hex trip the
+    # generic-api-key rule; none of it is a real secret, all of it is reproducible from
+    # tools/vc-vectors-xcheck (see docs/vc-01-vector-report.md).
+    '''tests/vectors/vc-01-vectors\.json$''',
+    # check_tell_scan.py's own self-test fixture: a deliberately-shaped fake AWS access key ID
+    # that proves this repo's own secrets scanner catches that shape. Not a real credential;
+    # removing it would silently disable the self-test's positive-detection proof for the
+    # AWS-key-shape class.
+    '''scripts/check_tell_scan\.py$''',
+]

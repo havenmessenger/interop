@@ -1,0 +1,148 @@
+{
+  "format_version": 1,
+  "ciphersuite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+  "openmls_main_pinned_sha": "f3040aaac59b8c72a9d4e0b7970eefcde9c1dd11",
+  "epoch_secrets": [
+    {
+      "case": "case_a_baseline",
+      "emulator_epoch_secret_hex": "644d152495e19965566b775a8bf59f257524a17596d4b950d914be8cf8ac69fa",
+      "epoch_id_hex": "30c26fe937485f2ee1d6f8f8277a54583a9b309dd8f3f9a8d94639f8cacb7e2c",
+      "epoch_base_secret_hex": "b03c9f660a4f3d4465f461c8dd54dc89efa81fbdd773a8bf65a7b23c088e74f0",
+      "epoch_encryption_key_hex": "7c42e064ded5eec211eed343670f214590968906f78e7c30976953d65f73caad",
+      "generation_id_secret_hex": "c1b453f2ed99a4732036f8cb3dcb1b4a4f3511b17fd699f597940b7ed3dffba8",
+      "reuse_guard_secret_hex": "3b5b6592cffcb1df2f80f3046290aa3d1c0934cd39c01d53e7cdc07b26c46164",
+      "openmls_extracted_epoch_id_hex": "30c26fe937485f2ee1d6f8f8277a54583a9b309dd8f3f9a8d94639f8cacb7e2c",
+      "openmls_extracted_epoch_base_secret_hex": "b03c9f660a4f3d4465f461c8dd54dc89efa81fbdd773a8bf65a7b23c088e74f0",
+      "openmls_extracted_epoch_encryption_key_hex": "7c42e064ded5eec211eed343670f214590968906f78e7c30976953d65f73caad",
+      "openmls_extracted_generation_id_secret_hex": "c1b453f2ed99a4732036f8cb3dcb1b4a4f3511b17fd699f597940b7ed3dffba8",
+      "openmls_extracted_reuse_guard_secret_hex": "3b5b6592cffcb1df2f80f3046290aa3d1c0934cd39c01d53e7cdc07b26c46164"
+    },
+    {
+      "case": "case_b_all_zero_secret",
+      "emulator_epoch_secret_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "epoch_id_hex": "1a9ab89a4c150c72b11a5dbe58c67e3a4cededd0cdf4494b9fda3e715e0f2785",
+      "epoch_base_secret_hex": "55225e87343f5de990eae88049ebe252c6d0c895cafefac7d71f6be3f3d9c058",
+      "epoch_encryption_key_hex": "7f604f18e1adcb574706a314e504fbe0315bbe541085fd828232fa23f3c308b8",
+      "generation_id_secret_hex": "7714916d5d933ffb63a7b7ed7533731d43019317944f7ac5095431b749dd57c2",
+      "reuse_guard_secret_hex": "2d3e55fae17893df3329a8a296a308335dcb741f9cc2c4c44a0833e9aab5b1a7",
+      "openmls_extracted_epoch_id_hex": "1a9ab89a4c150c72b11a5dbe58c67e3a4cededd0cdf4494b9fda3e715e0f2785",
+      "openmls_extracted_epoch_base_secret_hex": "55225e87343f5de990eae88049ebe252c6d0c895cafefac7d71f6be3f3d9c058",
+      "openmls_extracted_epoch_encryption_key_hex": "7f604f18e1adcb574706a314e504fbe0315bbe541085fd828232fa23f3c308b8",
+      "openmls_extracted_generation_id_secret_hex": "7714916d5d933ffb63a7b7ed7533731d43019317944f7ac5095431b749dd57c2",
+      "openmls_extracted_reuse_guard_secret_hex": "2d3e55fae17893df3329a8a296a308335dcb741f9cc2c4c44a0833e9aab5b1a7"
+    }
+  ],
+  "small_space_prp": [
+    {
+      "case": "input_zero",
+      "key_hex": "f5f8698dfbca10db1bb94cbd727b1b76",
+      "plaintext": 0,
+      "ours_ciphertext": 2160573208,
+      "openmls_ciphertext": 31710488,
+      "ours_decrypt_roundtrip": 0,
+      "openmls_decrypt_roundtrip": 0
+    },
+    {
+      "case": "input_one",
+      "key_hex": "f5f8698dfbca10db1bb94cbd727b1b76",
+      "plaintext": 1,
+      "ours_ciphertext": 3271452510,
+      "openmls_ciphertext": 2544676614,
+      "ours_decrypt_roundtrip": 1,
+      "openmls_decrypt_roundtrip": 1
+    },
+    {
+      "case": "input_max",
+      "key_hex": "f5f8698dfbca10db1bb94cbd727b1b76",
+      "plaintext": 4294967295,
+      "ours_ciphertext": 1682913838,
+      "openmls_ciphertext": 653417588,
+      "ours_decrypt_roundtrip": 4294967295,
+      "openmls_decrypt_roundtrip": 4294967295
+    },
+    {
+      "case": "input_2pow31_minus_1",
+      "key_hex": "f5f8698dfbca10db1bb94cbd727b1b76",
+      "plaintext": 2147483647,
+      "ours_ciphertext": 2171212030,
+      "openmls_ciphertext": 3315972755,
+      "ours_decrypt_roundtrip": 2147483647,
+      "openmls_decrypt_roundtrip": 2147483647
+    },
+    {
+      "case": "input_2pow31",
+      "key_hex": "f5f8698dfbca10db1bb94cbd727b1b76",
+      "plaintext": 2147483648,
+      "ours_ciphertext": 2781780090,
+      "openmls_ciphertext": 2234232148,
+      "ours_decrypt_roundtrip": 2147483648,
+      "openmls_decrypt_roundtrip": 2147483648
+    }
+  ],
+  "reuse_guard": [
+    {
+      "case": "leaf_index_zero_small_group",
+      "reuse_guard_secret_hex": "e3de8101a8f83fa2b1c0ea5e864e6ac22822f231c21e0ab18294b790c4257297",
+      "key_schedule_nonce_hex": "663ffccb23712f69732d1dcb17cae025fdd2d425d731766bf2c28a4c835a1fed",
+      "n_e": 4,
+      "leaf_index_e": 0,
+      "x": 2526451348,
+      "ours_prp_key_hex": "e7a96240c558a9e9b3c73cdc2db5504f",
+      "openmls_prp_key_hex": "e7a96240c558a9e9b3c73cdc2db5504f",
+      "ours_reuse_guard_hex": "2f2ea1b6",
+      "openmls_reuse_guard_hex": "6ec8e615",
+      "ours_recovered_leaf_index": 0,
+      "openmls_recovered_leaf_index": 0
+    },
+    {
+      "case": "leaf_index_max_small_group",
+      "reuse_guard_secret_hex": "298838debaf3340b28a7ab33ecf4aa7321e51d237f36f8d31795aeb50f490db8",
+      "key_schedule_nonce_hex": "b6e9fd532aa5ba5c0f5fe06cf70dce0e7a2b1cde5d0873f880e494faaa397bd2",
+      "n_e": 4,
+      "leaf_index_e": 3,
+      "x": 2526451351,
+      "ours_prp_key_hex": "718ed2c5de6c38fb1a8c2871ea2d05b2",
+      "openmls_prp_key_hex": "718ed2c5de6c38fb1a8c2871ea2d05b2",
+      "ours_reuse_guard_hex": "d0e4e39d",
+      "openmls_reuse_guard_hex": "e3dcf271",
+      "ours_recovered_leaf_index": 3,
+      "openmls_recovered_leaf_index": 3
+    },
+    {
+      "case": "large_power_of_two_boundary",
+      "reuse_guard_secret_hex": "e0a85ce2bc59706ed03298331fa22e3f0ae11f8f9265cb9839f35d00e0931021",
+      "key_schedule_nonce_hex": "aafd9da5b04aa51ba75b6c1134c41bece5c83086d536e472939b108d0de53994",
+      "n_e": 65536,
+      "leaf_index_e": 65535,
+      "x": 2779119615,
+      "ours_prp_key_hex": "aacc5caa7c94b894836a09edd9ac01c7",
+      "openmls_prp_key_hex": "aacc5caa7c94b894836a09edd9ac01c7",
+      "ours_reuse_guard_hex": "5592dedb",
+      "openmls_reuse_guard_hex": "aa497bdb",
+      "ours_recovered_leaf_index": 65535,
+      "openmls_recovered_leaf_index": 65535
+    }
+  ],
+  "generation_id": [
+    {
+      "case": "generation_zero",
+      "generation_id_secret_hex": "aa69b8fed0ffc0982823bf043f8e1cb4d9381f3ee6dae4c179eb82e8ab92a407",
+      "group_id_hex": "0eb473c73209c2805ec3bf4dfb4d2cf70af5c7731a62c33b0f3cfa009c650895",
+      "epoch": 7,
+      "generation": 0,
+      "ratchet_type": "application",
+      "ours_generation_id_hex": "2f64b25e65fb0350d2318bf82664b432ab0bb9b5e455aafebc44e1101a5d5bc1",
+      "openmls_extracted_generation_id_hex": "2f64b25e65fb0350d2318bf82664b432ab0bb9b5e455aafebc44e1101a5d5bc1"
+    },
+    {
+      "case": "generation_skipped_to_1000",
+      "generation_id_secret_hex": "6c62f0ffbf892e7cc2887ae113c71c84fb362c4be61488dcf2fa8663d4fba3de",
+      "group_id_hex": "4a32c4fcbc004343a5f1416dab4ad1d89f6940bb8a7b90e07573a975b1fcae9b",
+      "epoch": 7,
+      "generation": 1000,
+      "ratchet_type": "application",
+      "ours_generation_id_hex": "0e60973cf7a33d9a7db6e34852d6c8e0e6bc008eaf3f9aafbe19eeb9b7885b67",
+      "openmls_extracted_generation_id_hex": "0e60973cf7a33d9a7db6e34852d6c8e0e6bc008eaf3f9aafbe19eeb9b7885b67"
+    }
+  ]
+}

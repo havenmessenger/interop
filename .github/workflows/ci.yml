@@ -1,0 +1,107 @@
+# CI for Haven Interop (mimi-core). Enforces formatting, lints, tests, dependency audit, and
+# the standalone-source-of-truth guards below (guard 1: every dependency resolves from
+# crates.io; guard 3: no leaf-library reach-up into app-binding types).
+#
+# This job running on a fresh `actions/checkout`, with nothing else present, IS guard #2
+# (standalone-build-in-clean-room): if it's green here, mimi-core is standalone by definition.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+      - name: manifest-purity (guard 1)
+        run: python3 scripts/check_manifest_purity.py
+      - name: one-way-dep (guard 3)
+        run: python3 scripts/check_one_way_dep.py
+      - name: tell-scan (guard 4)
+        run: python3 scripts/check_tell_scan.py
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        # Deny on the lib+bins surface. Tests use unwrap()/panic() idiomatically; they are compiled
+        # and run by `cargo test`, just not deny-linted for those. Matches the Haven crate bar.
+        run: cargo clippy --lib --bins -- -D warnings
+      - name: test
+        # guard #2: this job IS the standalone clean-room build (fresh checkout, nothing else present).
+        # Explicit --no-default-features: this IS the HavenProfile leg — Haven's
+        # product build never enables `external-ops`. Today equivalent to a bare `cargo test`
+        # (no other features exist), but explicit rather than emergent, per the profile-seam intent.
+        run: cargo test --no-default-features
+      - name: audit
+        # `cargo audit` auto-reads .cargo/audit.toml, so the documented advisory dispositions apply.
+        run: cargo install cargo-audit --locked && cargo audit
+
+  spec-profile:
+    # CI leg 1/3: proves the full-fidelity ("SpecProfile") posture is real and tested,
+    # not vaporware — `external-ops` on exercises openmls's own external-commit/external-proposal
+    # capability directly (spec_capability_proof; see its module doc for the exact scope — it is NOT
+    # Haven's own acceptance mechanism). A full-fidelity consumer such as mimi-hub can build this way.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+      - name: test --all-features
+        run: cargo test --all-features
+
+  feature-exclusion-proof:
+    # CI leg 2/3: not a test run — a build-artifact inspection proving the HavenProfile
+    # leg's exclusion of `external-ops` is STRUCTURAL (a compile-time fact), not merely "we didn't
+    # call it this time." Two independent checks: (1) the resolved feature set genuinely excludes
+    # `external-ops` under Haven's build flags; (2) the SpecProfile-only capability-proof test
+    # symbols are physically absent from the compiled HavenProfile test binary (a `cargo tree`
+    # feature-resolution check alone cannot prove reachable code is actually gone — this can).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+      - name: assert external-ops absent from the resolved (HavenProfile) feature set
+        run: |
+          cargo tree --no-default-features -e features | tee /tmp/tree.txt
+          if grep -q "external-ops" /tmp/tree.txt; then
+            echo "::error::external-ops resolved into the HavenProfile feature set — structural exclusion broken"
+            exit 1
+          fi
+      - name: build the HavenProfile test binary (no external-ops)
+        run: cargo test --no-default-features --no-run --message-format=json -p mimi-core > /tmp/build.json
+      - name: locate the mimi-core lib unittest binary
+        run: |
+          BIN=$(python3 -c "
+          import json
+          for line in open('/tmp/build.json'):
+              try:
+                  obj = json.loads(line)
+              except Exception:
+                  continue
+              if (obj.get('reason') == 'compiler-artifact' and obj.get('executable')
+                      and obj.get('target', {}).get('name') == 'mimi_core'
+                      and obj.get('target', {}).get('kind') == ['lib']):
+                  print(obj['executable'])
+          ")
+          if [ -z "$BIN" ]; then
+            echo "::error::could not locate the mimi_core lib unittest binary in the build output"
+            exit 1
+          fi
+          echo "BIN=$BIN" >> "$GITHUB_ENV"
+      - name: assert SpecProfile-only capability-proof symbols are absent
+        run: |
+          for SYM in \
+            spec_profile_external_commit_join_works_against_real_openmls \
+            spec_profile_external_remove_proposal_is_validated_and_staged_by_real_openmls; do
+            if strings "$BIN" | grep -q "$SYM"; then
+              echo "::error::$SYM found in the HavenProfile test binary — structural exclusion broken"
+              exit 1
+            fi
+          done
+          echo "confirmed: both SpecProfile-only capability-proof symbols are absent from the HavenProfile binary"

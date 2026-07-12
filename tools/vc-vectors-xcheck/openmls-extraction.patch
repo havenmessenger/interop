@@ -1,0 +1,181 @@
+diff --git a/openmls/src/components/vc_derivation_info.rs b/openmls/src/components/vc_derivation_info.rs
+index 4af5a88..a6b80b9 100644
+--- a/openmls/src/components/vc_derivation_info.rs
++++ b/openmls/src/components/vc_derivation_info.rs
+@@ -1941,3 +1941,176 @@ mod tests {
+         assert_eq!(base, sibling_id);
+     }
+ }
++
++// ===========================================================================================
++// TEMPORARY, LOCAL-ONLY extraction harness — (havenmessenger/interop cross-impl
++// vector generation). NOT part of upstream openmls; local-only, never committed or pushed
++// anywhere, and never proposed upstream. Exists ONLY to print the values of
++// otherwise-pub(crate)/private VC types for fixed test inputs, so an external cross-implementation
++// vector generator (which cannot reach these types through the crate's public API) can compare
++// them byte-for-byte. Run via:
++//   cargo test -p openmls --features test-utils,virtual-clients-draft,virtual-clients-draft-test-dependencies \
++//     --lib components::vc_derivation_info::vc_vector_dump -- --nocapture
++// Reverted (`git checkout -- .`) immediately after the extraction run. This exact patch is
++// preserved verbatim as `tools/vc-vectors-xcheck/openmls-extraction.patch` in the public
++// `havenmessenger/interop` repo for reproducibility (any auditor can re-apply it to a fresh clone
++// of openmls-main at the pinned SHA and get byte-identical output).
++#[cfg(test)]
++mod vc_vector_dump {
++    use super::*;
++    use openmls_rust_crypto::OpenMlsRustCrypto;
++    use openmls_traits::OpenMlsProvider;
++
++    const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
++
++    fn provider() -> OpenMlsRustCrypto {
++        OpenMlsRustCrypto::default()
++    }
++
++    fn hex(bytes: &[u8]) -> String {
++        bytes.iter().map(|b| format!("{b:02x}")).collect()
++    }
++
++    #[test]
++    fn dump_epoch_secrets() {
++        let p = provider();
++        let cases: &[(&str, [u8; 32])] = &[
++            (
++                "case_a_baseline",
++                *b"\x64\x4d\x15\x24\x95\xe1\x99\x65\x56\x6b\x77\x5a\x8b\xf5\x9f\x25\x75\x24\xa1\x75\x96\xd4\xb9\x50\xd9\x14\xbe\x8c\xf8\xac\x69\xfa",
++            ),
++            ("case_b_all_zero_secret", [0u8; 32]),
++        ];
++        for (case, secret_bytes) in cases {
++            let emulator = EmulatorEpochSecret::new(secret_bytes);
++            let epoch_id = emulator
++                .derive_epoch_id(p.crypto(), CIPHERSUITE)
++                .expect("epoch_id");
++            let base_secret = emulator
++                .derive_epoch_base_secret(p.crypto(), CIPHERSUITE)
++                .expect("base_secret");
++            let enc_key = emulator
++                .derive_epoch_encryption_key(p.crypto(), CIPHERSUITE)
++                .expect("enc_key");
++            let gen_id_secret = emulator
++                .derive_generation_id_secret(p.crypto(), CIPHERSUITE)
++                .expect("gen_id_secret");
++            let reuse_guard_secret = emulator
++                .derive_reuse_guard_secret(p.crypto(), CIPHERSUITE)
++                .expect("reuse_guard_secret");
++            println!(
++                "EPOCH_SECRETS case={case} epoch_id={} epoch_base_secret={} epoch_encryption_key={} generation_id_secret={} reuse_guard_secret={}",
++                hex(epoch_id.0.as_slice()),
++                hex(base_secret.as_slice()),
++                hex(enc_key.0.as_slice()),
++                hex(gen_id_secret.0.as_slice()),
++                hex(reuse_guard_secret.0.as_slice()),
++            );
++        }
++    }
++
++    #[test]
++    fn dump_reuse_guard_prp_key_and_guard() {
++        let p = provider();
++        // (case, reuse_guard_secret hex, key_schedule_nonce hex, x, n_e, leaf_index_e)
++        let cases: &[(&str, &str, &str, u32, u32, u32)] = &[
++            (
++                "leaf_index_zero_small_group",
++                "e3de8101a8f83fa2b1c0ea5e864e6ac22822f231c21e0ab18294b790c4257297",
++                "663ffccb23712f69732d1dcb17cae025fdd2d425d731766bf2c28a4c835a1fed",
++                2526451348,
++                4,
++                0,
++            ),
++            (
++                "leaf_index_max_small_group",
++                "298838debaf3340b28a7ab33ecf4aa7321e51d237f36f8d31795aeb50f490db8",
++                "b6e9fd532aa5ba5c0f5fe06cf70dce0e7a2b1cde5d0873f880e494faaa397bd2",
++                2526451351,
++                4,
++                3,
++            ),
++            (
++                "large_power_of_two_boundary",
++                "e0a85ce2bc59706ed03298331fa22e3f0ae11f8f9265cb9839f35d00e0931021",
++                "aafd9da5b04aa51ba75b6c1134c41bece5c83086d536e472939b108d0de53994",
++                2779119615,
++                65536,
++                65535,
++            ),
++        ];
++        for (case, secret_hex, nonce_hex, x, n_e, leaf_index_e) in cases {
++            let secret_bytes = decode_hex(secret_hex);
++            let nonce_bytes = decode_hex(nonce_hex);
++            let secret = crate::ciphersuite::Secret::from_slice(&secret_bytes);
++            let reuse_guard_secret = ReuseGuardSecret::from_secret_for_tests(secret);
++            let prp_key = reuse_guard_secret
++                .derive_prp_key(p.crypto(), CIPHERSUITE, &nonce_bytes)
++                .expect("prp_key");
++            let guard = p
++                .crypto()
++                .ff1_aes128_encrypt(&prp_key, *x)
++                .expect("ff1 encrypt");
++            let recovered = p
++                .crypto()
++                .ff1_aes128_decrypt(&prp_key, guard)
++                .expect("ff1 decrypt")
++                % n_e;
++            println!(
++                "REUSE_GUARD case={case} prp_key={} reuse_guard={:08x} recovered_leaf_index={recovered} (expected {leaf_index_e})",
++                hex(&prp_key),
++                guard,
++            );
++        }
++    }
++
++    #[test]
++    fn dump_generation_id() {
++        let p = provider();
++        // (case, generation_id_secret hex, group_id hex, epoch, generation)
++        let cases: &[(&str, &str, &str, u64, u32)] = &[
++            (
++                "generation_zero",
++                "aa69b8fed0ffc0982823bf043f8e1cb4d9381f3ee6dae4c179eb82e8ab92a407",
++                "0eb473c73209c2805ec3bf4dfb4d2cf70af5c7731a62c33b0f3cfa009c650895",
++                7,
++                0,
++            ),
++            (
++                "generation_skipped_to_1000",
++                "6c62f0ffbf892e7cc2887ae113c71c84fb362c4be61488dcf2fa8663d4fba3de",
++                "4a32c4fcbc004343a5f1416dab4ad1d89f6940bb8a7b90e07573a975b1fcae9b",
++                7,
++                1000,
++            ),
++        ];
++        for (case, secret_hex, group_id_hex, epoch, generation) in cases {
++            let secret_bytes = decode_hex(secret_hex);
++            let group_id_bytes = decode_hex(group_id_hex);
++            let secret = crate::ciphersuite::Secret::from_slice(&secret_bytes);
++            let gen_id_secret = GenerationIdSecret(secret);
++            let ctx = PrivateMessageContext {
++                group_id: VLByteSlice(&group_id_bytes),
++                epoch: *epoch,
++                generation: *generation,
++                ratchet_type: RatchetType::Application,
++            };
++            let ctx_bytes = ctx.tls_serialize_detached().expect("serialize ctx");
++            let gid = gen_id_secret
++                .derive_generation_id(p.crypto(), CIPHERSUITE, &ctx)
++                .expect("generation_id");
++            println!(
++                "GENERATION_ID case={case} ctx_bytes={} generation_id={}",
++                hex(&ctx_bytes),
++                hex(gid.as_slice())
++            );
++        }
++    }
++
++    fn decode_hex(s: &str) -> Vec<u8> {
++        (0..s.len())
++            .step_by(2)
++            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
++            .collect()
++    }
++}

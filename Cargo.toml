@@ -1,0 +1,88 @@
+# mimi-core - shared, pure MIMI/MLS provider logic (NO networking, NO flutter_rust_bridge).
+#
+# WHY a separate crate: a WASM-targeted binding layer is cdylib/staticlib-only (no rlib) and
+# cannot be depended on as a Rust lib, nor carry server deps. This crate holds the provider's
+# pure decision logic + content codec so BOTH a future native daemon can use
+# it AND it stays out of the WASM build. It has zero binding-specific dependencies.
+#
+# Native-only (no openmls "js" feature). serde "derive" is explicit here (feature-unification
+# does not apply across a separate crate).
+[package]
+name = "mimi-core"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.96.0"
+description = "Pure MIMI/MLS provider logic + content codec (no networking, no FRB)"
+license = "Apache-2.0"
+
+# This repo is a workspace: the root package (mimi-core, unchanged) plus mimi-hub, a runnable MIMI hub
+# daemon that consumes it. mimi-core stays at the repo root rather than moving into a subdirectory so a
+# consumer pinning this repo as a git dependency at a fixed path keeps resolving without any
+# change on its side.
+#
+# default-members is explicit and includes both: Cargo's default when a workspace has a root package
+# and does NOT set this is "the root package only" (verified: `cargo metadata`'s
+# workspace_default_members omitted mimi-hub entirely without this line) - a bare `cargo test`/`cargo
+# clippy`/`cargo fmt --check` at the repo root would silently skip mimi-hub, in CI and for anyone
+# cloning the repo, without ever failing loudly.
+[workspace]
+members = ["mimi-hub"]
+default-members = [".", "mimi-hub"]
+# tools/vc-vectors-xcheck is EXCLUDED, not a member: it depends on a git-pinned openmls-main fork
+# (see its own Cargo.toml comment), which would enter this root Cargo.lock as a member and trip the
+# manifest-purity guard (crates.io-only for the audited library). Excluding keeps it buildable on its
+# own from its own directory without pulling that dependency into the workspace lock.
+exclude = ["tools/vc-vectors-xcheck"]
+
+[dependencies]
+openmls = "0.8.1"
+openmls_rust_crypto = "0.5.1"
+openmls_traits = "0.5.0"
+serde = { version = "1", features = ["derive"] }
+tls_codec = "0.4.2"
+ciborium = "0.2.2"
+# anyhow kept for the `mimi-content` BIN (an application binary - anyhow is app-idiom). The LIBRARY
+# modules use per-module `thiserror` typed enums: the lib-vs-app convention, since mimi-core ships
+# as a public library a consumer links against.
+anyhow = "1"
+thiserror = "2"
+# virtual_clients (draft-ietf-mls-virtual-clients-01 §5.6.1 Small-Space PRP): fpe = NIST SP 800-38G
+# FF1, a well-reviewed RustCrypto-adjacent implementation - reused rather than hand-rolling FF1's
+# Feistel-network construction. aes = the underlying AES-128 block cipher fpe::ff1::FF1 is generic over.
+fpe = "0.6.1"
+aes = "0.8"
+# Portable OS-CSPRNG bytes for reuse_guard's random high bits (§5.6.2). Already resolved transitively
+# (openmls's dependency tree); pinned explicitly here because a *library* primitive should call a
+# portable crate rather than the /dev/urandom-only shortcut mimi-content's CLI bin uses.
+getrandom = "0.2"
+
+[dev-dependencies]
+# Test-only: the gate tests build a Lifetime via serde_json::json! to avoid SystemTime::now().
+serde_json = "1"
+# Test-only: tests/vc_vectors_replay.rs decodes the committed VC-01 vector JSON's hex fields.
+hex = "0.4"
+
+[features]
+# Default-off, structural (compile-time) exclusion of MLS "external operations" - external commits
+# (join_by_external_commit / GroupInfo ExternalPub) and external proposals (Sender::External /
+# ExternalSendersExtension). Haven's product build never enables this (INV-MLS-001a/1b - see
+# crypto-core::profile and this crate's gate.rs join-model note). A full-fidelity
+# ("SpecProfile") consumer such as mimi-hub MAY enable it. This feature
+# gates ONLY a proof-only test module (spec_capability_proof) showing openmls's own capability is
+# real - no Haven call site constructs or accepts either mechanism, under either feature state.
+default = []
+external-ops = []
+
+[lints.clippy]
+# Discipline: no panics/unwrap in non-test code (the prod fns return Result;
+# tests use unwrap freely, which is fine).
+unwrap_used = "warn"
+panic = "warn"
+# Idiom gate: the clippy `nursery` group at warn (priority -1 so the specific lints below override it).
+# Cleared to zero on the lib+bins surface (`cargo clippy --lib --bins -- -D warnings`).
+nursery = { level = "warn", priority = -1 }
+# Allowed sub-lint (deliberate): these doc comments lead with a dense spec-citation first paragraph
+# (each cites the MIMI/MLS draft section the item implements). Forcing an artificial short summary line
+# would fragment the spec-traceability prose for no readability gain, and rewriting 24 first-paragraphs
+# risks subtly misstating spec semantics on a conformance reference impl. The rest of nursery is enforced.
+too_long_first_doc_paragraph = "allow"
