@@ -1,0 +1,49 @@
+# Allowlist for guard 5 (check_public_comment_hygiene.py): letter+digit tokens that are
+# legitimate, self-resolving public identifiers in THIS repo - conformance-row IDs defined in a
+# public doc (SECURITY-INVARIANTS.md / DIVERGENCES.md / cited against an RFC/draft section), not
+# an internal review/finding tag. One token per line, addable without a code change. Comments (#)
+# allowed. If you add a real conformance row, add its ID here in the same commit.
+
+# content-09 codec conformance rows (content.rs)
+F1
+F3
+F4
+F5
+F7
+F8
+
+# MIMI/MLS join-model + gate conformance rows (gate.rs, spec_capability_proof.rs)
+C1
+C2
+C3
+C4
+C5
+
+# AppSync/consent conformance rows (consent.rs, participant_list.rs)
+M1
+M2
+M3
+M4
+M5
+
+# store/custody conformance rows (store.rs)
+K1
+K2
+K3
+K4
+K5
+
+# room-policy conformance rows (room_policy.rs)
+P1
+P2
+P3
+P4
+P5
+P6
+
+# virtual-clients / replay-guard conformance rows
+R1
+R2
+R3
+L1
+T5

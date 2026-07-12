@@ -1,0 +1,8 @@
+# Allowlist for guard 5 (check_public_comment_hygiene.py): commit hashes of EXTERNAL repos
+# legitimately cited in this repo's comments/docs (reproducibility cross-checks, upstream forks
+# this crate's tests are verified against). One lowercase hex hash per line. Comments (#) allowed.
+# A hash here is a citation OF another project, never a citation of this repo's own history.
+
+# openmls/openmls fork pin used by tools/vc-vectors-xcheck's independent cross-check (see
+# docs/vc-01-vector-report.md).
+f3040aaac59b8c72a9d4e0b7970eefcde9c1dd11
