@@ -1038,7 +1038,7 @@ impl KeyMaterialClientCode {
 pub enum KeyMaterialResponse {
     Success {
         user_uri: IdentifierUri,
-        key_package: Vec<u8>,
+        key_package: crate::gate::GatedKeyPackage,
     },
     Exhausted {
         user_uri: IdentifierUri,
@@ -1076,7 +1076,7 @@ impl KeyMaterialResponse {
                     .to_vlbytes()
                     .tls_serialize(&mut client_buf)
                     .map_err(|e| codec_err("clientUri", e))?;
-                client_buf.extend_from_slice(key_package);
+                client_buf.extend_from_slice(key_package.as_slice());
                 VLBytes::new(client_buf)
                     .tls_serialize(&mut out)
                     .map_err(|e| codec_err("clients", e))?;
@@ -1198,7 +1198,7 @@ impl KeyMaterialResponse {
                     detail: "malformed KeyPackage (decoder panicked)".into(),
                 })?
                 .map_err(|e| codec_err("keyPackage", e))?;
-                let key_package = client_rest[..consumed].to_vec();
+                let key_package_bytes = &client_rest[..consumed];
                 let cursor = &client_rest[consumed..];
                 if !cursor.is_empty() {
                     return Err(WireError::Trailing {
@@ -1209,8 +1209,10 @@ impl KeyMaterialResponse {
                 // The accept-gate runs here, not left to whichever caller eventually
                 // hands `key_package` to openmls. A remote hub's claim that a KeyPackage is
                 // well-formed is not a claim that it carries the pinned ciphersuite - a foreign
-                // suite must never leave `decode()` wrapped in `Success`.
-                crate::gate::mimi_gate_keypackage(&key_package)?;
+                // suite must never leave `decode()` wrapped in `Success`. Constructing the
+                // `GatedKeyPackage` IS running the gate - there is no way to reach `Success`
+                // with an ungated `key_package` field.
+                let key_package = crate::gate::GatedKeyPackage::from_gated_bytes(key_package_bytes)?;
                 Ok(Self::Success {
                     user_uri,
                     key_package,
@@ -1317,7 +1319,7 @@ pub struct GroupInfoOption {
 pub enum HandshakeBundle {
     Commit {
         proposal_or_commit: Vec<u8>,
-        welcome: Option<Vec<u8>>,
+        welcome: Option<crate::gate::GatedWelcome>,
         group_info_option: GroupInfoOption,
         ratchet_tree_option: Vec<u8>,
     },
@@ -1343,7 +1345,7 @@ impl HandshakeBundle {
                     // the draft's literal `optional<Welcome>` (a presence tag then the value).
                     Some(w) => {
                         out.push(1);
-                        out.extend_from_slice(w);
+                        out.extend_from_slice(w.as_slice());
                     }
                     None => out.push(0),
                 }
@@ -1431,12 +1433,12 @@ impl HandshakeBundle {
                                 detail: "malformed Welcome (decoder panicked)".into(),
                             })?
                             .map_err(|e| codec_err("welcome", e))?;
-                        let w = rest[..consumed_len].to_vec();
                         // This is the same MlsMessage-wrapped Welcome shape
                         // `mimi_gate_welcome` gates on the `/keyMaterial` receive path - a hub
                         // forwarding a Commit's welcome is exactly the "decode -> join" path the
-                        // accept-gate exists for.
-                        crate::gate::mimi_gate_welcome(&w)?;
+                        // accept-gate exists for. Constructing the `GatedWelcome` IS running the
+                        // gate - there is no way to reach `Commit` with an ungated `welcome` field.
+                        let w = crate::gate::GatedWelcome::from_gated_bytes(&rest[..consumed_len])?;
                         (Some(w), &rest[consumed_len..])
                     }
                     other => {
@@ -2938,7 +2940,7 @@ mod tests {
 
         let r = KeyMaterialResponse::Success {
             user_uri: IdentifierUri("mimi://b.example/u/bob".to_string()),
-            key_package: kp_bytes.clone(),
+            key_package: crate::gate::GatedKeyPackage::trusted(kp_bytes.clone()),
         };
         let encoded = r.encode().unwrap();
         let decoded = KeyMaterialResponse::decode(&encoded).unwrap();
@@ -2952,7 +2954,8 @@ mod tests {
                     IdentifierUri("mimi://b.example/u/bob".to_string())
                 );
                 assert_eq!(
-                    key_package, kp_bytes,
+                    key_package.as_slice(),
+                    kp_bytes.as_slice(),
                     "the KeyPackage must round-trip byte-identical"
                 );
             }
@@ -3022,7 +3025,10 @@ mod tests {
 
         let r = KeyMaterialResponse::Success {
             user_uri: IdentifierUri("mimi://b.example/u/eve".to_string()),
-            key_package: kp_bytes,
+            // `trusted`, not `from_gated_bytes`: this test deliberately builds a wire-level
+            // Success carrying a foreign-suite KeyPackage to prove `decode()` rejects it -
+            // `from_gated_bytes` would itself refuse to construct this fixture.
+            key_package: crate::gate::GatedKeyPackage::trusted(kp_bytes),
         };
         let encoded = r.encode().unwrap();
         let err = KeyMaterialResponse::decode(&encoded)
@@ -3055,7 +3061,7 @@ mod tests {
         for bad in garbage_payloads {
             let r = KeyMaterialResponse::Success {
                 user_uri: IdentifierUri("mimi://b.example/u/bob".to_string()),
-                key_package: bad.to_vec(),
+                key_package: crate::gate::GatedKeyPackage::trusted(bad.to_vec()),
             };
             let encoded = r.encode().unwrap();
             assert!(
@@ -3208,7 +3214,7 @@ mod tests {
 
             let bundle = HandshakeBundle::Commit {
                 proposal_or_commit: commit_bytes.clone(),
-                welcome: Some(welcome_bytes.clone()),
+                welcome: Some(crate::gate::GatedWelcome::trusted(welcome_bytes.clone())),
                 group_info_option: GroupInfoOption {
                     representation: GroupInfoRepresentation::Full,
                     payload: gi_bytes.clone(),
@@ -3228,7 +3234,11 @@ mod tests {
                         proposal_or_commit, commit_bytes,
                         "commit envelope round-trip"
                     );
-                    assert_eq!(welcome, Some(welcome_bytes), "welcome round-trip");
+                    assert_eq!(
+                        welcome.map(|w| w.into_bytes()),
+                        Some(welcome_bytes),
+                        "welcome round-trip"
+                    );
                     assert_eq!(
                         group_info_option.representation,
                         GroupInfoRepresentation::Full
@@ -3330,7 +3340,10 @@ mod tests {
 
             let bundle = HandshakeBundle::Commit {
                 proposal_or_commit: commit_bytes,
-                welcome: Some(welcome_bytes),
+                // `trusted`, not `from_gated_bytes`: this test deliberately builds a wire-level
+                // Commit carrying a foreign-suite Welcome to prove `decode()` rejects it -
+                // `from_gated_bytes` would itself refuse to construct this fixture.
+                welcome: Some(crate::gate::GatedWelcome::trusted(welcome_bytes)),
                 // Never reached: the welcome gate errors and `decode()` returns via `?` before
                 // parsing these fields, so their contents don't matter for this test.
                 group_info_option: GroupInfoOption {
@@ -3401,7 +3414,7 @@ mod tests {
 
             let bundle = HandshakeBundle::Commit {
                 proposal_or_commit: commit_bytes,
-                welcome: Some(welcome_bytes),
+                welcome: Some(crate::gate::GatedWelcome::trusted(welcome_bytes)),
                 group_info_option: GroupInfoOption {
                     representation: GroupInfoRepresentation::Full,
                     payload: foreign_gi_bytes,

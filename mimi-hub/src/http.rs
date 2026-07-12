@@ -157,10 +157,20 @@ async fn key_material_wire(
         now,
     );
     let outcome = match gated {
-        Ok(Ok(Some(bytes))) => KeyMaterialResponse::Success {
-            user_uri: IdentifierUri(target_user),
-            key_package: bytes,
-        },
+        Ok(Ok(Some(bytes))) => {
+            // `publish_key_package` already ran `mimi_gate_keypackage` before storing (K5/
+            // INV-MLS-002) - this re-checks the stored bytes at serve time too, since a
+            // library consumer outside `mimi_core` has no `pub(crate)` bypass and must go
+            // through the same public gate as any other caller.
+            let key_package = match mimi_core::gate::GatedKeyPackage::from_gated_bytes(&bytes) {
+                Ok(kp) => kp,
+                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            };
+            KeyMaterialResponse::Success {
+                user_uri: IdentifierUri(target_user),
+                key_package,
+            }
+        }
         Ok(Ok(None)) => KeyMaterialResponse::Exhausted {
             user_uri: IdentifierUri(target_user),
         },
@@ -1386,7 +1396,8 @@ mod tests {
             } => {
                 assert_eq!(user_uri.0, "bob");
                 assert_eq!(
-                    key_package, kp_bytes,
+                    key_package.as_slice(),
+                    kp_bytes.as_slice(),
                     "the served KeyPackage must round-trip byte-identical"
                 );
             }

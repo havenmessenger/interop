@@ -272,6 +272,99 @@ pub fn mimi_gate_group_info(group_info_bytes: &[u8]) -> Result<(), GateError> {
 }
 
 // ===========================================================================
+// Gated newtypes - move the accept-gate from a per-call-site convention into the type
+// system. Each type's only public constructor runs the corresponding `mimi_gate_*` check;
+// a struct field typed as one of these cannot be populated with foreign wire bytes that
+// skipped the gate, because there is no public way to construct the value otherwise. The
+// `pub(crate)` trusted constructor exists for the encode side, which builds these from
+// this crate's own already-suite-pinned local objects, never from foreign wire input.
+// ===========================================================================
+
+/// A KeyPackage that has passed [`mimi_gate_keypackage`]. The only public way to obtain one
+/// from untrusted bytes is [`GatedKeyPackage::from_gated_bytes`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatedKeyPackage(Vec<u8>);
+
+impl GatedKeyPackage {
+    /// Runs the K5 accept-gate before returning `Ok`. The only public constructor.
+    pub fn from_gated_bytes(key_package_bytes: &[u8]) -> Result<Self, GateError> {
+        mimi_gate_keypackage(key_package_bytes)?;
+        Ok(Self(key_package_bytes.to_vec()))
+    }
+
+    /// Test-fixture construction that skips the gate - builds a round-trip or adversarial
+    /// fixture from bytes that may deliberately fail `from_gated_bytes` (a foreign-suite
+    /// object, to prove the DECODE-side gate rejects it). No non-test code anywhere in this
+    /// crate or its workspace members constructs a `GatedKeyPackage` this way: even the
+    /// reference hub binary (a separate crate, so it cannot see a `pub(crate)` item) calls
+    /// the public gate-running constructor on its own already-published KeyPackage bytes.
+    #[cfg(test)]
+    pub(crate) fn trusted(key_package_bytes: Vec<u8>) -> Self {
+        Self(key_package_bytes)
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+/// An `MlsMessage`-wrapped Welcome that has passed [`mimi_gate_welcome`]. The only public
+/// way to obtain one from untrusted bytes is [`GatedWelcome::from_gated_bytes`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatedWelcome(Vec<u8>);
+
+impl GatedWelcome {
+    /// Runs the K5 accept-gate before returning `Ok`. The only public constructor.
+    pub fn from_gated_bytes(mls_message_bytes: &[u8]) -> Result<Self, GateError> {
+        mimi_gate_welcome(mls_message_bytes)?;
+        Ok(Self(mls_message_bytes.to_vec()))
+    }
+
+    /// Test-fixture construction that skips the gate - see [`GatedKeyPackage::trusted`]'s
+    /// doc for why this is test-only.
+    #[cfg(test)]
+    pub(crate) fn trusted(mls_message_bytes: Vec<u8>) -> Self {
+        Self(mls_message_bytes)
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+/// A `GroupInfo` (Full representation) that has passed [`mimi_gate_group_info`]. The only
+/// public way to obtain one from untrusted bytes is [`GatedGroupInfo::from_gated_bytes`].
+/// `Partial` representation has no decoder anywhere in this crate or in openmls's public
+/// surface (see `mimi_gate_group_info`'s own doc) and so has no constructor here either -
+/// there is no way to gate a representation nothing can decode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatedGroupInfo(Vec<u8>);
+
+impl GatedGroupInfo {
+    /// Runs the K5 accept-gate before returning `Ok`. The only public constructor.
+    pub fn from_gated_bytes(group_info_bytes: &[u8]) -> Result<Self, GateError> {
+        mimi_gate_group_info(group_info_bytes)?;
+        Ok(Self(group_info_bytes.to_vec()))
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+// ===========================================================================
 // Provider ingest logic - pure, testable, foreign-input-facing.
 // These are the security-critical decision functions, separated from the HTTP transport
 // and the durable persistence behind the storage traits. Built as traits + in-mem impls
@@ -564,6 +657,58 @@ mod tests {
             mimi_gate_welcome(&kp).is_err(),
             "welcome gate must refuse non-Welcome bytes"
         );
+    }
+
+    // --- Gated newtypes: the only-public-ctor-runs-the-gate property ---
+
+    #[test]
+    fn gated_keypackage_accepts_pinned_rejects_foreign() {
+        let (kp_aes, _, _, _) = ident("alice_aes", AES);
+        let (kp_cc, _, _, _) = ident("alice_cc", CHACHA);
+        let gated = GatedKeyPackage::from_gated_bytes(&kp_aes).expect("pinned suite must gate");
+        assert_eq!(gated.as_slice(), kp_aes.as_slice());
+        let err = GatedKeyPackage::from_gated_bytes(&kp_cc).unwrap_err();
+        assert!(err.to_string().contains("0x0003"));
+    }
+
+    #[test]
+    fn gated_welcome_accepts_pinned_rejects_foreign() {
+        let w_aes = welcome_under(AES);
+        let w_cc = welcome_under(CHACHA);
+        let gated = GatedWelcome::from_gated_bytes(&w_aes).expect("pinned suite must gate");
+        assert_eq!(gated.as_slice(), w_aes.as_slice());
+        let err = GatedWelcome::from_gated_bytes(&w_cc).unwrap_err();
+        assert!(err.to_string().contains("0x0003"));
+    }
+
+    #[test]
+    fn gated_group_info_accepts_pinned_rejects_foreign() {
+        let gi_aes = group_info_under(AES);
+        let gi_cc = group_info_under(CHACHA);
+        let gated = GatedGroupInfo::from_gated_bytes(&gi_aes).expect("pinned suite must gate");
+        assert_eq!(gated.as_slice(), gi_aes.as_slice());
+        let err = GatedGroupInfo::from_gated_bytes(&gi_cc).unwrap_err();
+        assert!(err.to_string().contains("0x0003"));
+    }
+
+    #[test]
+    fn gated_newtypes_reject_garbage() {
+        assert!(GatedKeyPackage::from_gated_bytes(b"not a keypackage").is_err());
+        assert!(GatedWelcome::from_gated_bytes(b"not a welcome").is_err());
+        assert!(GatedGroupInfo::from_gated_bytes(b"not a group info").is_err());
+    }
+
+    #[test]
+    fn gated_trusted_ctor_bypasses_the_gate_for_local_objects() {
+        // The encode-side escape hatch: a foreign-suite object is never legitimately what this
+        // crate encodes locally, but `trusted` exists precisely because the encode side builds
+        // from already-suite-pinned local objects rather than re-running the gate on its own
+        // output - proven here by constructing a Gated* from bytes that would fail the public
+        // ctor, showing `trusted` genuinely skips the check rather than silently re-deriving it.
+        let (kp_cc, _, _, _) = ident("would_fail_the_gate", CHACHA);
+        assert!(GatedKeyPackage::from_gated_bytes(&kp_cc).is_err());
+        let trusted = GatedKeyPackage::trusted(kp_cc.clone());
+        assert_eq!(trusted.into_bytes(), kp_cc);
     }
 
     // --- provider ingest logic ---
