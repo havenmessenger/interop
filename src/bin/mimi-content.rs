@@ -1,4 +1,4 @@
-//! mimi-content - a tiny CLI that wraps the REAL mimi-core content-09 codec for the interop demo.
+//! mimi-content - a tiny CLI that wraps the REAL mimi-core content-09 codec for the interop CLI.
 //!
 //! A caller can shell out to this so the content-09 CBOR frame it shows a researcher is
 //! produced by the EXACT same KAT-proven codec as `mimi-core::content` (canonical bytes a researcher can
@@ -62,7 +62,7 @@ fn decode(cbor: &[u8]) -> anyhow::Result<Vec<u8>> {
         PartBody::Single { content, .. } => Ok(content),
         PartBody::Null => Ok(Vec::new()),
         _ => Err(anyhow::anyhow!(
-            "unsupported content body (demo handles SinglePart)"
+            "unsupported content body (this CLI handles SinglePart)"
         )),
     }
 }

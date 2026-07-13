@@ -15,7 +15,8 @@
 //! second copy going stale. 6 of those routes (`keyMaterial`, `submitMessage`, `notify`,
 //! `identifierQuery`, `requestConsent`, `updateConsent`) also have a live `/mimi/pl/*` route
 //! speaking draft-ietf-mimi-protocol's TLS presentation-language (TLS-PL) wire framing directly,
-//! reading and writing the same underlying store as the JSON lane.
+//! reading and writing the same underlying store as the JSON lane. A seventh, `reportAbuse`, has a
+//! wire route only (§5.9, DIV-8 bounded v1: metadata-only, no JSON-lane twin exists).
 //!
 //! Out of v1 scope (see DIVERGENCES.md at the repo root for the full list): §5.6
 //! GroupInfo/external-commit join (DIV-1), non-0x0001 suites (DIV-2, enforced by the gate),
@@ -122,10 +123,10 @@ impl Provider {
     ///
     /// protocol-06 §5.1's own example is a FLAT object: top-level keys are the ten endpoint names,
     /// values are absolute HTTPS URLs (e.g. `"keyMaterial": "https://mimi.example.com/v1/keyMaterial/
-    /// {targetUser}"`). This document publishes those flat, draft-shaped keys for the six endpoints
+    /// {targetUser}"`). This document publishes those flat, draft-shaped keys for the seven endpoints
     /// this hub actually wire-routes (`keyMaterial`/`submitMessage`/`notify`/`identifierQuery`/
-    /// `requestConsent`/`updateConsent`) - the other four draft keys (`update`/`groupInfo`/
-    /// `reportAbuse`/`proxyDownload`) are omitted since nothing here serves them, per the same
+    /// `requestConsent`/`updateConsent`/`reportAbuse`) - the other three draft keys (`update`/
+    /// `groupInfo`/`proxyDownload`) are omitted since nothing here serves them, per the same
     /// "advertise only what's served" discipline as `unsupported` below. `endpoints` (relative paths,
     /// JSON compat lane) and `wireEndpoints` (relative paths, mirrors the flat keys) are additive
     /// non-standard keys kept for existing consumers - a strict §5.1 client ignores unknown keys.
@@ -133,7 +134,7 @@ impl Provider {
         let mut doc = serde_json::json!({
             "provider": self.domain,
             "mls_ciphersuites": [HAVEN_MLS_CIPHERSUITE_U16],   // 0x0001 only
-            "protocol_drafts": { "protocol": "06", "content": "09", "room-policy": "03" },
+            "protocol_drafts": { "protocol": "06", "content": "09", "room-policy": "04" },
             "endpoints": {
                 "keyMaterial": "/mimi/v1/keyMaterial",
                 "notify": "/mimi/v1/notify",
@@ -150,13 +151,15 @@ impl Provider {
                 "notify": "/mimi/pl/notify",
                 "identifierQuery": "/mimi/pl/identifierQuery",
                 "requestConsent": "/mimi/pl/requestConsent/{targetDomain}",
-                "updateConsent": "/mimi/pl/updateConsent/{requesterDomain}"
+                "updateConsent": "/mimi/pl/updateConsent/{requesterDomain}",
+                "reportAbuse": "/mimi/pl/reportAbuse/{roomId}"
             },
             "unsupported": {
                 "groupInfo_external_commit_join": "DIV-1: add-driven join only (ETK security)",
                 "assets_ohttp": "DIV-3: v1 is messaging-only",
                 "non_0x0001_ciphersuites": "DIV-2: rejected at ingest",
-                "update_wire_endpoint": "codec built, no live accept-path (no Provider method processes a real MLS Commit/Proposal yet); JSON room-admin RPCs cover the policy outcome"
+                "update_wire_endpoint": "codec built, no live accept-path (no Provider method processes a real MLS Commit/Proposal yet); JSON room-admin RPCs cover the policy outcome",
+                "reportAbuse_with_abusive_messages": "DIV-9: a report attaching an AbusiveMessage is refused (its Frank cannot yet be verified) - metadata-only reports are accepted"
             }
         });
         let domain = &self.domain;
@@ -167,6 +170,7 @@ impl Provider {
             ("identifierQuery", "/mimi/pl/identifierQuery"),
             ("requestConsent", "/mimi/pl/requestConsent/{targetDomain}"),
             ("updateConsent", "/mimi/pl/updateConsent/{requesterDomain}"),
+            ("reportAbuse", "/mimi/pl/reportAbuse/{roomId}"),
         ] {
             doc[key] = serde_json::Value::String(format!("https://{domain}{path}"));
         }
@@ -513,7 +517,7 @@ impl Provider {
 
     /// C3: consent-enforced KeyPackage serve. Returns `Ok(Some(kp))` only when `requester` is consented
     /// to reach `target`; otherwise `Ok(None)` carrying WHY via the [`KeyPackageAccess`] gate code (the
-    /// caller maps 5/6 to the wire). NOTE: the v1 demo's plain `serve_key_material` stays UNGATED by
+    /// caller maps 5/6 to the wire). NOTE: this implementation's plain `serve_key_material` stays UNGATED by
     /// design (the inviter-driven add flow has no consent handshake yet); this is the consent-aware path.
     pub fn serve_key_material_gated(
         &self,
@@ -529,6 +533,43 @@ impl Provider {
             }
             deny => Ok(Err(deny)),
         }
+    }
+
+    // ---- report abuse (§5.9, bounded v1 - DIV-8) ----
+
+    /// §5.9: persist a metadata-only abuse report. `alleged_abuser_uri` MUST parse as a MIMI user
+    /// URI (fail-closed: a report naming a malformed or non-user target is rejected rather than
+    /// recorded against garbage); `reporting_user` may be empty (the draft's "optionally" reporter
+    /// identity - see `AbuseReport`'s own doc comment). The draft: "There is no response body. The
+    /// response code only indicates if the abuse report was accepted, not if any specific automated
+    /// or human action was taken." - this hub takes no automated action; the report is a durable
+    /// record only (INV-MIMI-002: metadata, never message plaintext).
+    pub fn process_report_abuse(
+        &self,
+        room_uri: &str,
+        report: &mimi_core::protocol_wire::AbuseReport,
+        now_unix: u64,
+    ) -> anyhow::Result<()> {
+        let abuser = MimiUri::parse(&report.alleged_abuser_uri.0)?;
+        if abuser.kind != Some(MimiKind::User) {
+            anyhow::bail!(
+                "allegedAbuserUri must be a user URI: {}",
+                report.alleged_abuser_uri.0
+            );
+        }
+        self.store.record_abuse_report(
+            room_uri,
+            &report.reporting_user.0,
+            &report.alleged_abuser_uri.0,
+            report.reason_code,
+            &report.note,
+            now_unix,
+        )
+    }
+
+    /// Count of persisted abuse reports for a room (test/inspection helper).
+    pub fn abuse_report_count(&self, room_uri: &str) -> anyhow::Result<i64> {
+        self.store.abuse_report_count(room_uri)
     }
 
     // ---- M2 / R3: sender authorization (protocol §5.4 / §5.3) ----
@@ -564,7 +605,7 @@ impl Provider {
             );
         }
         // P5: if the room has a policy, the hub ALSO enforces canSendMessage (the ONE capability the hub
-        // enforces per room-policy-03 §8.3; all other caps are client-enforced BY DESIGN). No policy set
+        // enforces per room-policy-04 §8.3; all other caps are client-enforced BY DESIGN). No policy set
         // ⇒ active-participation alone governs (backward-compatible with pre-C5 rooms).
         if let Some(policy) = self.room_policy(room_uri)? {
             let role = self.store.member_role(room_uri, sending_uri)?.unwrap_or(0);
@@ -577,7 +618,7 @@ impl Provider {
         Ok(())
     }
 
-    // ---- P1-P6: room policy / RBAC (room-policy-03) ----
+    // ---- P1-P6: room policy / RBAC (room-policy-04) ----
 
     /// Set a room's policy (validated before storage). Hub-of-record gated. P1/P3 well-formedness is
     /// checked by RoomPolicy::validate. The hub enforces ONLY canSendMessage at runtime (P5); the policy
@@ -908,7 +949,7 @@ mod tests {
 
     // ---- P1-P6: room policy / RBAC ----
 
-    // Role-change graph lives on the ACTOR's (admin's) own authorized_role_changes - room-policy-03
+    // Role-change graph lives on the ACTOR's (admin's) own authorized_role_changes - room-policy-04
     // §8.1.3 grants canChangeUserRole "according to the holder's authorized_role_changes list", and the
     // holder is the actor, not whatever role happens to equal the target's from_role.
     fn rbac_policy() -> RoomPolicy {
@@ -1070,12 +1111,14 @@ mod tests {
             wire["updateConsent"],
             "/mimi/pl/updateConsent/{requesterDomain}"
         );
-        // update/groupInfo/reportAbuse/download and the 4 admin endpoints have no wire route yet:
-        // the directory must not claim one exists.
+        assert_eq!(wire["reportAbuse"], "/mimi/pl/reportAbuse/{roomId}");
+        // update/groupInfo/download and the 4 admin endpoints have no wire route yet: the
+        // directory must not claim one exists.
         assert!(wire.get("update").is_none());
         assert!(wire.get("groupInfo").is_none());
         assert!(wire.get("roomPolicy").is_none());
         assert!(dir["unsupported"]["update_wire_endpoint"].is_string());
+        assert!(dir["unsupported"]["reportAbuse_with_abusive_messages"].is_string());
     }
 
     #[test]
@@ -1106,11 +1149,14 @@ mod tests {
             dir["updateConsent"],
             "https://havenmessenger.com/mimi/pl/updateConsent/{requesterDomain}"
         );
-        // the four draft keys nothing here serves must NOT appear at the top level - advertise only
-        // what's actually wire-routed.
+        assert_eq!(
+            dir["reportAbuse"],
+            "https://havenmessenger.com/mimi/pl/reportAbuse/{roomId}"
+        );
+        // the three draft keys nothing here serves must NOT appear at the top level - advertise
+        // only what's actually wire-routed.
         assert!(dir.get("update").is_none());
         assert!(dir.get("groupInfo").is_none());
-        assert!(dir.get("reportAbuse").is_none());
         assert!(dir.get("proxyDownload").is_none());
     }
 

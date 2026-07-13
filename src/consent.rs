@@ -5,9 +5,10 @@
 //! module is the PURE, portable layer - the structs, the operation enum, and well-formedness
 //! validation. The STATE (who consented to whom) and the enforcement live in the consuming service.
 //!
-//! Wire note: the demo transport is JSON, so these derive serde. The draft's exact ConsentEntry is a
-//! TLS/CBOR struct (§5.7); the canonical binary encoding is a C4-adjacent follow-on - the SEMANTICS
-//! here (operation enum values, grant-carries-KeyPackages, room-scoped vs global) are draft-exact.
+//! Wire note: this module is the pure JSON-facing domain type (derives serde for the JSON compat
+//! lane). The draft's exact ConsentEntry is a TLS presentation-language struct (§5.7, NOT CBOR) -
+//! the binary wire codec lives in `protocol_wire::{encode,decode}_consent_entry` and is draft-exact,
+//! including the routed `consent_extensions` field (see that module for the AppDataDictionary shape).
 //!
 //! Per MIMI content-08/protocol-06: a grant implies NO action by the receiver, and
 //! `client_key_packages` is genuinely optional on a grant - send KPs to cut round-trips OR omit
@@ -72,9 +73,12 @@ pub struct ConsentEntry {
     /// grant-only: the target's client KeyPackages (public key material). Empty ⇒ fetch via /keyMaterial.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub client_key_packages: Vec<Vec<u8>>,
-    /// AppDataDictionary (§5.7) - opaque extension bag.
+    /// AppDataDictionary (§5.7) - `(component_id, data)` pairs, matching
+    /// `draft-ietf-mls-extensions` §4.6's `ComponentData { uint16 component_id; opaque data<V>; }`.
+    /// MUST be sorted by `component_id` with at most one entry per id (enforced by the wire codec
+    /// in `protocol_wire`, not here - this type has no wire-invariant enforcement of its own).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub consent_extensions: Vec<(String, Vec<u8>)>,
+    pub consent_extensions: Vec<(u16, Vec<u8>)>,
 }
 
 impl ConsentEntry {

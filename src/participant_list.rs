@@ -33,13 +33,13 @@
 //!
 //! Why it's load-bearing: GROUP interop with a NON-Haven MIMI client needs the roster via AppSync - a
 //! foreign client does not parse Haven's URI-in-credential convention. This IS the portable primitive,
-//! and the live demo emits/decodes it for real in add/remove commits.
+//! and the live hub emits/decodes it for real in add/remove commits.
 //!
 //! STILL HAVEN-CHOSEN (not resolved by §7.5): the custom `ProposalType` value `0xF7A0` (IANA/WG
 //! registration open) and the credential↔URI binding (BasicCredential-carrying-URI vs X.509
 //! IM-URI). SCOPE BOUNDARY: this module is the spec-faithful primitive (structs + codec + apply); storing
 //! `ParticipantListData` as a real MLS GroupContext `app_data_dictionary` extension is a flagged follow-on
-//! (the live demo mirrors the ordering to compute indices).
+//! (the live hub mirrors the ordering to compute indices).
 
 use tls_codec::{
     DeserializeBytes, Error as TlsError, Serialize as TlsSerialize, Size as TlsSize, VLBytes,
@@ -54,7 +54,7 @@ use crate::uri::{MimiKind, MimiUri};
 /// (Add=0x0001..GroupContextExtensions=0x0007, SelfRemove, Grease 0x0A0A-pattern). A gated wire-format event.
 pub const MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE: u16 = 0xF7A0;
 
-/// Reserved role indices (room-policy-03 §3). 0 = non-participant, 1 = banned. Ordinary roles are >= 2.
+/// Reserved role indices (room-policy-04 §3). 0 = non-participant, 1 = banned. Ordinary roles are >= 2.
 pub const ROLE_NON_PARTICIPANT: u32 = 0;
 pub const ROLE_BANNED: u32 = 1;
 

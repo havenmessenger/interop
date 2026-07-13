@@ -543,13 +543,12 @@ fn read_u64(bytes: &[u8], what: &'static str) -> Result<u64, WireError> {
 /// IdentifierUri targetUri; optional<RoomId> roomId; select(consentOperation){ case grant: KeyPackage
 /// clientKeyPackages<V>; }; AppDataDictionary consent_extensions; }`.
 ///
-/// `consent_extensions` is NOT decoded into the real MLS-extensions-10 `AppDataDictionary`
-/// CBOR/TLS structure - that structure is a separate, unimplemented draft feature (the same
-/// reasoning `update`'s `RatchetTreeOption`/`GroupInfoOption` fields use for staying out of an
-/// unrelated draft's codec). `consent.rs`'s own domain type already commits to `Vec<(String,
-/// Vec<u8>)>`, though, so this module encodes/decodes that shape directly - see
-/// [`encode_consent_extensions`]/[`decode_consent_extensions`] - rather than treating a real,
-/// populatable field as an opaque blob that silently loses its contents.
+/// `consent_extensions` IS decoded into the real `draft-ietf-mls-extensions` §4.6
+/// `AppDataDictionary` shape: `struct { ComponentData component_data<V>; } AppDataDictionary;` where
+/// `ComponentData = { uint16 component_id; opaque data<V>; }`. The field itself carries no further
+/// `<V>` beyond `AppDataDictionary`'s own `component_data<V>`, so one outer length-prefixed window
+/// wraps the concatenated, self-delimiting `ComponentData` entries - see
+/// [`encode_consent_extensions`]/[`decode_consent_extensions`].
 pub fn encode_consent_entry(e: &ConsentEntry) -> Result<Vec<u8>, WireError> {
     let mut out = Vec::new();
     out.push(u8::from(e.operation));
@@ -709,55 +708,75 @@ pub fn decode_consent_entry(bytes: &[u8]) -> Result<ConsentEntry, WireError> {
     Ok(entry)
 }
 
-/// `consent_extensions` (the AppDataDictionary, §5.7) as a run of `(name, value)` pairs -
-/// `crate::consent::ConsentEntry`'s own domain type already commits to `Vec<(String, Vec<u8>)>`,
-/// not an opaque byte blob, so a real codec for that shape is needed (not the actual
-/// MLS-extensions-10 `AppDataDictionary` CBOR/TLS structure, which is a separate, unimplemented
-/// draft feature - the same reasoning `GroupInfoOption`'s own doc gives for staying out of an
-/// unrelated draft's codec). Each entry is `VLBytes(name) || VLBytes(value)`, concatenated
-/// entries wrapped in one outer window - the same "one window, self-delimiting elements"
-/// convention this module already uses for `clientKeyPackages<V>` and `moreProposals<V>`.
-fn encode_consent_extensions(entries: &[(String, Vec<u8>)]) -> Result<Vec<u8>, WireError> {
+/// `consent_extensions` (the `AppDataDictionary`, §5.7 via `draft-ietf-mls-extensions` §4.6) as a
+/// run of `ComponentData` entries: `{ uint16 component_id; opaque data<V>; }`, concatenated and
+/// wrapped in one outer window - the same "one window, self-delimiting elements" convention this
+/// module already uses for `clientKeyPackages<V>` and `moreProposals<V>`. The draft requires entries
+/// "sorted by component_id" with "at most one entry for each component_id" (§4.6) - enforced on
+/// both directions: encode sorts by id and rejects a caller-supplied duplicate; decode rejects a
+/// peer-supplied run whose ids are not strictly ascending, fail-closed (a silent accept would let
+/// this hub and a strict peer disagree about which entry "wins" for a duplicated id).
+fn encode_consent_extensions(entries: &[(u16, Vec<u8>)]) -> Result<Vec<u8>, WireError> {
+    let mut sorted: Vec<&(u16, Vec<u8>)> = entries.iter().collect();
+    sorted.sort_by_key(|(component_id, _)| *component_id);
+    for pair in sorted.windows(2) {
+        if pair[0].0 == pair[1].0 {
+            return Err(WireError::Codec {
+                what: "consent_extensions",
+                detail: format!("duplicate component_id {}", pair[0].0),
+            });
+        }
+    }
     let mut buf = Vec::new();
-    for (name, value) in entries {
-        VLBytes::new(name.clone().into_bytes())
+    for (component_id, data) in sorted {
+        buf.extend_from_slice(&component_id.to_be_bytes());
+        VLBytes::new(data.clone())
             .tls_serialize(&mut buf)
-            .map_err(|e| codec_err("consent_extensions[].name", e))?;
-        VLBytes::new(value.clone())
-            .tls_serialize(&mut buf)
-            .map_err(|e| codec_err("consent_extensions[].value", e))?;
+            .map_err(|e| codec_err("consent_extensions[].data", e))?;
     }
     Ok(buf)
 }
 
 /// Decode side of [`encode_consent_extensions`]. Budgeted from the start - a peer-
-/// controlled run of pairs is exactly the class `RunBudget` exists for.
-fn decode_consent_extensions(window: &[u8]) -> Result<Vec<(String, Vec<u8>)>, WireError> {
-    let mut entries = Vec::new();
+/// controlled run of entries is exactly the class `RunBudget` exists for.
+fn decode_consent_extensions(window: &[u8]) -> Result<Vec<(u16, Vec<u8>)>, WireError> {
+    let mut entries: Vec<(u16, Vec<u8>)> = Vec::new();
     let mut budget = RunBudget::new();
     let mut cursor = window;
     while !cursor.is_empty() {
+        // `component_id` is a raw fixed-width uint16 (NOT a <V>-length-prefixed field) - the
+        // same fixed-width-then-VLBytes shape `SubmitMessageResponse`'s `accepted_timestamp`/u64
+        // fields use elsewhere in this module.
+        let id_bytes = cursor.get(..2).ok_or_else(|| WireError::Codec {
+            what: "consent_extensions[].component_id",
+            detail: format!("need 2 bytes, got {}", cursor.len()),
+        })?;
+        let component_id = u16::from_be_bytes([id_bytes[0], id_bytes[1]]);
+        let after_id = &cursor[2..];
         // Uniform with every other run-decoder in this module - bound then decode.
-        let (name_bounded, rest) =
-            bounded_run_input(cursor, "consent_extensions[].name", MAX_RUN_AGGREGATE_BYTES)?;
-        let (name_bytes, _tail) = VLBytes::tls_deserialize_bytes(name_bounded)
-            .map_err(|e| codec_err("consent_extensions[].name", e))?;
-        let name =
-            String::from_utf8(name_bytes.as_slice().to_vec()).map_err(|_| WireError::Codec {
-                what: "consent_extensions[].name",
-                detail: "not valid UTF-8".into(),
-            })?;
-        let (value_bounded, rest) =
-            bounded_run_input(rest, "consent_extensions[].value", MAX_RUN_AGGREGATE_BYTES)?;
-        let (value_bytes, _tail) = VLBytes::tls_deserialize_bytes(value_bounded)
-            .map_err(|e| codec_err("consent_extensions[].value", e))?;
-        let value = value_bytes.as_slice().to_vec();
-        // Use the actual on-wire consumed length (name+value bytes plus both VLBytes
-        // length prefixes), not name.len()+value.len() alone, which undercounts by omitting the
-        // prefix bytes.
+        let (data_bounded, rest) = bounded_run_input(
+            after_id,
+            "consent_extensions[].data",
+            MAX_RUN_AGGREGATE_BYTES,
+        )?;
+        let (data_bytes, _tail) = VLBytes::tls_deserialize_bytes(data_bounded)
+            .map_err(|e| codec_err("consent_extensions[].data", e))?;
+        let data = data_bytes.as_slice().to_vec();
+        if let Some((last_id, _)) = entries.last() {
+            if component_id <= *last_id {
+                return Err(WireError::Codec {
+                    what: "consent_extensions",
+                    detail: format!(
+                        "component_id {component_id} out of order or duplicate (previous {last_id})"
+                    ),
+                });
+            }
+        }
+        // Use the actual on-wire consumed length (the 2-byte id plus the data VLBytes
+        // and its own length prefix), not data.len() alone.
         let consumed = cursor.len() - rest.len();
         budget.record("consent_extensions[]", consumed)?;
-        entries.push((name, value));
+        entries.push((component_id, data));
         cursor = rest;
     }
     Ok(entries)
@@ -2005,17 +2024,31 @@ impl IdentifierQueryCode {
 /// `id_response_extensions` are always empty in this reference hub's usage (DIV-4: it never
 /// discloses profile data, only an opt-in-enrolled/not existence signal) so this only encodes the
 /// zero-profile shape rather than the general `ProfileField` list.
+///
+/// `uri` is `IdentifierUri uri<V>` in the draft - a **vector** of `IdentifierUri` (0+ matches,
+/// consistent with "the response ... can contain multiple matches"), not a single scalar URI. Each
+/// element is itself already self-delimiting (`IdentifierUri = opaque uri<V>`), so the wire form is
+/// one outer length-prefixed window wrapping the concatenated per-element bytes - the same
+/// "one window, self-delimiting elements" convention this module uses for `clientKeyPackages<V>`/
+/// `clients<V>`. A single-match response therefore carries TWO nested length prefixes (the outer
+/// vector window, then that one element's own), not one - `uris` is named in the plural to keep
+/// this visible at the call site instead of inviting a single-URI encoding again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdentifierResponse {
     pub response_code: IdentifierQueryCode,
-    pub uri: IdentifierUri,
+    pub uris: Vec<IdentifierUri>,
 }
 
 impl IdentifierResponse {
     pub fn encode(&self) -> Result<Vec<u8>, WireError> {
         let mut out = vec![self.response_code.to_u8()];
-        self.uri
-            .to_vlbytes()
+        let mut uris_buf = Vec::new();
+        for u in &self.uris {
+            u.to_vlbytes()
+                .tls_serialize(&mut uris_buf)
+                .map_err(|e| codec_err("uri[]", e))?;
+        }
+        VLBytes::new(uris_buf)
             .tls_serialize(&mut out)
             .map_err(|e| codec_err("uri", e))?;
         VLBytes::new(Vec::new()) // foundProfiles<V>: always empty here
@@ -2025,6 +2058,170 @@ impl IdentifierResponse {
             .tls_serialize(&mut out)
             .map_err(|e| codec_err("id_response_extensions", e))?;
         Ok(out)
+    }
+
+    /// Decode side of [`Self::encode`]. Not reachable from any live route today (see the module
+    /// doc) but kept symmetric with every other wire type in this file so conformance tests can
+    /// assert a real round-trip, not just an encode-only shape.
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let (&code_byte, rest) = bytes.split_first().ok_or_else(|| WireError::Codec {
+            what: "responseCode",
+            detail: "truncated".into(),
+        })?;
+        let response_code = match code_byte {
+            0 => IdentifierQueryCode::Success,
+            1 => IdentifierQueryCode::NotFound,
+            2 => IdentifierQueryCode::Ambiguous,
+            3 => IdentifierQueryCode::Forbidden,
+            4 => IdentifierQueryCode::UnsupportedField,
+            other => {
+                return Err(WireError::Codec {
+                    what: "responseCode",
+                    detail: format!("invalid IdentifierQueryCode {other}"),
+                })
+            }
+        };
+        let (uris_bounded, rest) = bounded_run_input(rest, "uri", MAX_RUN_AGGREGATE_BYTES)?;
+        let (uris_blob, _tail) =
+            VLBytes::tls_deserialize_bytes(uris_bounded).map_err(|e| codec_err("uri", e))?;
+        let mut uris = Vec::new();
+        let mut cursor = uris_blob.as_slice();
+        let mut budget = RunBudget::new();
+        while !cursor.is_empty() {
+            let (bounded, tail) = bounded_run_input(cursor, "uri[]", MAX_RUN_AGGREGATE_BYTES)?;
+            let (elem, _elem_tail) =
+                VLBytes::tls_deserialize_bytes(bounded).map_err(|e| codec_err("uri[]", e))?;
+            let consumed = cursor.len() - tail.len();
+            budget.record("uri[]", consumed)?;
+            uris.push(IdentifierUri::from_vlbytes(elem)?);
+            cursor = tail;
+        }
+        let (profiles_bounded, rest) =
+            bounded_run_input(rest, "foundProfiles", MAX_RUN_AGGREGATE_BYTES)?;
+        let (_profiles_blob, _tail) = VLBytes::tls_deserialize_bytes(profiles_bounded)
+            .map_err(|e| codec_err("foundProfiles", e))?;
+        let (ext_bounded, rest) =
+            bounded_run_input(rest, "id_response_extensions", MAX_RUN_AGGREGATE_BYTES)?;
+        let (_ext_blob, _tail) = VLBytes::tls_deserialize_bytes(ext_bounded)
+            .map_err(|e| codec_err("id_response_extensions", e))?;
+        if !rest.is_empty() {
+            return Err(WireError::Trailing {
+                what: "IdentifierResponse",
+                n: rest.len(),
+            });
+        }
+        Ok(Self {
+            response_code,
+            uris,
+        })
+    }
+}
+
+// ============================ reportAbuse (§5.9) ============================
+
+/// §5.9 `AbuseType` (`enum { reserved(0), (255) } AbuseType;`) - modeled as a raw `u8`, not a Rust
+/// enum, the same GREASE-tolerant treatment `Protocol` gets: the draft defines no taxonomy yet
+/// beyond `reserved(0)` and reserves the range to 255 for a future registry (the draft's own *TODO*
+/// notes IANA's Messaging Abuse Report Format parameters are insufficient), so an unknown value
+/// must still round-trip rather than error on decode.
+pub type AbuseType = u8;
+pub const ABUSE_TYPE_RESERVED: AbuseType = 0;
+
+/// §5.9 `AbuseReport`, the bounded v1 case (DIV-8): `AbusiveMessage messages<V>` (each element
+/// requiring a real `Frank` this hub cannot yet verify - DIV-9) MUST be empty; a report attaching
+/// one is a decode ERROR, not a silently accepted/dropped entry (fail-closed honesty: we cannot
+/// validate what we don't yet build, per the draft's own "the hub finds... to recalculate the
+/// franking_tag" validation description). `abuse_extensions` (`AppDataDictionary`) is carried
+/// opaque - the same choice `id_request_extensions`/`id_response_extensions` make elsewhere in this
+/// module - nothing in this codebase produces or consumes report-extension data.
+///
+/// `reportingUser` is `IdentifierUri reportingUser;` (not `optional<IdentifierUri>`) in the struct,
+/// even though the prose says it "optionally contains the identity" of the reporter - read as: an
+/// empty-string `IdentifierUri` means "not provided", the same not-optional-wrapped-but-
+/// conceptually-optional convention `KeyMaterialRequest.room_id` already uses in this module.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbuseReport {
+    pub reporting_user: IdentifierUri,
+    pub alleged_abuser_uri: IdentifierUri,
+    pub reason_code: AbuseType,
+    pub note: String,
+}
+
+impl AbuseReport {
+    pub fn encode(&self) -> Result<Vec<u8>, WireError> {
+        let mut out = Vec::new();
+        self.reporting_user
+            .to_vlbytes()
+            .tls_serialize(&mut out)
+            .map_err(|e| codec_err("reportingUser", e))?;
+        self.alleged_abuser_uri
+            .to_vlbytes()
+            .tls_serialize(&mut out)
+            .map_err(|e| codec_err("allegedAbuserUri", e))?;
+        out.push(self.reason_code);
+        VLBytes::new(self.note.clone().into_bytes())
+            .tls_serialize(&mut out)
+            .map_err(|e| codec_err("note", e))?;
+        VLBytes::new(Vec::new()) // messages<V>: always empty (DIV-8 bounded v1)
+            .tls_serialize(&mut out)
+            .map_err(|e| codec_err("messages", e))?;
+        VLBytes::new(Vec::new()) // abuse_extensions: opaque, always empty
+            .tls_serialize(&mut out)
+            .map_err(|e| codec_err("abuse_extensions", e))?;
+        Ok(out)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let (reporting_bounded, rest) =
+            bounded_run_input(bytes, "reportingUser", MAX_RUN_AGGREGATE_BYTES)?;
+        let (reporting_bytes, _tail) = VLBytes::tls_deserialize_bytes(reporting_bounded)
+            .map_err(|e| codec_err("reportingUser", e))?;
+        let reporting_user = IdentifierUri::from_vlbytes(reporting_bytes)?;
+        let (abuser_bounded, rest) =
+            bounded_run_input(rest, "allegedAbuserUri", MAX_RUN_AGGREGATE_BYTES)?;
+        let (abuser_bytes, _tail) = VLBytes::tls_deserialize_bytes(abuser_bounded)
+            .map_err(|e| codec_err("allegedAbuserUri", e))?;
+        let alleged_abuser_uri = IdentifierUri::from_vlbytes(abuser_bytes)?;
+        let (&reason_code, rest) = rest.split_first().ok_or_else(|| WireError::Codec {
+            what: "reasonCode",
+            detail: "truncated".into(),
+        })?;
+        let (note_bounded, rest) = bounded_run_input(rest, "note", MAX_RUN_AGGREGATE_BYTES)?;
+        let (note_bytes, _tail) =
+            VLBytes::tls_deserialize_bytes(note_bounded).map_err(|e| codec_err("note", e))?;
+        let note =
+            String::from_utf8(note_bytes.as_slice().to_vec()).map_err(|_| WireError::Codec {
+                what: "note",
+                detail: "not valid UTF-8".into(),
+            })?;
+        let (messages_bounded, rest) =
+            bounded_run_input(rest, "messages", MAX_RUN_AGGREGATE_BYTES)?;
+        let (messages_blob, _tail) = VLBytes::tls_deserialize_bytes(messages_bounded)
+            .map_err(|e| codec_err("messages", e))?;
+        if !messages_blob.as_slice().is_empty() {
+            return Err(WireError::Codec {
+                what: "messages",
+                detail: "AbusiveMessage entries are not yet decodable (DIV-9: Frank verification \
+                         not built) - a report attaching one is refused, not silently dropped"
+                    .into(),
+            });
+        }
+        let (ext_bounded, rest) =
+            bounded_run_input(rest, "abuse_extensions", MAX_RUN_AGGREGATE_BYTES)?;
+        let (_ext_blob, _tail) = VLBytes::tls_deserialize_bytes(ext_bounded)
+            .map_err(|e| codec_err("abuse_extensions", e))?;
+        if !rest.is_empty() {
+            return Err(WireError::Trailing {
+                what: "AbuseReport",
+                n: rest.len(),
+            });
+        }
+        Ok(Self {
+            reporting_user,
+            alleged_abuser_uri,
+            reason_code,
+            note,
+        })
     }
 }
 
@@ -2316,7 +2513,8 @@ mod tests {
 
     /// A non-empty `consent_extensions` (the AppDataDictionary bag) must survive
     /// encode->decode intact, never silently zeroed on either side. Covers an empty
-    /// value (a name-only marker entry) and a multi-byte value in the same run.
+    /// `data` (a component_id-only marker entry) and a multi-byte `data` in the same run, supplied
+    /// out of component_id order to prove the encoder sorts rather than requiring caller discipline.
     #[test]
     fn consent_entry_extensions_round_trip_non_empty() {
         let e = ConsentEntry {
@@ -2325,17 +2523,54 @@ mod tests {
             target_uri: "mimi://b.example/u/bob".to_string(),
             room_uri: None,
             client_key_packages: Vec::new(),
-            consent_extensions: vec![
-                ("marker".to_string(), Vec::new()),
-                ("note".to_string(), b"hello consent extensions".to_vec()),
-            ],
+            consent_extensions: vec![(7, b"hello consent extensions".to_vec()), (3, Vec::new())],
         };
         let encoded = encode_consent_entry(&e).unwrap();
         let decoded = decode_consent_entry(&encoded).unwrap();
+        let mut want_sorted = e.consent_extensions.clone();
+        want_sorted.sort_by_key(|(id, _)| *id);
         assert_eq!(
-            decoded.consent_extensions, e.consent_extensions,
-            "consent_extensions must round-trip byte-identical, not silently empty"
+            decoded.consent_extensions, want_sorted,
+            "consent_extensions must round-trip byte-identical (component_id-sorted per §4.6), not silently empty"
         );
+    }
+
+    /// The draft's "at most one entry for each component_id" MUST is enforced fail-closed on both
+    /// directions: the encoder refuses a caller-supplied duplicate rather than silently emitting a
+    /// wire form no strict peer could parse back to the caller's intent.
+    #[test]
+    fn consent_extensions_encode_rejects_duplicate_component_id() {
+        let entries = vec![(3u16, b"first".to_vec()), (3u16, b"second".to_vec())];
+        let err = encode_consent_extensions(&entries).expect_err("duplicate id must be rejected");
+        assert!(matches!(
+            err,
+            WireError::Codec {
+                what: "consent_extensions",
+                ..
+            }
+        ));
+    }
+
+    /// A peer that sends component_ids out of ascending order (or a duplicate) violates the
+    /// draft's §4.6 MUST - decode must reject it, not silently accept and reorder.
+    #[test]
+    fn consent_extensions_decode_rejects_out_of_order_component_id() {
+        // Hand-build two entries with ids 5 then 2 (descending - never produced by our own
+        // encoder, which always sorts, so this can only arrive from a non-conformant or hostile peer).
+        let mut window = Vec::new();
+        window.extend_from_slice(&5u16.to_be_bytes());
+        VLBytes::new(Vec::new()).tls_serialize(&mut window).unwrap();
+        window.extend_from_slice(&2u16.to_be_bytes());
+        VLBytes::new(Vec::new()).tls_serialize(&mut window).unwrap();
+        let err =
+            decode_consent_extensions(&window).expect_err("out-of-order ids must be rejected");
+        assert!(matches!(
+            err,
+            WireError::Codec {
+                what: "consent_extensions",
+                ..
+            }
+        ));
     }
 
     /// The `consent_extensions` outer window needs its own pre-check independent of the
@@ -2516,10 +2751,10 @@ mod tests {
 
     #[test]
     fn consent_extensions_decode_rejects_element_count_overflow() {
-        // MAX_RUN_ELEMENTS + 1 name-only (zero-value) entries - cheap to construct (no crypto),
+        // MAX_RUN_ELEMENTS + 1 distinct-id, zero-data entries - cheap to construct (no crypto),
         // exercises the budget through the real decode path, not just the RunBudget unit itself.
-        let entries: Vec<(String, Vec<u8>)> = (0..=MAX_RUN_ELEMENTS)
-            .map(|i| (format!("k{i}"), Vec::new()))
+        let entries: Vec<(u16, Vec<u8>)> = (0..=MAX_RUN_ELEMENTS as u16)
+            .map(|i| (i, Vec::new()))
             .collect();
         let window = encode_consent_extensions(&entries).unwrap();
         let err = decode_consent_extensions(&window)
@@ -2531,9 +2766,9 @@ mod tests {
     fn consent_extensions_decode_rejects_aggregate_byte_overflow() {
         // Two entries, EACH individually under the aggregate-byte budget, whose combined size
         // exceeds it - the "few huge elements" attack shape the element-count cap alone misses.
-        let entries: Vec<(String, Vec<u8>)> = vec![
-            ("a".to_string(), vec![0u8; MAX_RUN_AGGREGATE_BYTES - 2]),
-            ("b".to_string(), vec![0u8; 10]),
+        let entries: Vec<(u16, Vec<u8>)> = vec![
+            (1, vec![0u8; MAX_RUN_AGGREGATE_BYTES - 2]),
+            (2, vec![0u8; 10]),
         ];
         let window = encode_consent_extensions(&entries).unwrap();
         let err = decode_consent_extensions(&window)
@@ -3784,13 +4019,147 @@ mod tests {
     }
 
     #[test]
-    fn identifier_response_encode_kat() {
+    fn identifier_response_encode_kat_not_found() {
         let r = IdentifierResponse {
             response_code: IdentifierQueryCode::NotFound,
-            uri: IdentifierUri(String::new()),
+            uris: Vec::new(),
         };
         let encoded = r.encode().unwrap();
-        // code(01) uri<V>=empty(00) foundProfiles<V>=empty(00) id_response_extensions<V>=empty(00)
+        // code(01) uri<V>=empty-vector(00) foundProfiles<V>=empty(00) id_response_extensions<V>=empty(00)
         assert_eq!(tohex(&encoded), "01000000");
+    }
+
+    /// The byte-exactness fix this test exists to prove: `uri<V>` is a VECTOR of `IdentifierUri`
+    /// (each self-delimiting), not a single scalar. A one-match response therefore carries TWO
+    /// nested length prefixes for that one element - the outer vector window, then the element's
+    /// own `opaque uri<V>` prefix - not one. Hand-computed KAT, not just a round-trip, so a
+    /// regression back to the single-length-prefix shape fails even if encode/decode drift together.
+    #[test]
+    fn identifier_response_encode_kat_success_single_match() {
+        let r = IdentifierResponse {
+            response_code: IdentifierQueryCode::Success,
+            uris: vec![IdentifierUri("mimi://a.example/u/alice".to_string())],
+        };
+        let encoded = r.encode().unwrap();
+        let uri_bytes = b"mimi://a.example/u/alice";
+        let mut want = vec![0x00]; // responseCode = success(0)
+                                   // outer uri<V> window: one element, that element's own VLBytes(uri_bytes)
+        want.push((uri_bytes.len() + 1) as u8); // outer length = 1-byte inner prefix + uri bytes
+        want.push(uri_bytes.len() as u8); // inner element's own opaque uri<V> length prefix
+        want.extend_from_slice(uri_bytes);
+        want.push(0x00); // foundProfiles<V> empty
+        want.push(0x00); // id_response_extensions empty
+        assert_eq!(
+            tohex(&encoded),
+            tohex(&want),
+            "a single-match uri<V> must carry TWO nested length prefixes, not one"
+        );
+    }
+
+    #[test]
+    fn identifier_response_round_trips_zero_and_multi_match() {
+        for r in [
+            IdentifierResponse {
+                response_code: IdentifierQueryCode::NotFound,
+                uris: Vec::new(),
+            },
+            IdentifierResponse {
+                response_code: IdentifierQueryCode::Success,
+                uris: vec![IdentifierUri("mimi://a.example/u/alice".to_string())],
+            },
+            IdentifierResponse {
+                response_code: IdentifierQueryCode::Ambiguous,
+                uris: vec![
+                    IdentifierUri("mimi://a.example/u/alice".to_string()),
+                    IdentifierUri("mimi://b.example/u/bob".to_string()),
+                ],
+            },
+        ] {
+            let encoded = r.encode().unwrap();
+            let decoded = IdentifierResponse::decode(&encoded).unwrap();
+            assert_eq!(
+                decoded, r,
+                "IdentifierResponse must round-trip byte-identical"
+            );
+        }
+    }
+
+    // ---- AbuseReport (§5.9, DIV-8 bounded v1) ----
+
+    #[test]
+    fn abuse_report_round_trips() {
+        let r = AbuseReport {
+            reporting_user: IdentifierUri("mimi://a.example/u/alice".to_string()),
+            alleged_abuser_uri: IdentifierUri("mimi://b.example/u/mallory".to_string()),
+            reason_code: ABUSE_TYPE_RESERVED,
+            note: "spam in the room".to_string(),
+        };
+        let encoded = r.encode().unwrap();
+        let decoded = AbuseReport::decode(&encoded).unwrap();
+        assert_eq!(decoded, r, "AbuseReport must round-trip byte-identical");
+    }
+
+    #[test]
+    fn abuse_report_round_trips_with_empty_reporting_user_and_note() {
+        // reportingUser "optionally" identifies the reporter (draft prose) - modeled as an
+        // empty-string IdentifierUri, not an Option, matching the literal (non-optional-wrapped)
+        // struct field. An empty note is explicitly valid ("can be empty", draft prose).
+        let r = AbuseReport {
+            reporting_user: IdentifierUri(String::new()),
+            alleged_abuser_uri: IdentifierUri("mimi://b.example/u/mallory".to_string()),
+            reason_code: ABUSE_TYPE_RESERVED,
+            note: String::new(),
+        };
+        let encoded = r.encode().unwrap();
+        let decoded = AbuseReport::decode(&encoded).unwrap();
+        assert_eq!(decoded, r);
+    }
+
+    #[test]
+    fn abuse_report_decode_rejects_nonempty_messages() {
+        let r = AbuseReport {
+            reporting_user: IdentifierUri("mimi://a.example/u/alice".to_string()),
+            alleged_abuser_uri: IdentifierUri("mimi://b.example/u/mallory".to_string()),
+            reason_code: ABUSE_TYPE_RESERVED,
+            note: String::new(),
+        };
+        let mut encoded = r.encode().unwrap();
+        // The real (empty) messages<V> window is the second-to-last byte (0x00), immediately
+        // before the (also empty, 0x00) abuse_extensions window. Replace it with a non-empty
+        // one-byte "message" window to prove decode refuses it rather than silently dropping it.
+        let ext_tag = encoded.pop().unwrap(); // abuse_extensions empty tag
+        encoded.pop(); // the real empty messages<V> tag
+        encoded.push(0x01); // messages<V> declares 1 byte of content
+        encoded.push(0xAA); // that byte (garbage - decode must reject before even parsing it as an AbusiveMessage)
+        encoded.push(ext_tag);
+        let err =
+            AbuseReport::decode(&encoded).expect_err("non-empty messages<V> must be rejected");
+        assert!(matches!(
+            err,
+            WireError::Codec {
+                what: "messages",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn abuse_report_decode_rejects_trailing_bytes() {
+        let r = AbuseReport {
+            reporting_user: IdentifierUri("mimi://a.example/u/alice".to_string()),
+            alleged_abuser_uri: IdentifierUri("mimi://b.example/u/mallory".to_string()),
+            reason_code: ABUSE_TYPE_RESERVED,
+            note: String::new(),
+        };
+        let mut encoded = r.encode().unwrap();
+        encoded.push(0xFF);
+        let err = AbuseReport::decode(&encoded).expect_err("trailing bytes must be rejected");
+        assert!(matches!(
+            err,
+            WireError::Trailing {
+                what: "AbuseReport",
+                ..
+            }
+        ));
     }
 }

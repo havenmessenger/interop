@@ -24,6 +24,7 @@
 //!   POST /mimi/pl/keyMaterial/:target_user          (§5.2, KeyMaterialRequest/Response bodies)
 //!   POST /mimi/pl/notify                            (§5.5, inbound-receive only, FanoutMessage)
 //!   POST /mimi/pl/identifierQuery                   (§5.8, DIV-4 no-body-oracle preserved)
+//!   POST /mimi/pl/reportAbuse/:room_id              (§5.9, DIV-8 bounded v1 - no AbusiveMessage)
 //! `update` (§5.3) has a codec (`mimi_core::protocol_wire::HandshakeBundle`) but no route: this
 //! reference hub has no Provider method that processes a real MLS Commit/Proposal, so wiring one
 //! would mean writing new protocol logic, not framing (see the codec's own module doc). `groupInfo`
@@ -47,7 +48,7 @@ use axum::{
 };
 use mimi_core::consent::ConsentEntry;
 use mimi_core::gate::IdentifierQueryResult;
-use mimi_core::protocol_wire::{SubmitMessageRequest, SubmitMessageResponse};
+use mimi_core::protocol_wire::{AbuseReport, SubmitMessageRequest, SubmitMessageResponse};
 use serde::Deserialize;
 
 use crate::{NotifyOutcome, Provider};
@@ -88,6 +89,7 @@ pub fn build_router(provider: SharedProvider) -> Router {
         .route("/mimi/pl/keyMaterial/:target_user", post(key_material_wire))
         .route("/mimi/pl/notify", post(notify_wire))
         .route("/mimi/pl/identifierQuery", post(identifier_query_wire))
+        .route("/mimi/pl/reportAbuse/:room_id", post(report_abuse_wire))
         .with_state(provider)
 }
 
@@ -128,7 +130,7 @@ async fn key_material(State(p): State<SharedProvider>, Query(q): Query<UserQuery
 ///
 /// Routes through `Provider::serve_key_material_gated` (the same consent gate `updateConsent`/
 /// `requestConsent` populate) instead of the ungated `serve_key_material` the JSON lane still uses
-/// for its own demo/admin purposes. A denial maps to `KeyMaterialResponse::Denied` carrying the
+/// for its own compat/admin purposes. A denial maps to `KeyMaterialResponse::Denied` carrying the
 /// draft's own NoConsent/NoConsentForThisRoom userStatus code (5/6), not a generic failure.
 /// DISCLOSURE (see DIVERGENCES.md): `requesting_user` here is CLIENT-ASSERTED from the
 /// request body, not derived from an authenticated channel (mTLS peer identity) - this reference
@@ -270,7 +272,7 @@ async fn submit_message(
 /// signals outcome via the bare HTTP status line).
 ///
 /// The path segment is the room this message targets (draft §5.1's `{roomId}` template - see
-/// `directory()`'s flat-key comment). Unlike `submit_message` (the JSON demo/admin lane, whose
+/// `directory()`'s flat-key comment). Unlike `submit_message` (the JSON compat/admin lane, whose
 /// `?recipient=` key can be any opaque string), this wire twin now enforces the sender authorization
 /// this endpoint always should have had: `authorize_sender` (M2/R3/P5 - active participation, not
 /// removed, room-policy canSendMessage) must pass before anything is stored, and `NotAllowed` is
@@ -388,6 +390,26 @@ async fn identifier_query_wire(State(p): State<SharedProvider>, body: Bytes) -> 
     match lock(&p).identifier_query(&username) {
         Ok(IdentifierQueryResult::Found) => StatusCode::OK,
         Ok(IdentifierQueryResult::NotFound) | Err(_) => StatusCode::NOT_FOUND,
+    }
+}
+
+/// reportAbuse (§5.9, DIV-8 bounded v1). Unlike consent, the draft states no no-oracle privacy
+/// requirement for this endpoint - "the response code only indicates if the abuse report was
+/// accepted" - so a genuinely malformed body (undecodable, or attaching an `AbusiveMessage` this
+/// hub cannot verify - DIV-9) is a real 400, not a silently-swallowed 201. `room_id` is the path
+/// segment (the room the report concerns), an opaque routing key like every other wire route
+/// except `submitMessage`.
+async fn report_abuse_wire(
+    State(p): State<SharedProvider>,
+    Path(room_id): Path<String>,
+    body: Bytes,
+) -> StatusCode {
+    let Ok(report) = AbuseReport::decode(&body) else {
+        return StatusCode::BAD_REQUEST;
+    };
+    match lock(&p).process_report_abuse(&room_id, &report, now_unix()) {
+        Ok(()) => StatusCode::CREATED,
+        Err(_) => StatusCode::BAD_REQUEST,
     }
 }
 
@@ -524,7 +546,7 @@ struct SenderQuery {
 
 /// Authorize a message sender (M2 active-participant + R3 removed-block + P5 canSendMessage when a policy
 /// is set). `?room=&sender=`. 200 = may send, 403 = blocked (with the reason), 400 on a bad room. This is
-/// the live hub gate the demo calls to SHOW policy enforcement.
+/// the live hub gate a client calls to check policy enforcement before sending.
 async fn authorize_sender(
     State(p): State<SharedProvider>,
     Query(q): Query<SenderQuery>,
@@ -802,7 +824,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_policy_scenario_allows_member_blocks_banned() {
-        // The end-to-end live P1/P4/P5 demo path: set policy → register participants → assign roles →
+        // The end-to-end live P1/P4/P5 scenario: set policy → register participants → assign roles →
         // authorizeSender shows 200 (member) vs 403 (banned).
         let p = Arc::new(Mutex::new(
             Provider::in_memory("mimi.havenmessenger.com").unwrap(),
@@ -1271,6 +1293,60 @@ mod tests {
             resp.status(),
             StatusCode::CREATED,
             "malformed wire bytes must not distinguish from a valid-but-dropped entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn report_abuse_wire_persists_and_returns_201() {
+        let (router, p) = app();
+        let report = AbuseReport {
+            reporting_user: mimi_core::protocol_wire::IdentifierUri(
+                "mimi://a.example/u/alice".to_string(),
+            ),
+            alleged_abuser_uri: mimi_core::protocol_wire::IdentifierUri(
+                "mimi://b.example/u/mallory".to_string(),
+            ),
+            reason_code: mimi_core::protocol_wire::ABUSE_TYPE_RESERVED,
+            note: "spam".to_string(),
+        };
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mimi/pl/reportAbuse/mimi%3A%2F%2Fa.example%2Fr%2Froom1")
+                    .body(Body::from(report.encode().unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(
+            p.lock()
+                .unwrap()
+                .abuse_report_count("mimi://a.example/r/room1")
+                .unwrap(),
+            1,
+            "the report must be durably persisted, keyed by the path's room id"
+        );
+    }
+
+    #[tokio::test]
+    async fn report_abuse_wire_rejects_undecodable_body() {
+        let (router, _p) = app();
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mimi/pl/reportAbuse/room1")
+                    .body(Body::from(&b"not an AbuseReport"[..]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "unlike consent, reportAbuse has no no-oracle privacy requirement - a malformed body is a real 400"
         );
     }
 

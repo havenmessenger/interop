@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS consent (
 );
 CREATE INDEX IF NOT EXISTS idx_consent_pair ON consent(requester, target);
 
--- Per-room policy (room-policy-03; conformance P1-P6). The RoomPolicy (roles + base policy) as a JSON
+-- Per-room policy (room-policy-04; conformance P1-P6). The RoomPolicy (roles + base policy) as a JSON
 -- blob keyed by the room URI, plus each member's assigned role_index. Absent policy = default-permissive
 -- (backward-compatible: rooms without a policy enforce only active-participant, as before). The hub
 -- enforces ONLY canSendMessage (P5); the role assignment is the per-member role for that check.
@@ -109,9 +109,25 @@ CREATE TABLE IF NOT EXISTS room_participants (
     PRIMARY KEY (room_uri, member_uri)
 );
 CREATE INDEX IF NOT EXISTS idx_room ON room_participants(room_uri);
+
+-- Abuse reports (protocol §5.9; DIV-8, the bounded v1 case: metadata-only, no attached
+-- AbusiveMessage - a report carrying one requires verifying its Frank, which this reference hub
+-- does not build (see DIVERGENCES.md DIV-9). reason_code is the raw AbuseType wire value (the draft
+-- defines only reserved(0) - no taxonomy is registered yet). note is a UTF8 human-readable string,
+-- may be empty. Pure metadata (INV-MIMI-002); this hub takes no automated action on a report.
+CREATE TABLE IF NOT EXISTS abuse_reports (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_uri            TEXT NOT NULL,
+    reporting_user      TEXT NOT NULL,
+    alleged_abuser_uri  TEXT NOT NULL,
+    reason_code         INTEGER NOT NULL,
+    note                TEXT NOT NULL,
+    ts                  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_abuse_room ON abuse_reports(room_uri);
 ";
 
-// Store-and-forward bounds (anti-DoS; ephemeral demo/relay state). A recipient cannot queue more than
+// Store-and-forward bounds (anti-DoS; ephemeral relay state). A recipient cannot queue more than
 // these, and items expire - the provider is a delivery service, not durable storage.
 pub const MAX_ITEM_BYTES: usize = 64 * 1024; // per welcome/message
 pub const MAX_QUEUE_WELCOMES: i64 = 32; // pending welcomes per recipient
@@ -125,6 +141,9 @@ pub const MAX_CONSENT_RECORDS: i64 = 65536;
 // KeyPackages (anti-flood; L1). A never-claimed backlog for one user must not grow unbounded -
 // oldest are evicted past this cap on every insert.
 pub const MAX_KEYPACKAGES_PER_USER: i64 = 64;
+// Abuse reports (anti-flood; a hostile or malfunctioning peer must not be able to grow the table
+// without bound). note<V> is bounded independently at decode time (MAX_RUN_AGGREGATE_BYTES).
+pub const MAX_ABUSE_REPORTS: i64 = 65536;
 
 impl SqliteStore {
     /// Open (or create) the store at `path`, running migrations. Use for production.
@@ -388,7 +407,52 @@ impl SqliteStore {
             .optional()?)
     }
 
-    // ---- room policy + member roles (P1-P6; room-policy-03) ----
+    // ---- abuse reports (§5.9; DIV-8 bounded v1) ----
+
+    /// Persist a metadata-only abuse report. Bounded by [`MAX_ABUSE_REPORTS`] (anti-flood) -
+    /// there is no eviction policy for this table (unlike the KeyPackage/queue tables): a report is
+    /// an incident record, not ephemeral relay state, so once the cap is reached new reports are
+    /// refused (fail-closed) rather than silently dropping the oldest one.
+    pub fn record_abuse_report(
+        &self,
+        room_uri: &str,
+        reporting_user: &str,
+        alleged_abuser_uri: &str,
+        reason_code: u8,
+        note: &str,
+        now_unix: u64,
+    ) -> anyhow::Result<()> {
+        let n: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM abuse_reports", [], |r| r.get(0))?;
+        if n >= MAX_ABUSE_REPORTS {
+            anyhow::bail!("abuse_reports table cap reached ({MAX_ABUSE_REPORTS})");
+        }
+        self.conn.execute(
+            "INSERT INTO abuse_reports (room_uri, reporting_user, alleged_abuser_uri, reason_code, note, ts) \
+             VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                room_uri,
+                reporting_user,
+                alleged_abuser_uri,
+                reason_code as i64,
+                note,
+                now_unix as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Count of persisted abuse reports for a room (test/inspection helper).
+    pub fn abuse_report_count(&self, room_uri: &str) -> anyhow::Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM abuse_reports WHERE room_uri=?1",
+            params![room_uri],
+            |r| r.get(0),
+        )?)
+    }
+
+    // ---- room policy + member roles (P1-P6; room-policy-04) ----
 
     /// Store a room's policy (JSON-encoded RoomPolicy). Idempotent on room_uri.
     pub fn set_room_policy(

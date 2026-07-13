@@ -1,12 +1,12 @@
-//! MIMI room policy / RBAC (room-policy-03, conformance P1–P6).
+//! MIMI room policy / RBAC (room-policy-04, conformance P1–P6).
 //!
 //! The role model + authorization logic. Roles live in the participant list (AppSync, see
 //! [`crate::participant_list`]) - NOT in the MLS credential (credentials are opaque). So a role is a
 //! `role_index` attached to a member; this module defines what a role *is* and what it *authorizes*.
 //!
-//! SCOPE (honest): this models the LOAD-BEARING subset of room-policy-03 - roles + capabilities +
+//! SCOPE (honest): this models the LOAD-BEARING subset of room-policy-04 - roles + capabilities +
 //! `authorized_role_changes` + the membership-count constraints + the two reserved roles - enough to
-//! satisfy P1–P6. The hub enforces ONLY `canSendMessage` (P5, room-policy-03 §8.3 EXACT); every other
+//! satisfy P1–P6. The hub enforces ONLY `canSendMessage` (P5, room-policy-04 §8.3 EXACT); every other
 //! capability is client-enforced BY THE SPEC's design, not a Haven shortcut.
 
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 /// sharing a commit with a participant-list change.
 pub const MIMI_ROOM_POLICY_PROPOSAL_TYPE: u16 = 0xF7A1;
 
-/// Reserved role indices (room-policy-03 §3). 0 = non-participant, 1 = banned. Ordinary roles are >= 2.
+/// Reserved role indices (room-policy-04 §3). 0 = non-participant, 1 = banned. Ordinary roles are >= 2.
 pub const ROLE_NON_PARTICIPANT: u32 = 0;
 pub const ROLE_BANNED: u32 = 1;
 
@@ -56,7 +56,7 @@ pub enum Capability {
     Ban,
 }
 
-/// room-policy-03 §8.1 `SingleSourceRoleChangeTargets` - from one role, which target roles a change may
+/// room-policy-04 §8.1 `SingleSourceRoleChangeTargets` - from one role, which target roles a change may
 /// move a user to. (Add = an entry with `from == 0`; Remove = targets include 0; Ban = targets include 1.)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SingleSourceRoleChangeTargets {
@@ -64,7 +64,7 @@ pub struct SingleSourceRoleChangeTargets {
     pub target_role_indexes: Vec<u32>,
 }
 
-/// A role definition (the load-bearing subset of the room-policy-03 `Role` struct).
+/// A role definition (the load-bearing subset of the room-policy-04 `Role` struct).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Role {
     pub role_index: u32,
@@ -80,7 +80,7 @@ impl Role {
     }
 }
 
-/// room-policy-03 §5 `BaseRoomPolicy` (load-bearing subset).
+/// room-policy-04 §5 `BaseRoomPolicy` (load-bearing subset).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct BaseRoomPolicy {
     pub fixed_membership: bool,
@@ -152,7 +152,7 @@ impl RoomPolicy {
 
     /// P4: may `actor_role_index` move a user `from_role` → `to_role`? The actor's role must hold the
     /// capability the change implies, AND the ACTOR's own role must have an `authorized_role_changes`
-    /// entry (keyed by `from_role`) whose targets include `to_role` (room-policy-03 §8.1.3:
+    /// entry (keyed by `from_role`) whose targets include `to_role` (room-policy-04 §8.1.3:
     /// `canChangeUserRole` is authorized "according to the holder's `authorized_role_changes` list" -
     /// the holder is the actor, not the target's current role). Add = from 0 (needs AddParticipant);
     /// Remove = to 0 (needs RemoveParticipant); Ban = to 1 (needs Ban); any other transition needs
@@ -230,7 +230,7 @@ impl RoomPolicy {
     }
 }
 
-/// P2 (room-policy-03 §8.6 EXACT): a Role-definition (mimiRoomPolicy) change is NOT valid in the same
+/// P2 (room-policy-04 §8.6 EXACT): a Role-definition (mimiRoomPolicy) change is NOT valid in the same
 /// commit as any participant-list (mimiParticipantList) change. Given the custom proposal types carried
 /// in one commit, reject the forbidden co-occurrence. Fail-closed.
 pub fn validate_commit_component_exclusivity(
@@ -260,7 +260,7 @@ mod tests {
 
     /// admin(2) can add (from 0->2 or 0->3), remove (3->0), ban (3->1), and demote (2->3); member(3) can
     /// only send. The role-change graph lives on the ACTOR's (admin's) own `authorized_role_changes` -
-    /// per room-policy-03 §8.1.3, that's whose list governs, not the target's current role.
+    /// per room-policy-04 §8.1.3, that's whose list governs, not the target's current role.
     fn sample_policy() -> RoomPolicy {
         let admin = Role {
             role_index: 2,

@@ -87,15 +87,30 @@ actually wire-routes, alongside the pre-existing `endpoints` (JSON compat lane) 
 existing consumers. A client that looks for a root-level `keyMaterial` key per the draft now
 finds one.
 
-## DIV-8 - `reportAbuse` and asset download are not implemented
+## DIV-8 - `reportAbuse` is bounded to metadata-only reports; asset download is not implemented
 
-Neither `reportAbuse` (§5.9) nor asset download (§5.10) has a v1 handler, wire or JSON.
+`reportAbuse` (§5.9) has a v1 wire handler (`POST /mimi/pl/reportAbuse/{roomId}`) that accepts and
+durably persists `reportingUser`/`allegedAbuserUri`/`reasonCode`/`note`. A report attaching one or
+more `AbusiveMessage` entries is refused (decode error, not silently dropped): validating an
+`AbusiveMessage` requires recalculating its `Frank` against this hub's own key material, which this
+codebase does not build (DIV-9). This hub takes no automated action on an accepted report - it is a
+durable record only, matching the draft's own text ("the response code only indicates if the abuse
+report was accepted, not if any specific automated or human action was taken").
 
-## DIV-9 - `SubmitMessageResponse` omits the `frank` field
+Asset download (§5.10) has no v1 handler, wire or JSON.
 
-§5.4.1 `server_frank` framing is not yet built in the store-and-forward path, so an accepted
-response carries no `frank` field. Adding it is additive, appended after `accepted_timestamp`,
-once the store tracks it.
+## DIV-9 - `SubmitMessageResponse` omits the `frank` field, and `reportAbuse` cannot validate a franked message
+
+§5.4.1 `server_frank` framing is not yet built. The wire form is ready for it (the `optional Frank
+frank` presence tag is correctly encoded as absent, so adding a real value later is additive), but
+closing this divergence requires the actual franking ALGORITHM, not just store persistence:
+computing `server_frank` from a client-supplied `frank_aad` and this hub's own `hub_key` (an
+HMAC-style commitment scheme, per §5.4.1's description and its comparison to the Facebook franking
+design), plus the receiver-side verification the draft describes. This is real hub-side
+cryptography and key management, not a field the store needs to remember - a materially larger lift
+than the wire framing alone. Downstream: `reportAbuse` (DIV-8) cannot validate an attached
+`AbusiveMessage` (which requires recalculating its `Frank`) until this closes, so it currently
+refuses reports that attach one rather than accepting-but-not-verifying them.
 
 ## DIV-10 - the four room-admin endpoints are not wire-framed
 
@@ -106,16 +121,21 @@ ten named endpoints; the draft expresses the same operations as AppSync proposal
 real MLS Commit or Proposal yet), so there is no spec wire form to frame the admin four
 against.
 
-## DIV-11 - `AppDataDictionary` fields are carried as opaque bytes
+## DIV-11 - CLOSED for `consent_extensions`; `update`'s fields stay opaque
 
-`ConsentEntry.consent_extensions` and `update`'s `RatchetTreeOption`/`GroupInfoOption` fields
-are carried as flat length-prefixed blobs rather than decoded into the MLS-extensions
-`AppDataDictionary` structure. Nothing in this codebase produces or consumes that structure
-yet.
+`ConsentEntry.consent_extensions` (§5.7) is decoded into the real `draft-ietf-mls-extensions` §4.6
+`AppDataDictionary` shape: a run of `ComponentData { uint16 component_id; opaque data<V>; }`
+entries, sorted and unique by `component_id` (the draft's own MUST), wrapped in one outer
+length-prefixed window. `id_request_extensions`/`id_response_extensions` (§5.8) and
+`abuse_extensions` (§5.9, the same `AppDataDictionary` type) stay opaque length-prefixed blobs -
+this hub correctly skips over them on decode (the framing is byte-exact either way) without
+interpreting their contents, since nothing here produces or consumes those specific fields.
+`update`'s `RatchetTreeOption`/`GroupInfoOption` fields (§5.3) also stay opaque, for the same
+reason as the rest of `update`'s codec: no live accept-path exists yet.
 
 ---
 
 Divergences are revisited as the drafts move and as the accept-path work (DIV-6, DIV-9, DIV-10)
 lands. DIV-1 through DIV-4 do not block interoperating with another provider on the supported
-surface. DIV-5 and DIV-7 are closed or mostly closed (see above); DIV-6 and DIV-8 through DIV-11
-still do, for the endpoints they touch, until closed.
+surface. DIV-5, DIV-7, and DIV-11 are closed or mostly closed (see above); DIV-6, DIV-8, DIV-9, and
+DIV-10 still do, for the endpoints they touch, until closed.
