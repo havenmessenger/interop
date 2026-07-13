@@ -436,8 +436,10 @@ impl Provider {
     }
 
     /// C2: accept + process an `updateConsent` (grant / revoke / cancel). `grant`→granted, `revoke`→
-    /// revoked (valid PREEMPTIVELY, no prior request needed), `cancel`→delete a pending request. Any
-    /// grant-carried client_key_packages are suite-gated (INV-MLS-002) before they could be stored/used.
+    /// revoked (valid PREEMPTIVELY, no prior request needed), `cancel`→delete a pending request.
+    /// `client_key_packages` is a `GatedKeyPackages` - every element it can hold was already
+    /// suite-gated (INV-MLS-002) at construction (JSON deserialize or the binary wire decoder),
+    /// so this loop's re-check is defense-in-depth, not the enforcement point.
     pub fn process_update_consent(
         &self,
         entry: &ConsentEntry,
@@ -447,8 +449,8 @@ impl Provider {
         let rk = Self::room_key(&entry.room_uri);
         match entry.operation {
             ConsentOperation::Grant => {
-                for kp in &entry.client_key_packages {
-                    mimi_gate_keypackage(kp)?; // reject non-0x0001 grant KPs before honoring the grant
+                for kp in entry.client_key_packages.as_slice() {
+                    mimi_gate_keypackage(kp.as_slice())?; // reject non-0x0001 grant KPs before honoring the grant
                 }
                 self.store.set_consent(
                     &entry.requester_uri,
@@ -770,7 +772,7 @@ mod tests {
             requester_uri: "mimi://mimi-b.havenmessenger.com/u/bob".into(),
             target_uri: "mimi://mimi.havenmessenger.com/u/alice".into(),
             room_uri: room.map(|s| s.to_string()),
-            client_key_packages: vec![],
+            client_key_packages: mimi_core::gate::GatedKeyPackages::default(),
             consent_extensions: vec![],
         }
     }
@@ -863,12 +865,17 @@ mod tests {
         assert!(p
             .process_request_consent(&consent_entry(ConsentOperation::Grant, None), 1)
             .is_err());
-        // grant carrying a garbage (non-0x0001) KeyPackage → gated out
-        let mut bad = consent_entry(ConsentOperation::Grant, None);
-        bad.client_key_packages = vec![b"not a keypackage".to_vec()];
+        // grant carrying a garbage (non-0x0001) KeyPackage → gated out. There is no way for
+        // this crate to construct a `ConsentEntry` carrying one at all - `GatedKeyPackages` has
+        // no public, non-test constructor that skips the gate (mimi-hub is a separate crate
+        // from mimi-core, so it cannot reach mimi-core's own `#[cfg(test)]`-only bypass either)
+        // - so the gate rejecting the raw bytes at construction IS the proof.
         assert!(
-            p.process_update_consent(&bad, 1).is_err(),
-            "grant KP suite-gated"
+            mimi_core::gate::GatedKeyPackages::from_gated_bytes_vec(vec![
+                b"not a keypackage".to_vec()
+            ])
+            .is_err(),
+            "grant KP suite-gated at construction"
         );
     }
 

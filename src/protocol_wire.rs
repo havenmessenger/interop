@@ -579,8 +579,8 @@ pub fn encode_consent_entry(e: &ConsentEntry) -> Result<Vec<u8>, WireError> {
         // blobs. Each `client_key_packages` element is already exactly one KeyPackage's own
         // serialized bytes, so concatenate them raw under a single VLBytes.
         let mut concatenated = Vec::new();
-        for kp in &e.client_key_packages {
-            concatenated.extend_from_slice(kp);
+        for kp in e.client_key_packages.as_slice() {
+            concatenated.extend_from_slice(kp.as_slice());
         }
         VLBytes::new(concatenated)
             .tls_serialize(&mut out)
@@ -667,17 +667,17 @@ pub fn decode_consent_entry(bytes: &[u8]) -> Result<ConsentEntry, WireError> {
                 detail: "malformed KeyPackage (decoder panicked)".into(),
             })?
             .map_err(|e| codec_err("clientKeyPackages[]", e))?;
-            let kp_bytes = window[offset..offset + consumed].to_vec();
+            let kp_bytes = &window[offset..offset + consumed];
             budget.record("clientKeyPackages[]", kp_bytes.len())?;
             // A consent grant's carried KeyPackages are join material a requester
             // may add to a group directly - gate each one at decode, same as `/keyMaterial`.
-            crate::gate::mimi_gate_keypackage(&kp_bytes)?;
-            kps.push(kp_bytes);
+            // The gate running is what lets this construct a `GatedKeyPackage` at all.
+            kps.push(crate::gate::GatedKeyPackage::from_gated_bytes(kp_bytes)?);
             offset += consumed;
         }
-        (kps, rest)
+        (crate::gate::GatedKeyPackages::from(kps), rest)
     } else {
-        (Vec::new(), rest)
+        (crate::gate::GatedKeyPackages::default(), rest)
     };
     // This outer window needs its own pre-check independent of the inner one - the
     // name/value pairs inside it (`decode_consent_extensions`) are budgeted separately, so an
@@ -1285,16 +1285,21 @@ impl GroupInfoRepresentation {
 /// `<V>`-length-prefixed -- and `PartialGroupInfo` belongs to the unimplemented sibling draft, so
 /// this codec cannot itself determine where a `Partial` payload ends without a decoder for that
 /// type. (`openmls::messages::group_info::VerifiableGroupInfo` IS reachable and decodable for the
-/// `Full` case -- absent from `openmls::prelude` but not `pub(crate)`-scoped.
-/// `Full`-representation payloads are suite-gated at decode via
-/// `crate::gate::mimi_gate_group_info`, `Partial` is not, since no decoder exists for it here or
-/// in openmls's public surface.) `encode`/`decode` keep a length-prefix wrap here as the only way
-/// to keep `ratchetTreeOption` (which follows it) findable at all; this is a known, disclosed
-/// departure from the literal wire shape for this one field, not a silent one.
+/// `Full` case -- absent from `openmls::prelude` but not `pub(crate)`-scoped.) `encode`/`decode`
+/// keep a length-prefix wrap here as the only way to keep `ratchetTreeOption` (which follows it)
+/// findable at all; this is a known, disclosed departure from the literal wire shape for this one
+/// field, not a silent one.
+///
+/// A sum type, not a `representation`+`payload` struct: `Full` can only ever hold a
+/// [`crate::gate::GatedGroupInfo`], so it is impossible to construct one carrying ungated bytes
+/// (there is no path from raw bytes to `Full` except through the gate). `Partial` keeps a plain
+/// `Vec<u8>` since no decoder for `PartialGroupInfo` exists anywhere in this crate or in
+/// openmls's public surface, so nothing here can suite-check it - the gate cannot run on a shape
+/// nothing can decode.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GroupInfoOption {
-    pub representation: GroupInfoRepresentation,
-    pub payload: Vec<u8>,
+pub enum GroupInfoOption {
+    Full(crate::gate::GatedGroupInfo),
+    Partial(Vec<u8>),
 }
 
 /// §5.3 `HandshakeBundle`. `proposal_or_commit` is the real MLS wire envelope (bounded the same
@@ -1349,10 +1354,18 @@ impl HandshakeBundle {
                     }
                     None => out.push(0),
                 }
-                out.push(group_info_option.representation.to_u8());
                 // GroupInfoOption.payload keeps a length wrap: see the type's own doc for why
                 // (no self-delimiting decoder available for either GroupInfo or PartialGroupInfo).
-                VLBytes::new(group_info_option.payload.clone())
+                let (repr_byte, payload) = match group_info_option {
+                    GroupInfoOption::Full(gi) => {
+                        (GroupInfoRepresentation::Full.to_u8(), gi.as_slice())
+                    }
+                    GroupInfoOption::Partial(bytes) => {
+                        (GroupInfoRepresentation::Partial.to_u8(), bytes.as_slice())
+                    }
+                };
+                out.push(repr_byte);
+                VLBytes::new(payload.to_vec())
                     .tls_serialize(&mut out)
                     .map_err(|e| codec_err("groupInfoOption.payload", e))?;
                 // ratchetTreeOption is the trailing field of the commit case -- no length prefix
@@ -1464,22 +1477,25 @@ impl HandshakeBundle {
                         .map_err(|e| codec_err("groupInfoOption.payload", e))?;
                 // `Full` representation is decodable as a `VerifiableGroupInfo` (see the
                 // type's own doc for the correction on that point) and is join material a caller
-                // could feed to `join_by_external_commit` - gate it. `Partial`
+                // could feed to `join_by_external_commit` - gating it is the ONLY way to
+                // construct `GroupInfoOption::Full` at all (see the type's own doc). `Partial`
                 // (`PartialGroupInfo`) has no decoder anywhere in this crate or in openmls's
                 // public surface, so it cannot be suite-checked here; this is a disclosed
                 // residual, not an oversight - see the type's own doc.
-                if representation == GroupInfoRepresentation::Full {
-                    crate::gate::mimi_gate_group_info(gi_payload.as_slice())?;
-                }
+                let group_info_option = match representation {
+                    GroupInfoRepresentation::Full => GroupInfoOption::Full(
+                        crate::gate::GatedGroupInfo::from_gated_bytes(gi_payload.as_slice())?,
+                    ),
+                    GroupInfoRepresentation::Partial => {
+                        GroupInfoOption::Partial(gi_payload.as_slice().to_vec())
+                    }
+                };
                 // ratchetTreeOption is the trailing field -- everything left, raw, no wrap.
                 let rt_option = rest;
                 Ok(Self::Commit {
                     proposal_or_commit,
                     welcome,
-                    group_info_option: GroupInfoOption {
-                        representation,
-                        payload: gi_payload.as_slice().to_vec(),
-                    },
+                    group_info_option,
                     ratchet_tree_option: rt_option.to_vec(),
                 })
             }
@@ -2115,7 +2131,7 @@ mod tests {
             requester_uri: "mimi://a.example/u/alice".to_string(),
             target_uri: "mimi://b.example/u/bob".to_string(),
             room_uri: None,
-            client_key_packages: Vec::new(),
+            client_key_packages: crate::gate::GatedKeyPackages::default(),
             consent_extensions: Vec::new(),
         };
         let encoded = encode_consent_entry(&e).unwrap();
@@ -2142,7 +2158,10 @@ mod tests {
             requester_uri: "mimi://a.example/u/alice".to_string(),
             target_uri: "mimi://b.example/u/bob".to_string(),
             room_uri: Some("mimi://a.example/r/team".to_string()),
-            client_key_packages: vec![kp_bytes.clone()],
+            client_key_packages: crate::gate::GatedKeyPackages::from_gated_bytes_vec(vec![
+                kp_bytes.clone(),
+            ])
+            .unwrap(),
             consent_extensions: Vec::new(),
         };
         let encoded = encode_consent_entry(&e).unwrap();
@@ -2196,7 +2215,7 @@ mod tests {
             requester_uri: "mimi://a.example/u/a".to_string(),
             target_uri: "mimi://b.example/u/b".to_string(),
             room_uri: None,
-            client_key_packages: Vec::new(),
+            client_key_packages: crate::gate::GatedKeyPackages::default(),
             consent_extensions: Vec::new(),
         };
         let mut bytes = encode_consent_entry(&e).unwrap();
@@ -2280,7 +2299,7 @@ mod tests {
             requester_uri: "mimi://a.example/u/alice".to_string(),
             target_uri: "mimi://b.example/u/eve".to_string(),
             room_uri: None,
-            client_key_packages: vec![kp_bytes],
+            client_key_packages: crate::gate::GatedKeyPackages::trusted(vec![kp_bytes]),
             consent_extensions: Vec::new(),
         };
         let encoded = encode_consent_entry(&e).unwrap();
@@ -2304,7 +2323,7 @@ mod tests {
             requester_uri: "mimi://a.example/r/notauser".to_string(),
             target_uri: "mimi://b.example/u/bob".to_string(),
             room_uri: None,
-            client_key_packages: Vec::new(),
+            client_key_packages: crate::gate::GatedKeyPackages::default(),
             consent_extensions: Vec::new(),
         };
         let encoded = encode_consent_entry(&e).unwrap();
@@ -2326,7 +2345,7 @@ mod tests {
             requester_uri: "mimi://a.example/u/alice".to_string(),
             target_uri: "mimi://b.example/u/bob".to_string(),
             room_uri: None,
-            client_key_packages: Vec::new(),
+            client_key_packages: crate::gate::GatedKeyPackages::default(),
             consent_extensions: vec![
                 ("marker".to_string(), Vec::new()),
                 ("note".to_string(), b"hello consent extensions".to_vec()),
@@ -2353,7 +2372,7 @@ mod tests {
             requester_uri: "mimi://a.example/u/alice".to_string(),
             target_uri: "mimi://b.example/u/bob".to_string(),
             room_uri: None,
-            client_key_packages: Vec::new(),
+            client_key_packages: crate::gate::GatedKeyPackages::default(),
             consent_extensions: Vec::new(),
         };
         let mut bytes = encode_consent_entry(&e).unwrap();
@@ -2380,7 +2399,7 @@ mod tests {
             requester_uri: "mimi://a.example/u/alice".to_string(),
             target_uri: "mimi://b.example/u/bob".to_string(),
             room_uri: None,
-            client_key_packages: Vec::new(),
+            client_key_packages: crate::gate::GatedKeyPackages::default(),
             consent_extensions: Vec::new(),
         };
         let mut bytes = encode_consent_entry(&e).unwrap();
@@ -3215,10 +3234,9 @@ mod tests {
             let bundle = HandshakeBundle::Commit {
                 proposal_or_commit: commit_bytes.clone(),
                 welcome: Some(crate::gate::GatedWelcome::trusted(welcome_bytes.clone())),
-                group_info_option: GroupInfoOption {
-                    representation: GroupInfoRepresentation::Full,
-                    payload: gi_bytes.clone(),
-                },
+                group_info_option: GroupInfoOption::Full(
+                    crate::gate::GatedGroupInfo::from_gated_bytes(&gi_bytes).unwrap(),
+                ),
                 ratchet_tree_option: vec![0xCC],
             };
             let encoded = bundle.encode().unwrap();
@@ -3239,11 +3257,12 @@ mod tests {
                         Some(welcome_bytes),
                         "welcome round-trip"
                     );
-                    assert_eq!(
-                        group_info_option.representation,
-                        GroupInfoRepresentation::Full
-                    );
-                    assert_eq!(group_info_option.payload, gi_bytes, "GroupInfo round-trip");
+                    match group_info_option {
+                        GroupInfoOption::Full(gi) => {
+                            assert_eq!(gi.as_slice(), gi_bytes.as_slice(), "GroupInfo round-trip");
+                        }
+                        GroupInfoOption::Partial(_) => panic!("expected Full"),
+                    }
                     assert_eq!(ratchet_tree_option, vec![0xCC]);
                 }
                 HandshakeBundle::Proposal { .. } => panic!("expected Commit"),
@@ -3346,10 +3365,7 @@ mod tests {
                 welcome: Some(crate::gate::GatedWelcome::trusted(welcome_bytes)),
                 // Never reached: the welcome gate errors and `decode()` returns via `?` before
                 // parsing these fields, so their contents don't matter for this test.
-                group_info_option: GroupInfoOption {
-                    representation: GroupInfoRepresentation::Partial,
-                    payload: vec![],
-                },
+                group_info_option: GroupInfoOption::Partial(vec![]),
                 ratchet_tree_option: vec![],
             };
             let encoded = bundle.encode().unwrap();
@@ -3415,10 +3431,12 @@ mod tests {
             let bundle = HandshakeBundle::Commit {
                 proposal_or_commit: commit_bytes,
                 welcome: Some(crate::gate::GatedWelcome::trusted(welcome_bytes)),
-                group_info_option: GroupInfoOption {
-                    representation: GroupInfoRepresentation::Full,
-                    payload: foreign_gi_bytes,
-                },
+                // `trusted`, not `from_gated_bytes`: this test deliberately builds a wire-level
+                // Commit carrying a foreign-suite GroupInfo to prove `decode()` rejects it -
+                // `from_gated_bytes` would itself refuse to construct this fixture.
+                group_info_option: GroupInfoOption::Full(crate::gate::GatedGroupInfo::trusted(
+                    foreign_gi_bytes,
+                )),
                 ratchet_tree_option: vec![],
             };
             let encoded = bundle.encode().unwrap();

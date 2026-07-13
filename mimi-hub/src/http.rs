@@ -1235,7 +1235,7 @@ mod tests {
             requester_uri: requester.to_string(),
             target_uri: target.to_string(),
             room_uri: None,
-            client_key_packages: Vec::new(),
+            client_key_packages: mimi_core::gate::GatedKeyPackages::default(),
             consent_extensions: Vec::new(),
         };
         let wire_body = encode_consent_entry(&entry).unwrap();
@@ -1362,7 +1362,7 @@ mod tests {
                     requester_uri: requester.to_string(),
                     target_uri: target_uri.to_string(),
                     room_uri: None,
-                    client_key_packages: Vec::new(),
+                    client_key_packages: mimi_core::gate::GatedKeyPackages::default(),
                     consent_extensions: Vec::new(),
                 },
                 now_unix(),

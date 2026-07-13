@@ -355,12 +355,83 @@ impl GatedGroupInfo {
         Ok(Self(group_info_bytes.to_vec()))
     }
 
+    /// Test-fixture construction that skips the gate - see [`GatedKeyPackage::trusted`]'s
+    /// doc for why this is test-only.
+    #[cfg(test)]
+    pub(crate) fn trusted(group_info_bytes: Vec<u8>) -> Self {
+        Self(group_info_bytes)
+    }
+
     pub fn as_slice(&self) -> &[u8] {
         &self.0
     }
 
     pub fn into_bytes(self) -> Vec<u8> {
         self.0
+    }
+}
+
+/// A consent grant's `clientKeyPackages` (§5.7), individually accept-gated. The only public ways
+/// to obtain one from untrusted bytes are [`GatedKeyPackages::from_gated_bytes_vec`] (all-or-
+/// nothing: the whole batch fails if any element fails the gate) and the `serde`
+/// `Deserialize` impl below, which runs the same gate on every element during deserialization -
+/// `serde_json::from_slice::<crate::consent::ConsentEntry>(attacker_json)` can no longer
+/// construct an entry carrying an un-suite-checked KeyPackage, closing the class
+/// `HandshakeBundle`'s Welcome/GroupInfo fields already close via `GatedWelcome`/
+/// `GatedGroupInfo`. Deliberately does NOT derive `Serialize`/`Deserialize` on
+/// [`GatedKeyPackage`] itself - that would reopen the same hole on that type instead.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GatedKeyPackages(Vec<GatedKeyPackage>);
+
+impl GatedKeyPackages {
+    /// Gates every element; fails on the first ungated one.
+    pub fn from_gated_bytes_vec(raw: Vec<Vec<u8>>) -> Result<Self, GateError> {
+        raw.iter()
+            .map(|bytes| GatedKeyPackage::from_gated_bytes(bytes))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Self)
+    }
+
+    /// Test-fixture construction that skips the gate - see [`GatedKeyPackage::trusted`]'s doc
+    /// for why this is test-only.
+    #[cfg(test)]
+    pub(crate) fn trusted(raw: Vec<Vec<u8>>) -> Self {
+        Self(raw.into_iter().map(GatedKeyPackage::trusted).collect())
+    }
+
+    pub fn as_slice(&self) -> &[GatedKeyPackage] {
+        &self.0
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub const fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+/// Bundle already-gated elements. Safe unconditionally: each `GatedKeyPackage` was already
+/// gated at its own construction (there is no other way to obtain one), so collecting them into
+/// a batch adds no new ungated bytes.
+impl From<Vec<GatedKeyPackage>> for GatedKeyPackages {
+    fn from(gated: Vec<GatedKeyPackage>) -> Self {
+        Self(gated)
+    }
+}
+
+impl serde::Serialize for GatedKeyPackages {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let raw: Vec<&[u8]> = self.0.iter().map(GatedKeyPackage::as_slice).collect();
+        raw.serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for GatedKeyPackages {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw: Vec<Vec<u8>> = serde::Deserialize::deserialize(deserializer)?;
+        Self::from_gated_bytes_vec(raw).map_err(serde::de::Error::custom)
     }
 }
 

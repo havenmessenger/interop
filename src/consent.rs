@@ -13,9 +13,13 @@
 //! `client_key_packages` is genuinely optional on a grant - send KPs to cut round-trips OR omit
 //! them to save space; BE PREPARED FOR BOTH. KPs carried in a grant MAY EXPIRE before
 //! the human acts, so the requester's use-site (claim/add) MUST tolerate a stale grant-KP and fall back to
-//! `/keyMaterial`. Our model already matches: `client_key_packages: Vec<Vec<u8>>`, empty ⇒ fetch via
-//! /keyMaterial. (This validates the consent "out-v1" stance - it's an application choice, not a gap.)
+//! `/keyMaterial`. Our model already matches: `client_key_packages: GatedKeyPackages`, empty ⇒
+//! fetch via /keyMaterial. (This validates the consent "out-v1" stance - it's an application
+//! choice, not a gap.) `GatedKeyPackages` individually accept-gates each element on `Deserialize`
+//! (see its own doc in `crate::gate`) - the JSON wire shape (an array of KeyPackage byte arrays)
+//! is unchanged from a bare `Vec<Vec<u8>>`, only construction from untrusted bytes is gated.
 
+use crate::gate::GatedKeyPackages;
 use crate::uri::MimiUri;
 use serde::{Deserialize, Serialize};
 
@@ -70,8 +74,8 @@ pub struct ConsentEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room_uri: Option<String>,
     /// grant-only: the target's client KeyPackages (public key material). Empty ⇒ fetch via /keyMaterial.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub client_key_packages: Vec<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "GatedKeyPackages::is_empty")]
+    pub client_key_packages: GatedKeyPackages,
     /// AppDataDictionary (§5.7) - opaque extension bag.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub consent_extensions: Vec<(String, Vec<u8>)>,
@@ -166,7 +170,7 @@ mod tests {
             requester_uri: "mimi://mimi-b.havenmessenger.com/u/bob".into(),
             target_uri: "mimi://mimi.havenmessenger.com/u/alice".into(),
             room_uri: None,
-            client_key_packages: vec![],
+            client_key_packages: GatedKeyPackages::default(),
             consent_extensions: vec![],
         }
     }
@@ -194,12 +198,33 @@ mod tests {
 
     #[test]
     fn entry_json_roundtrips() {
+        // Non-empty client_key_packages round-tripping through a REAL gate pass (rather than
+        // this module's own trusted()-bypass fixtures) is covered in protocol_wire.rs's test
+        // module, which has real KeyPackage fixtures this pure/portable module deliberately
+        // does not depend on.
         let mut e = entry(ConsentOperation::Grant);
-        e.client_key_packages = vec![b"kp".to_vec()];
         e.room_uri = Some("mimi://mimi.havenmessenger.com/r/x".into());
         let j = serde_json::to_string(&e).unwrap();
         let back: ConsentEntry = serde_json::from_str(&j).unwrap();
         assert_eq!(back, e);
+    }
+
+    /// The direct proof of the closed hole: a grant carrying a byte blob that is not a real
+    /// KeyPackage must fail to deserialize, not silently construct a `ConsentEntry` an attacker
+    /// could feed straight to `process_update_consent`.
+    #[test]
+    fn entry_json_rejects_ungated_key_package() {
+        let j = serde_json::json!({
+            "operation": u8::from(ConsentOperation::Grant),
+            "requester_uri": "mimi://mimi-b.havenmessenger.com/u/bob",
+            "target_uri": "mimi://mimi.havenmessenger.com/u/alice",
+            "client_key_packages": [[1, 2, 3]],
+        })
+        .to_string();
+        assert!(
+            serde_json::from_str::<ConsentEntry>(&j).is_err(),
+            "a garbage (non-KeyPackage) client_key_packages entry must fail closed on deserialize"
+        );
     }
 
     #[test]
@@ -218,7 +243,7 @@ mod tests {
         assert!(validate_consent_entry(&bad2).is_err());
         // KPs on a non-grant
         let mut bad3 = entry(ConsentOperation::Request);
-        bad3.client_key_packages = vec![b"kp".to_vec()];
+        bad3.client_key_packages = GatedKeyPackages::trusted(vec![b"kp".to_vec()]);
         assert!(
             validate_consent_entry(&bad3).is_err(),
             "only grant may carry KeyPackages"
@@ -232,14 +257,14 @@ mod tests {
         // (the requester then fetches via /keyMaterial) MUST validate, exactly like a grant
         // that carries them; grant-KPs may also expire, so the omit-path is the steady state.
         let mut g_omitted = entry(ConsentOperation::Grant);
-        g_omitted.client_key_packages = vec![]; // omitted ⇒ fetch via /keyMaterial
+        g_omitted.client_key_packages = GatedKeyPackages::default(); // omitted ⇒ fetch via /keyMaterial
         assert!(
             validate_consent_entry(&g_omitted).is_ok(),
             "a grant without client_key_packages is valid (be prepared for both)"
         );
         // And the carry-KPs form is equally valid (the round-trip-saving variant).
         let mut g_carried = entry(ConsentOperation::Grant);
-        g_carried.client_key_packages = vec![b"kp".to_vec()];
+        g_carried.client_key_packages = GatedKeyPackages::trusted(vec![b"kp".to_vec()]);
         assert!(
             validate_consent_entry(&g_carried).is_ok(),
             "a grant carrying client_key_packages is also valid"
