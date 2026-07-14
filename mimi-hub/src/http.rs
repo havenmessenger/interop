@@ -24,7 +24,7 @@
 //!   POST /mimi/pl/keyMaterial/:target_user          (§5.2, KeyMaterialRequest/Response bodies)
 //!   POST /mimi/pl/notify                            (§5.5, inbound-receive only, FanoutMessage)
 //!   POST /mimi/pl/identifierQuery                   (§5.8, DIV-4 no-body-oracle preserved)
-//!   POST /mimi/pl/reportAbuse/:room_id              (§5.9, DIV-8 bounded v1 - no AbusiveMessage)
+//!   POST /mimi/pl/reportAbuse/:room_id              (§5.9, DIV-8 metadata-only - no AbusiveMessage)
 //! `update` (§5.3) has a codec (`mimi_core::protocol_wire::HandshakeBundle`) but no route: this
 //! reference hub has no Provider method that processes a real MLS Commit/Proposal, so wiring one
 //! would mean writing new protocol logic, not framing (see the codec's own module doc). `groupInfo`
@@ -273,9 +273,9 @@ async fn submit_message(
 ///
 /// The path segment is the room this message targets (draft §5.1's `{roomId}` template - see
 /// `directory()`'s flat-key comment). Unlike `submit_message` (the JSON compat/admin lane, whose
-/// `?recipient=` key can be any opaque string), this wire twin now enforces the sender authorization
-/// this endpoint always should have had: `authorize_sender` (M2/R3/P5 - active participation, not
-/// removed, room-policy canSendMessage) must pass before anything is stored, and `NotAllowed` is
+/// `?recipient=` key can be any opaque string), this wire twin enforces sender authorization:
+/// `authorize_sender` (active participation, not removed, room-policy canSendMessage) must pass
+/// before anything is stored, and `NotAllowed` is
 /// returned otherwise (a `recipient` that doesn't even parse as a room this hub hosts also lands
 /// here, via `authorize_sender`'s own `assert_hub_of_record`). On success, the message is queued
 /// under the literal path segment AS BEFORE (unchanged persistence key, for callers already relying
@@ -393,7 +393,7 @@ async fn identifier_query_wire(State(p): State<SharedProvider>, body: Bytes) -> 
     }
 }
 
-/// reportAbuse (§5.9, DIV-8 bounded v1). Unlike consent, the draft states no no-oracle privacy
+/// reportAbuse (§5.9, DIV-8 metadata-only). Unlike consent, the draft states no no-oracle privacy
 /// requirement for this endpoint - "the response code only indicates if the abuse report was
 /// accepted" - so a genuinely malformed body (undecodable, or attaching an `AbusiveMessage` this
 /// hub cannot verify - DIV-9) is a real 400, not a silently-swallowed 201. `room_id` is the path
@@ -824,7 +824,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_policy_scenario_allows_member_blocks_banned() {
-        // The end-to-end live P1/P4/P5 scenario: set policy → register participants → assign roles →
+        // The end-to-end policy scenario: set policy → register participants → assign roles →
         // authorizeSender shows 200 (member) vs 403 (banned).
         let p = Arc::new(Mutex::new(
             Provider::in_memory("mimi.havenmessenger.com").unwrap(),
@@ -1326,7 +1326,7 @@ mod tests {
                 .abuse_report_count("mimi://a.example/r/room1")
                 .unwrap(),
             1,
-            "the report must be durably persisted, keyed by the path's room id"
+            "the report must be stored under the path room id"
         );
     }
 

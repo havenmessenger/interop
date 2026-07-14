@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS consent (
 );
 CREATE INDEX IF NOT EXISTS idx_consent_pair ON consent(requester, target);
 
--- Per-room policy (room-policy-04; conformance P1-P6). The RoomPolicy (roles + base policy) as a JSON
+-- Per-room policy (room-policy-04). The RoomPolicy (roles + base policy) as a JSON
 -- blob keyed by the room URI, plus each member's assigned role_index. Absent policy = default-permissive
 -- (backward-compatible: rooms without a policy enforce only active-participant, as before). The hub
 -- enforces ONLY canSendMessage (P5); the role assignment is the per-member role for that check.
@@ -110,11 +110,11 @@ CREATE TABLE IF NOT EXISTS room_participants (
 );
 CREATE INDEX IF NOT EXISTS idx_room ON room_participants(room_uri);
 
--- Abuse reports (protocol §5.9; DIV-8, the bounded v1 case: metadata-only, no attached
--- AbusiveMessage - a report carrying one requires verifying its Frank, which this reference hub
--- does not build (see DIVERGENCES.md DIV-9). reason_code is the raw AbuseType wire value (the draft
--- defines only reserved(0) - no taxonomy is registered yet). note is a UTF8 human-readable string,
--- may be empty. Pure metadata (INV-MIMI-002); this hub takes no automated action on a report.
+-- Abuse reports (protocol §5.9; DIV-8, metadata-only: no attached AbusiveMessage - a report
+-- carrying one requires verifying its Frank, which this reference hub does not build (see
+-- DIVERGENCES.md DIV-9). reason_code is the raw AbuseType wire value (the draft defines only
+-- reserved(0) - no taxonomy is registered yet). note is a UTF8 human-readable string, may be empty.
+-- The schema has no message-body field; this hub takes no automated action on a report.
 CREATE TABLE IF NOT EXISTS abuse_reports (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     room_uri            TEXT NOT NULL,
@@ -407,7 +407,7 @@ impl SqliteStore {
             .optional()?)
     }
 
-    // ---- abuse reports (§5.9; DIV-8 bounded v1) ----
+    // ---- abuse reports (§5.9; DIV-8) ----
 
     /// Persist a metadata-only abuse report. Bounded by [`MAX_ABUSE_REPORTS`] (anti-flood) -
     /// there is no eviction policy for this table (unlike the KeyPackage/queue tables): a report is

@@ -5,10 +5,10 @@
 //! module is the PURE, portable layer - the structs, the operation enum, and well-formedness
 //! validation. The STATE (who consented to whom) and the enforcement live in the consuming service.
 //!
-//! Wire note: this module is the pure JSON-facing domain type (derives serde for the JSON compat
-//! lane). The draft's exact ConsentEntry is a TLS presentation-language struct (§5.7, NOT CBOR) -
-//! the binary wire codec lives in `protocol_wire::{encode,decode}_consent_entry` and is draft-exact,
-//! including the routed `consent_extensions` field (see that module for the AppDataDictionary shape).
+//! Wire note: this module is the JSON-facing domain type (derives serde for the JSON compat lane).
+//! The draft's ConsentEntry is a TLS presentation-language struct (§5.7, not CBOR); the binary wire
+//! codec lives in `protocol_wire::{encode,decode}_consent_entry`, including the routed
+//! `consent_extensions` field (see that module for the AppDataDictionary shape).
 //!
 //! Per MIMI content-08/protocol-06: a grant implies NO action by the receiver, and
 //! `client_key_packages` is genuinely optional on a grant - send KPs to cut round-trips OR omit

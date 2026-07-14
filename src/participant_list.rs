@@ -32,8 +32,8 @@
 //! cross-implementation functional livetest.
 //!
 //! Why it's load-bearing: GROUP interop with a NON-Haven MIMI client needs the roster via AppSync - a
-//! foreign client does not parse Haven's URI-in-credential convention. This IS the portable primitive,
-//! and the live hub emits/decodes it for real in add/remove commits.
+//! foreign client does not parse Haven's URI-in-credential convention. This is the portable primitive.
+//! The hub encodes and decodes it in add and remove commits.
 //!
 //! STILL HAVEN-CHOSEN (not resolved by §7.5): the custom `ProposalType` value `0xF7A0` (IANA/WG
 //! registration open) and the credential↔URI binding (BasicCredential-carrying-URI vs X.509

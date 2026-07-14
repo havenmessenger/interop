@@ -1,13 +1,12 @@
 //! MIMI room policy / RBAC (room-policy-04, conformance P1–P6).
 //!
 //! The role model + authorization logic. Roles live in the participant list (AppSync, see
-//! [`crate::participant_list`]) - NOT in the MLS credential (credentials are opaque). So a role is a
+//! [`crate::participant_list`]) - not in the MLS credential (credentials are opaque). So a role is a
 //! `role_index` attached to a member; this module defines what a role *is* and what it *authorizes*.
 //!
-//! SCOPE (honest): this models the LOAD-BEARING subset of room-policy-04 - roles + capabilities +
-//! `authorized_role_changes` + the membership-count constraints + the two reserved roles - enough to
-//! satisfy P1–P6. The hub enforces ONLY `canSendMessage` (P5, room-policy-04 §8.3 EXACT); every other
-//! capability is client-enforced BY THE SPEC's design, not a Haven shortcut.
+//! This module implements roles, capabilities, authorized role changes, membership constraints, and
+//! reserved roles. The hub enforces `canSendMessage` (§8.3) at runtime; clients enforce the
+//! remaining capabilities.
 
 use serde::{Deserialize, Serialize};
 

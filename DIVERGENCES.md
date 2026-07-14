@@ -90,27 +90,25 @@ finds one.
 ## DIV-8 - `reportAbuse` is bounded to metadata-only reports; asset download is not implemented
 
 `reportAbuse` (§5.9) has a v1 wire handler (`POST /mimi/pl/reportAbuse/{roomId}`) that accepts and
-durably persists `reportingUser`/`allegedAbuserUri`/`reasonCode`/`note`. A report attaching one or
-more `AbusiveMessage` entries is refused (decode error, not silently dropped): validating an
-`AbusiveMessage` requires recalculating its `Frank` against this hub's own key material, which this
-codebase does not build (DIV-9). This hub takes no automated action on an accepted report - it is a
-durable record only, matching the draft's own text ("the response code only indicates if the abuse
-report was accepted, not if any specific automated or human action was taken").
+stores `reportingUser`/`allegedAbuserUri`/`reasonCode`/`note` in the configured provider store. A
+report attaching one or more `AbusiveMessage` entries is refused (decode error, not silently
+dropped): validating an `AbusiveMessage` requires recalculating its `Frank` against this hub's own
+key material, which this codebase does not build (DIV-9). This hub takes no automated action on an
+accepted report - it is a stored record only, matching the draft's own text ("the response code
+only indicates if the abuse report was accepted, not if any specific automated or human action was
+taken").
 
 Asset download (§5.10) has no v1 handler, wire or JSON.
 
 ## DIV-9 - `SubmitMessageResponse` omits the `frank` field, and `reportAbuse` cannot validate a franked message
 
-§5.4.1 `server_frank` framing is not yet built. The wire form is ready for it (the `optional Frank
-frank` presence tag is correctly encoded as absent, so adding a real value later is additive), but
-closing this divergence requires the actual franking ALGORITHM, not just store persistence:
+§5.4.1 `server_frank` framing is not yet built. The wire form's `optional Frank frank` presence tag
+is encoded as absent, so adding a real value later is additive. Closing this divergence needs
 computing `server_frank` from a client-supplied `frank_aad` and this hub's own `hub_key` (an
 HMAC-style commitment scheme, per §5.4.1's description and its comparison to the Facebook franking
-design), plus the receiver-side verification the draft describes. This is real hub-side
-cryptography and key management, not a field the store needs to remember - a materially larger lift
-than the wire framing alone. Downstream: `reportAbuse` (DIV-8) cannot validate an attached
-`AbusiveMessage` (which requires recalculating its `Frank`) until this closes, so it currently
-refuses reports that attach one rather than accepting-but-not-verifying them.
+design), plus the receiver-side verification the draft describes. The implementation does not
+compute or verify `server_frank`; `SubmitMessageResponse` therefore omits `frank`, and `reportAbuse`
+rejects attached `AbusiveMessage` values rather than accepting them unverified.
 
 ## DIV-10 - the four room-admin endpoints are not wire-framed
 
@@ -127,9 +125,9 @@ against.
 `AppDataDictionary` shape: a run of `ComponentData { uint16 component_id; opaque data<V>; }`
 entries, sorted and unique by `component_id` (the draft's own MUST), wrapped in one outer
 length-prefixed window. `id_request_extensions`/`id_response_extensions` (§5.8) and
-`abuse_extensions` (§5.9, the same `AppDataDictionary` type) stay opaque length-prefixed blobs -
-this hub correctly skips over them on decode (the framing is byte-exact either way) without
-interpreting their contents, since nothing here produces or consumes those specific fields.
+`abuse_extensions` (§5.9, the same `AppDataDictionary` type) stay opaque length-prefixed blobs - the
+decoder consumes these fields without interpreting or retaining their contents, since nothing here
+produces or consumes those specific fields.
 `update`'s `RatchetTreeOption`/`GroupInfoOption` fields (§5.3) also stay opaque, for the same
 reason as the rest of `update`'s codec: no live accept-path exists yet.
 

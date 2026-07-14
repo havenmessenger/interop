@@ -16,7 +16,7 @@
 //! `identifierQuery`, `requestConsent`, `updateConsent`) also have a live `/mimi/pl/*` route
 //! speaking draft-ietf-mimi-protocol's TLS presentation-language (TLS-PL) wire framing directly,
 //! reading and writing the same underlying store as the JSON lane. A seventh, `reportAbuse`, has a
-//! wire route only (§5.9, DIV-8 bounded v1: metadata-only, no JSON-lane twin exists).
+//! wire route only (§5.9, DIV-8: metadata-only, no JSON-lane twin exists).
 //!
 //! Out of v1 scope (see DIVERGENCES.md at the repo root for the full list): §5.6
 //! GroupInfo/external-commit join (DIV-1), non-0x0001 suites (DIV-2, enforced by the gate),
@@ -535,15 +535,15 @@ impl Provider {
         }
     }
 
-    // ---- report abuse (§5.9, bounded v1 - DIV-8) ----
+    // ---- report abuse (§5.9, DIV-8) ----
 
     /// §5.9: persist a metadata-only abuse report. `alleged_abuser_uri` MUST parse as a MIMI user
     /// URI (fail-closed: a report naming a malformed or non-user target is rejected rather than
     /// recorded against garbage); `reporting_user` may be empty (the draft's "optionally" reporter
     /// identity - see `AbuseReport`'s own doc comment). The draft: "There is no response body. The
     /// response code only indicates if the abuse report was accepted, not if any specific automated
-    /// or human action was taken." - this hub takes no automated action; the report is a durable
-    /// record only (INV-MIMI-002: metadata, never message plaintext).
+    /// or human action was taken." The schema has no message-body field. The caller-supplied note
+    /// is stored verbatim, and no automated action is taken.
     pub fn process_report_abuse(
         &self,
         room_uri: &str,
@@ -620,9 +620,9 @@ impl Provider {
 
     // ---- P1-P6: room policy / RBAC (room-policy-04) ----
 
-    /// Set a room's policy (validated before storage). Hub-of-record gated. P1/P3 well-formedness is
-    /// checked by RoomPolicy::validate. The hub enforces ONLY canSendMessage at runtime (P5); the policy
-    /// is also the authoritative source for P4 role-change authorization checks (P6).
+    /// Set a room's policy (validated before storage). Hub-of-record gated. Rejects a malformed
+    /// policy before storage (`RoomPolicy::validate`). The hub enforces canSendMessage at runtime;
+    /// the policy is also the authoritative source for role-change authorization checks.
     pub fn set_room_policy(
         &self,
         room_uri: &str,

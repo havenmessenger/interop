@@ -1,9 +1,7 @@
-//! mimi-content - a tiny CLI that wraps the REAL mimi-core content-09 codec for the interop CLI.
+//! mimi-content - a tiny CLI that wraps the mimi-core content-09 codec.
 //!
-//! A caller can shell out to this so the content-09 CBOR frame it shows a researcher is
-//! produced by the EXACT same KAT-proven codec as `mimi-core::content` (canonical bytes a researcher can
-//! diff against the spec) - NOT a separate reimplementation, and without linking mimi-core into
-//! any other binary.
+//! This CLI encodes and decodes content-09 frames using `mimi_core::content` - not a separate
+//! reimplementation - without linking mimi-core into any other binary.
 //!
 //!   mimi-content encode   stdin = plaintext UTF-8        → stdout = deterministic content-09 CBOR
 //!   mimi-content decode   stdin = content-09 CBOR        → stdout = the plaintext UTF-8

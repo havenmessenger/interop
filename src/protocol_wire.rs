@@ -2127,18 +2127,17 @@ impl IdentifierResponse {
 pub type AbuseType = u8;
 pub const ABUSE_TYPE_RESERVED: AbuseType = 0;
 
-/// §5.9 `AbuseReport`, the bounded v1 case (DIV-8): `AbusiveMessage messages<V>` (each element
-/// requiring a real `Frank` this hub cannot yet verify - DIV-9) MUST be empty; a report attaching
-/// one is a decode ERROR, not a silently accepted/dropped entry (fail-closed honesty: we cannot
-/// validate what we don't yet build, per the draft's own "the hub finds... to recalculate the
-/// franking_tag" validation description). `abuse_extensions` (`AppDataDictionary`) is carried
-/// opaque - the same choice `id_request_extensions`/`id_response_extensions` make elsewhere in this
-/// module - nothing in this codebase produces or consumes report-extension data.
+/// §5.9 `AbuseReport`, the metadata-only case (DIV-8): `AbusiveMessage messages<V>` (each element
+/// requiring a real `Frank` this hub does not verify - DIV-9) MUST be empty. Decoding rejects a
+/// non-empty `messages<V>`, per the draft's own "the hub finds... to recalculate the franking_tag"
+/// validation description. `abuse_extensions` (`AppDataDictionary`) is carried opaque - the same
+/// choice `id_request_extensions`/`id_response_extensions` make elsewhere in this module - nothing
+/// in this codebase produces or consumes report-extension data.
 ///
 /// `reportingUser` is `IdentifierUri reportingUser;` (not `optional<IdentifierUri>`) in the struct,
-/// even though the prose says it "optionally contains the identity" of the reporter - read as: an
-/// empty-string `IdentifierUri` means "not provided", the same not-optional-wrapped-but-
-/// conceptually-optional convention `KeyMaterialRequest.room_id` already uses in this module.
+/// even though the prose says it "optionally contains the identity" of the reporter. The wire field
+/// is not optional. This implementation accepts an empty IdentifierUri to represent an unspecified
+/// reporter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbuseReport {
     pub reporting_user: IdentifierUri,
@@ -2162,7 +2161,7 @@ impl AbuseReport {
         VLBytes::new(self.note.clone().into_bytes())
             .tls_serialize(&mut out)
             .map_err(|e| codec_err("note", e))?;
-        VLBytes::new(Vec::new()) // messages<V>: always empty (DIV-8 bounded v1)
+        VLBytes::new(Vec::new()) // messages<V>: always empty (DIV-8, metadata-only)
             .tls_serialize(&mut out)
             .map_err(|e| codec_err("messages", e))?;
         VLBytes::new(Vec::new()) // abuse_extensions: opaque, always empty
@@ -2201,9 +2200,7 @@ impl AbuseReport {
         if !messages_blob.as_slice().is_empty() {
             return Err(WireError::Codec {
                 what: "messages",
-                detail: "AbusiveMessage entries are not yet decodable (DIV-9: Frank verification \
-                         not built) - a report attaching one is refused, not silently dropped"
-                    .into(),
+                detail: "non-empty messages require Frank verification".into(),
             });
         }
         let (ext_bounded, rest) =
@@ -4029,11 +4026,8 @@ mod tests {
         assert_eq!(tohex(&encoded), "01000000");
     }
 
-    /// The byte-exactness fix this test exists to prove: `uri<V>` is a VECTOR of `IdentifierUri`
-    /// (each self-delimiting), not a single scalar. A one-match response therefore carries TWO
-    /// nested length prefixes for that one element - the outer vector window, then the element's
-    /// own `opaque uri<V>` prefix - not one. Hand-computed KAT, not just a round-trip, so a
-    /// regression back to the single-length-prefix shape fails even if encode/decode drift together.
+    /// A one-element uri<V> contains an outer vector length and the element's IdentifierUri length.
+    /// This known-answer test checks both prefixes independently of decode.
     #[test]
     fn identifier_response_encode_kat_success_single_match() {
         let r = IdentifierResponse {
@@ -4084,7 +4078,7 @@ mod tests {
         }
     }
 
-    // ---- AbuseReport (§5.9, DIV-8 bounded v1) ----
+    // ---- AbuseReport (§5.9, DIV-8) ----
 
     #[test]
     fn abuse_report_round_trips() {

@@ -333,8 +333,8 @@ fn mimi_content_to_value(c: &MimiContent) -> Result<Value, ContentError> {
     ]))
 }
 
-/// Encode `MimiContent` to content-09 §4.1 **wire-conformant** deterministic CBOR (7-element array,
-/// integer enums, flat NestedPart, null for absent fields). This is the function the wire lane uses.
+/// Encode `MimiContent` to content-09 §4.1 deterministic CBOR (7-element array, integer enums, flat
+/// NestedPart, null for absent fields). This is the function the wire lane uses.
 ///
 /// Defensive on the way out, not just the way in: enforces §6.3/§4.4 nesting (`validate_nesting`) and
 /// §4.2.1 extension ordering (`sorted_extensions`) itself rather than trusting the caller already did -
