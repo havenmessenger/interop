@@ -117,15 +117,14 @@ management RPCs, reachable only on the JSON compat lane. They are not among prot
 ten named endpoints; the draft expresses the same operations as AppSync proposals inside an
 `update` transaction (§4.3.2). `update` itself has no live accept path.
 
-Closing this divergence needs the hub to process a real MLS Commit carrying a
-`mimiParticipantList`/`mimiRoomPolicy` custom proposal. Reading a Commit's proposal list through
-openmls requires a `PublicGroup` (the library's external-observer group representation, built
-without member private key material) constructed from a room's `GroupInfo` and ratchet tree, then
-advanced via its own Commit-processing and merge functions. The hub has no route today by which it
-learns a room's `GroupInfo` in the first place: the draft's `groupInfo` endpoint (§5.6) exists for
-external-commit join, which this hub does not support (DIV-1), so it cannot be reused as-is for
-this purpose. A bootstrap mechanism for the hub to learn a room's initial group state is an
-open design question, not an implementation detail.
+Closing this divergence needs the hub to read a `mimiParticipantList`/`mimiRoomPolicy` custom
+proposal out of a real MLS Commit. RFC 9420's own trust model does not expect a delivery service to
+verify a Commit's signature or hold group state - that is the receiving member's responsibility.
+Commits on this hub's groups travel as `PublicMessage` (plaintext-framed, not encrypted), so the
+proposal bytes are visible on the wire without any group-state machinery; what's missing is a codec
+for the relevant slice of RFC 9420's `PublicMessage`/`FramedContent`/`Commit`/`Proposal` structure,
+independent of openmls's own Rust types (whose `Commit` type is private to that crate). This is a
+bounded wire-parsing task, not an open architecture question.
 
 ## DIV-11 - CLOSED for `consent_extensions`; `update`'s fields stay opaque
 
