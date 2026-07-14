@@ -115,9 +115,17 @@ rejects attached `AbusiveMessage` values rather than accepting them unverified.
 `roomPolicy`, `memberRole`, `addParticipant`, and `authorizeSender` are Haven's own RBAC
 management RPCs, reachable only on the JSON compat lane. They are not among protocol-06 §5's
 ten named endpoints; the draft expresses the same operations as AppSync proposals inside an
-`update` transaction (§4.3.2). `update` itself has no live accept path (nothing processes a
-real MLS Commit or Proposal yet), so there is no spec wire form to frame the admin four
-against.
+`update` transaction (§4.3.2). `update` itself has no live accept path.
+
+Closing this divergence needs the hub to process a real MLS Commit carrying a
+`mimiParticipantList`/`mimiRoomPolicy` custom proposal. Reading a Commit's proposal list through
+openmls requires a `PublicGroup` (the library's external-observer group representation, built
+without member private key material) constructed from a room's `GroupInfo` and ratchet tree, then
+advanced via its own Commit-processing and merge functions. The hub has no route today by which it
+learns a room's `GroupInfo` in the first place: the draft's `groupInfo` endpoint (§5.6) exists for
+external-commit join, which this hub does not support (DIV-1), so it cannot be reused as-is for
+this purpose. A bootstrap mechanism for the hub to learn a room's initial group state is an
+open design question, not an implementation detail.
 
 ## DIV-11 - CLOSED for `consent_extensions`; `update`'s fields stay opaque
 
