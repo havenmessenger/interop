@@ -65,18 +65,33 @@ is independent of the wire protocol surface.
 
 ## DIV-6 - client-asserted identity is not bound to an authenticated channel
 
-`keyMaterial`'s wire route now enforces the real consent gate (`serve_key_material_gated`) -
-serving a KeyPackage requires an actual grant, not just a well-formed request. What it, and
-every other wire (and JSON) endpoint, still cannot do: verify that the `requestingUser`/
-`sendingUri`/`requesterUri` a request claims is who actually sent it. This reference hub
-authenticates the TRANSPORT PEER via mTLS (an allowlisted certificate), never the individual
-end-user identity inside the request body - there is no mTLS-derived-identity-to-MIMI-URI
-binding anywhere in this codebase. Within the trusted peer set, any caller can assert any
-sender/requester URI its messages claim. Building that binding is a materially larger lift
-(a peer-identity-to-URI trust model, not a framing change) than the other items here; it
-remains open. `keyMaterial`'s negotiation fields (ciphersuite, capability, signature) are also
-decoded but not enforced - the JSON compat lane doesn't enforce them either, so this is not
-wire-lane-specific.
+This reference hub authenticates the TRANSPORT PEER via mTLS (an allowlisted certificate), never
+the individual end-user identity inside a request body. The three wire routes that carry a claimed
+identity have different answers, not one shared gap:
+
+- **`submitMessage`**: `sendingUri` is unverified by this hub, and that is not a gap. RFC 9420's own
+  delivery-service trust model does not expect the DS to verify a message's signature or hold group
+  state - that is the receiving member's responsibility, checked against the sender's leaf
+  credential inside the actual MLS group. This hub relaying an unverified `sendingUri` claim matches
+  the spec's own DS posture rather than diverging from it.
+- **`keyMaterial`**: unlike `submitMessage`, the draft's own `KeyMaterialRequest` (§5.2) carries a
+  self-signed identity claim (`requesterSignatureKey`/`requesterCredential`/
+  `keyMaterialRequestSignature`) - a real mechanism, not an invented one. This hub checks the
+  credential's embedded identity against the claimed `requestingUser` and logs the outcome, but
+  never refuses a request over a mismatch, and does not verify the signature itself (the exact
+  signed-content scope isn't confirmed against primary source, and this check is diagnostic only -
+  nothing gates on it). **This is a deliberate testing-phase choice, not a settled production
+  security posture.** A self-signed credential has no external trust root without a persistent
+  identity registry, and this hub's `KeyPackage` store is a one-time-claim object for the add flow,
+  not one - there is nothing durable here to pin a claimed identity's genuine key against.
+  Requiring a match before serving would functionally refuse any identity this hub has not already
+  interacted with, defeating the point of testing interop with new peers. A production/GA
+  federation policy (rate-limiting repeated unverified claims, or a real persistent identity-key
+  registry) should be revisited before general availability.
+- **`consent`**: `ConsentEntry` (§5.7) carries no signature field at all in the draft - no
+  self-signed mechanism exists here for this hub to check even if it wanted to. This may be a
+  genuine gap in the draft itself rather than an implementation gap; worth raising with the WG
+  rather than inventing a Haven-only signing convention unilaterally.
 
 ## DIV-7 - the directory document - CLOSED
 

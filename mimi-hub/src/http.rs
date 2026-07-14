@@ -135,7 +135,9 @@ async fn key_material(State(p): State<SharedProvider>, Query(q): Query<UserQuery
 /// DISCLOSURE (see DIVERGENCES.md): `requesting_user` here is CLIENT-ASSERTED from the
 /// request body, not derived from an authenticated channel (mTLS peer identity) - this reference
 /// hub has no such binding anywhere yet. The consent gate is real, but nothing stops a client from
-/// asserting someone else's URI as `requesting_user`.
+/// asserting someone else's URI as `requesting_user`. [`log_key_material_identity_claim`] checks
+/// the request's self-signed credential against that claim and logs the outcome; this is
+/// diagnostic only and never changes the response, per DIVERGENCES.md's testing-phase note.
 async fn key_material_wire(
     State(p): State<SharedProvider>,
     Path(target_user): Path<String>,
@@ -149,6 +151,7 @@ async fn key_material_wire(
         Ok(r) => r,
         Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     };
+    log_key_material_identity_claim(&req.requesting_user.0, req.requester_credential_identity());
     let now = now_unix();
     let room_uri = (!req.room_id.0.is_empty()).then_some(req.room_id.0.as_str());
     let gated = lock(&p).serve_key_material_gated(
@@ -189,6 +192,28 @@ async fn key_material_wire(
         Ok(bytes) => (StatusCode::OK, bytes).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+/// Checks a `KeyMaterialRequest`'s self-signed `requesterCredential` against the `requestingUser`
+/// URI it claims, logs the outcome, and returns whether it matched. Diagnostic only: this hub has
+/// no persistent registry to pin a URI's genuine signing key against (see DIVERGENCES.md's
+/// testing-phase note on this), so a mismatch is logged, never refused - the return value is not
+/// used to gate anything, only tested directly.
+fn log_key_material_identity_claim(
+    requesting_user: &str,
+    requester_credential_identity: &[u8],
+) -> bool {
+    let matches = requester_credential_identity == requesting_user.as_bytes();
+    if matches {
+        eprintln!(
+            "[mimi-hub] keyMaterial: requesterCredential matches requestingUser={requesting_user}"
+        );
+    } else {
+        eprintln!(
+            "[mimi-hub] keyMaterial: requesterCredential does NOT match requestingUser={requesting_user} (unverified first-contact claim, accepted per testing-phase policy)"
+        );
+    }
+    matches
 }
 
 /// Optional routing key on the ingest/delivery endpoints. With `?user=` the KeyPackage is PUBLISHED
@@ -595,6 +620,22 @@ mod tests {
             Provider::in_memory("havenmessenger.com").unwrap(),
         ));
         (build_router(p.clone()), p)
+    }
+
+    #[test]
+    fn key_material_identity_claim_matches_when_credential_equals_requesting_user() {
+        assert!(log_key_material_identity_claim(
+            "mimi://a.example/u/alice",
+            b"mimi://a.example/u/alice"
+        ));
+    }
+
+    #[test]
+    fn key_material_identity_claim_does_not_match_a_different_credential() {
+        assert!(!log_key_material_identity_claim(
+            "mimi://a.example/u/alice",
+            b"mimi://b.example/u/mallory"
+        ));
     }
 
     /// Minimal percent-encoding for embedding a `mimi://` URI (which contains reserved `:`/`/`

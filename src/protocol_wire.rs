@@ -806,6 +806,13 @@ pub struct KeyMaterialRequest {
 }
 
 impl KeyMaterialRequest {
+    /// `requester_credential`'s embedded identity bytes, per Haven's `BasicCredential::new(uri
+    /// bytes)` convention - lets a caller compare a self-signed request's claimed identity against
+    /// its `requesting_user` without needing openmls's `Credential` type in scope itself.
+    pub fn requester_credential_identity(&self) -> &[u8] {
+        self.requester_credential.serialized_content()
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
         let (&protocol, rest) = bytes
             .split_first()
