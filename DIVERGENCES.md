@@ -125,35 +125,43 @@ design), plus the receiver-side verification the draft describes. The implementa
 compute or verify `server_frank`; `SubmitMessageResponse` therefore omits `frank`, and `reportAbuse`
 rejects attached `AbusiveMessage` values rather than accepting them unverified.
 
-## DIV-10 - the four room-admin endpoints are not wire-framed
+## DIV-10 - CLOSED for a Commit carrying a single custom proposal; `roomPolicy`/`memberRole`/`addParticipant`/`authorizeSender` still have no wire route of their own
 
-`roomPolicy`, `memberRole`, `addParticipant`, and `authorizeSender` are Haven's own RBAC
-management RPCs, reachable only on the JSON compat lane. They are not among protocol-06 §5's
-ten named endpoints; the draft expresses the same operations as AppSync proposals inside an
-`update` transaction (§4.3.2). `update` itself has no live accept path.
+**This entry has been rewritten twice already this session as the real picture came into focus -
+each rewrite is kept below rather than silently replaced, per this file's own discipline of
+recording what changed and why.** The short version: the wire-parsing step some earlier language
+here called blocked on group-state machinery was not blocked on that at all; it is done, and it is
+now wired end to end for both Haven custom proposal types.
 
-**Update (reverses the note this entry carried a short time earlier, which said the wire-parsing
-step was still open pending a design question): the parsing step is done.**
-`mimi_core::commit_wire::decode_single_custom_proposal_commit` reads a `mimiParticipantList`/
-`mimiRoomPolicy` custom proposal out of a real, `PublicMessage`-wrapped MLS Commit. RFC 9420's own
-trust model does not expect a delivery service to verify a Commit's signature or hold group state -
-that is the receiving member's responsibility - and Commits on this hub's groups already travel as
-`PublicMessage` (plaintext-framed), so the proposal bytes are visible on the wire without any
-group-state machinery. The decoder is independent of openmls's own Rust types (whose `Commit` type
-is private to that crate), matching how every other MIMI-specific structure in this codebase is
-hand-coded rather than borrowed from a library's internals. Verified against both a captured real
-`openmls` Commit and freshly re-encoded ones each test run, plus a rejection case for an ordinary
-(non-custom) proposal.
+`POST /mimi/pl/update/{roomId}` (§4.3.2) takes a real, `PublicMessage`-wrapped MLS Commit carrying
+exactly one custom proposal. `mimi_core::commit_wire::decode_single_custom_proposal_commit` reads
+the proposal's type and payload - independent of openmls's own (crate-private) `Commit` type,
+hand-coded the same way every other MIMI-specific structure in this codebase is - without verifying
+the Commit's signature or holding any group state, matching RFC 9420's own delivery-service trust
+model (the DS is not expected to do either; that is the receiving member's job). Commits on this
+hub's groups already travel as `PublicMessage`, so the proposal bytes are visible on the wire
+without needing that machinery in the first place.
 
-Two things remain open, not closed by the above:
-- The decoder only accepts a Commit whose proposal list holds exactly one entry, carried by value.
-  A Commit that mixes the custom proposal with a standard MLS proposal (Add, Remove, ...) in the
-  same list is rejected: skipping past a standard proposal's own body (an `Add`, for instance,
-  embeds a full KeyPackage) needs that proposal's own decoder, which is out of scope here. A sender
-  that wants this hub to read the change sends it as its own Commit.
-- Nothing calls this decoder yet. There is no `update` HTTP route, and no code applies a decoded
-  proposal to the `participant_list`/`room_policy` store - the four room-admin endpoints remain
-  JSON-compat-lane only until that wiring lands.
+- A `mimiParticipantList` proposal's payload is applied to this room's `room_participants`/
+  `member_role` tables. **Caveat**: indices in the payload resolve against this hub's own
+  canonical participant ordering (alphabetical by URI, the same order `list_participants` already
+  returns everywhere else this hub needs one) - a peer that computed those indices against a
+  different ordering convention will not apply correctly. This reference hub does not attempt to
+  reconcile a foreign ordering convention.
+- A `mimiRoomPolicy` proposal's payload is the JSON-serialized `RoomPolicy` this hub already stores
+  for the JSON-compat `roomPolicy` route - a whole-object replace, validated the same way
+  (`RoomPolicy::validate`) before it is stored.
+- A Commit that mixes the custom proposal with a standard MLS proposal (Add, Remove, ...) in the
+  same list is refused, not decoded: skipping past a standard proposal's own body (an `Add`, for
+  instance, embeds a full KeyPackage) needs that proposal's own decoder, which is out of scope. A
+  sender that wants this hub to read the change sends it as its own Commit.
+- The four room-admin RPCs (`roomPolicy`/`memberRole`/`addParticipant`/`authorizeSender`) remain
+  JSON-compat-lane only - `update` is the wire-lane mechanism for the two operations it actually
+  carries (roster and policy changes); it is not a wire-framing of those four RPCs themselves.
+
+Verified against a captured real `openmls` Commit, freshly re-encoded ones each test run, an
+end-to-end participant-list apply, an end-to-end room-policy apply, and rejection cases for an
+unrecognized proposal type and an undecodable body.
 
 ## DIV-11 - CLOSED for `consent_extensions`; `update`'s fields stay opaque
 

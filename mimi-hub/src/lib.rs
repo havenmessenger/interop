@@ -26,6 +26,7 @@ pub mod http;
 pub mod store;
 pub mod tls;
 
+use mimi_core::commit_wire::decode_single_custom_proposal_commit;
 use mimi_core::consent::{
     validate_consent_entry, ConsentEntry, ConsentOperation, KeyPackageAccess,
 };
@@ -33,7 +34,11 @@ use mimi_core::gate::{
     identifier_query, keypackage_ref, mimi_gate_keypackage, mimi_gate_welcome,
     IdentifierQueryResult, HAVEN_MLS_CIPHERSUITE_U16,
 };
-use mimi_core::room_policy::RoomPolicy;
+use mimi_core::participant_list::{
+    apply_update, decode_participant_list_update, ParticipantListData, ParticipantListUpdate,
+    UserRolePair, MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE,
+};
+use mimi_core::room_policy::{RoomPolicy, MIMI_ROOM_POLICY_PROPOSAL_TYPE};
 use mimi_core::uri::{MimiKind, MimiUri};
 
 /// Upper bound on a member/room URI we will store (anti-DoS on the routing key; a real mimi:// URI is
@@ -123,11 +128,11 @@ impl Provider {
     ///
     /// protocol-06 §5.1's own example is a FLAT object: top-level keys are the ten endpoint names,
     /// values are absolute HTTPS URLs (e.g. `"keyMaterial": "https://mimi.example.com/v1/keyMaterial/
-    /// {targetUser}"`). This document publishes those flat, draft-shaped keys for the seven endpoints
-    /// this hub actually wire-routes (`keyMaterial`/`submitMessage`/`notify`/`identifierQuery`/
-    /// `requestConsent`/`updateConsent`/`reportAbuse`) - the other three draft keys (`update`/
-    /// `groupInfo`/`proxyDownload`) are omitted since nothing here serves them, per the same
-    /// "advertise only what's served" discipline as `unsupported` below. `endpoints` (relative paths,
+    /// {targetUser}"`). This document publishes those flat, draft-shaped keys for the eight
+    /// endpoints this hub actually wire-routes (`keyMaterial`/`submitMessage`/`notify`/
+    /// `identifierQuery`/`requestConsent`/`updateConsent`/`reportAbuse`/`update`) - the other two
+    /// draft keys (`groupInfo`/`proxyDownload`) are omitted since nothing here serves them, per the
+    /// same "advertise only what's served" discipline as `unsupported` below. `endpoints` (relative paths,
     /// JSON compat lane) and `wireEndpoints` (relative paths, mirrors the flat keys) are additive
     /// non-standard keys kept for existing consumers - a strict §5.1 client ignores unknown keys.
     pub fn directory(&self) -> serde_json::Value {
@@ -152,13 +157,14 @@ impl Provider {
                 "identifierQuery": "/mimi/pl/identifierQuery",
                 "requestConsent": "/mimi/pl/requestConsent/{targetDomain}",
                 "updateConsent": "/mimi/pl/updateConsent/{requesterDomain}",
-                "reportAbuse": "/mimi/pl/reportAbuse/{roomId}"
+                "reportAbuse": "/mimi/pl/reportAbuse/{roomId}",
+                "update": "/mimi/pl/update/{roomId}"
             },
             "unsupported": {
                 "groupInfo_external_commit_join": "DIV-1: add-driven join only (ETK security)",
                 "assets_ohttp": "DIV-3: v1 is messaging-only",
                 "non_0x0001_ciphersuites": "DIV-2: rejected at ingest",
-                "update_wire_endpoint": "codec built, no live accept-path (no Provider method processes a real MLS Commit/Proposal yet); JSON room-admin RPCs cover the policy outcome",
+                "update_wire_endpoint_mixed_commits": "DIV-10: a Commit combining a custom proposal with a standard MLS proposal (Add, Remove, ...) in the same proposal list is refused - only a Commit whose list holds exactly one custom proposal is applied",
                 "reportAbuse_with_abusive_messages": "DIV-9: a report attaching an AbusiveMessage is refused (its Frank cannot yet be verified) - metadata-only reports are accepted"
             }
         });
@@ -171,6 +177,7 @@ impl Provider {
             ("requestConsent", "/mimi/pl/requestConsent/{targetDomain}"),
             ("updateConsent", "/mimi/pl/updateConsent/{requesterDomain}"),
             ("reportAbuse", "/mimi/pl/reportAbuse/{roomId}"),
+            ("update", "/mimi/pl/update/{roomId}"),
         ] {
             doc[key] = serde_json::Value::String(format!("https://{domain}{path}"));
         }
@@ -674,6 +681,80 @@ impl Provider {
             .ok_or_else(|| anyhow::anyhow!("actor {actor_uri} has no role in {room_uri}"))?;
         Ok(policy.authorize_role_change(actor_role, from_role, to_role)?)
     }
+
+    // ---- DIV-10: applying a mimiParticipantList/mimiRoomPolicy custom proposal from a real Commit ----
+
+    /// Decode a `PublicMessage`-wrapped Commit (`mimi_core::commit_wire`) and apply its single
+    /// custom proposal to this room's stored state. Dispatches on `proposal_type`; a value that
+    /// matches neither registered Haven proposal type is refused. Hub-of-record gated (via the
+    /// individual `add_participant`/`remove_participant`/`set_member_role`/`set_room_policy` calls
+    /// this delegates to, each of which already enforces it).
+    pub fn apply_update_commit(
+        &self,
+        room_uri: &str,
+        commit_bytes: &[u8],
+        now_unix: u64,
+    ) -> anyhow::Result<()> {
+        let decoded = decode_single_custom_proposal_commit(commit_bytes)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        match decoded.proposal_type {
+            MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE => {
+                let update = decode_participant_list_update(&decoded.payload)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                self.apply_participant_list_update(room_uri, &update, now_unix)
+            }
+            MIMI_ROOM_POLICY_PROPOSAL_TYPE => {
+                let policy: RoomPolicy = serde_json::from_slice(&decoded.payload)
+                    .map_err(|e| anyhow::anyhow!("malformed RoomPolicy payload: {e}"))?;
+                self.set_room_policy(room_uri, &policy, now_unix)
+            }
+            other => anyhow::bail!("unrecognized custom proposal_type {other:#06x}"),
+        }
+    }
+
+    /// Enact a `ParticipantListUpdate` against this room's `room_participants`/`member_role`
+    /// tables. Indices in `update` resolve against [`Self::list_participants`]'s own ordering
+    /// (alphabetical by URI) - the same canonical order this hub uses everywhere else it needs a
+    /// stable participant ordering. A peer whose index computation used a different ordering
+    /// convention will not apply correctly; this reference hub does not attempt to reconcile that
+    /// (see DIVERGENCES.md).
+    fn apply_participant_list_update(
+        &self,
+        room_uri: &str,
+        update: &ParticipantListUpdate,
+        now_unix: u64,
+    ) -> anyhow::Result<()> {
+        self.assert_hub_of_record(room_uri)?;
+        let rows = self.store.list_participants(room_uri)?;
+        // apply_update needs only a length + index-bounds check here (this method resolves the
+        // actual mutations from `update` directly against `rows`, not against apply_update's own
+        // returned list) - reusing it keeps the bounds-checking logic in one place rather than
+        // duplicating `validate_participant_list_update` plus a manual length check.
+        let current = ParticipantListData {
+            participants: rows
+                .iter()
+                .map(|(uri, _authority)| UserRolePair {
+                    user_uri: uri.clone(),
+                    role_index: 0, // placeholder: only positions are read below, never this value
+                })
+                .collect(),
+        };
+        apply_update(&current, update).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        for c in &update.changed_role_participants {
+            let uri = &current.participants[c.user_index as usize].user_uri;
+            self.set_member_role(room_uri, uri, c.role_index)?;
+        }
+        for &idx in &update.removed_indices {
+            let uri = &current.participants[idx as usize].user_uri;
+            self.remove_participant(room_uri, uri)?;
+        }
+        for a in &update.added_participants {
+            self.add_participant(room_uri, &a.user_uri, now_unix)?;
+            self.set_member_role(room_uri, &a.user_uri, a.role_index)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1112,12 +1193,12 @@ mod tests {
             "/mimi/pl/updateConsent/{requesterDomain}"
         );
         assert_eq!(wire["reportAbuse"], "/mimi/pl/reportAbuse/{roomId}");
-        // update/groupInfo/download and the 4 admin endpoints have no wire route yet: the
+        assert_eq!(wire["update"], "/mimi/pl/update/{roomId}");
+        // groupInfo/download and the 4 admin endpoints have no wire route yet: the
         // directory must not claim one exists.
-        assert!(wire.get("update").is_none());
         assert!(wire.get("groupInfo").is_none());
         assert!(wire.get("roomPolicy").is_none());
-        assert!(dir["unsupported"]["update_wire_endpoint"].is_string());
+        assert!(dir["unsupported"]["update_wire_endpoint_mixed_commits"].is_string());
         assert!(dir["unsupported"]["reportAbuse_with_abusive_messages"].is_string());
     }
 
@@ -1153,9 +1234,12 @@ mod tests {
             dir["reportAbuse"],
             "https://havenmessenger.com/mimi/pl/reportAbuse/{roomId}"
         );
-        // the three draft keys nothing here serves must NOT appear at the top level - advertise
+        assert_eq!(
+            dir["update"],
+            "https://havenmessenger.com/mimi/pl/update/{roomId}"
+        );
+        // the two draft keys nothing here serves must NOT appear at the top level - advertise
         // only what's actually wire-routed.
-        assert!(dir.get("update").is_none());
         assert!(dir.get("groupInfo").is_none());
         assert!(dir.get("proxyDownload").is_none());
     }

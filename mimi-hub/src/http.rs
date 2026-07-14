@@ -25,11 +25,9 @@
 //!   POST /mimi/pl/notify                            (§5.5, inbound-receive only, FanoutMessage)
 //!   POST /mimi/pl/identifierQuery                   (§5.8, DIV-4 no-body-oracle preserved)
 //!   POST /mimi/pl/reportAbuse/:room_id              (§5.9, DIV-8 metadata-only - no AbusiveMessage)
-//! `update` (§5.3) has a codec (`mimi_core::protocol_wire::HandshakeBundle`) but no route: this
-//! reference hub has no Provider method that processes a real MLS Commit/Proposal, so wiring one
-//! would mean writing new protocol logic, not framing (see the codec's own module doc). `groupInfo`
-//! (§5.6, DIV-1's external-commit join) and the four room-admin endpoints' wire framing are not
-//! built yet. Most wire-route path segments still play the same opaque routing-key role the JSON
+//!   POST /mimi/pl/update/:room_id                   (§4.3.2, DIV-10 - single custom proposal only)
+//! `groupInfo` (§5.6, DIV-1's external-commit join) is not built. Most wire-route path segments
+//! still play the same opaque routing-key role the JSON
 //! lane's query params already play (framing change, not a routing-model change); `submitMessage`
 //! is the one exception - its path segment is the room the message targets, sender-authorized
 //! (M2/R3/P5) and fanned out to every LOCAL room participant (M3), not just stored under one
@@ -90,6 +88,7 @@ pub fn build_router(provider: SharedProvider) -> Router {
         .route("/mimi/pl/notify", post(notify_wire))
         .route("/mimi/pl/identifierQuery", post(identifier_query_wire))
         .route("/mimi/pl/reportAbuse/:room_id", post(report_abuse_wire))
+        .route("/mimi/pl/update/:room_id", post(update_wire))
         .with_state(provider)
 }
 
@@ -434,6 +433,24 @@ async fn report_abuse_wire(
     };
     match lock(&p).process_report_abuse(&room_id, &report, now_unix()) {
         Ok(()) => StatusCode::CREATED,
+        Err(_) => StatusCode::BAD_REQUEST,
+    }
+}
+
+/// `update` (§4.3.2, DIV-10). `room_id` is the path segment (the room the Commit updates), an
+/// opaque routing key like every other wire route except `submitMessage`. The body is a real
+/// `PublicMessage`-wrapped MLS Commit carrying exactly one `mimiParticipantList`/`mimiRoomPolicy`
+/// custom proposal (see `mimi_core::commit_wire` for the bounded scope this decodes - no signature
+/// or group-state verification, matching RFC 9420's own delivery-service trust model). Anything
+/// else this hub cannot or does not support (a `PrivateMessage`, a mixed commit, an unrecognized
+/// proposal type, a by-reference proposal) is a 400, not a silently-swallowed success.
+async fn update_wire(
+    State(p): State<SharedProvider>,
+    Path(room_id): Path<String>,
+    body: Bytes,
+) -> StatusCode {
+    match lock(&p).apply_update_commit(&room_id, &body, now_unix()) {
+        Ok(()) => StatusCode::OK,
         Err(_) => StatusCode::BAD_REQUEST,
     }
 }
@@ -1444,6 +1461,210 @@ mod tests {
             .build(suite, &provider, &signer, cwk)
             .unwrap();
         kpb.key_package().tls_serialize_detached().unwrap()
+    }
+
+    /// Build a single-member group and commit exactly one custom proposal (`proposal_type` +
+    /// `payload`), returning the real `PublicMessage`-wrapped Commit bytes - the same construction
+    /// `commit_wire`'s own tests use, reused here to exercise the route end to end.
+    fn real_single_custom_proposal_commit(proposal_type: u16, payload: Vec<u8>) -> Vec<u8> {
+        use mimi_core::participant_list::MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE;
+        use mimi_core::room_policy::MIMI_ROOM_POLICY_PROPOSAL_TYPE;
+        use openmls::ciphersuite::signature::SignaturePublicKey;
+        use openmls::credentials::{BasicCredential, CredentialWithKey};
+        use openmls::group::MIXED_PLAINTEXT_WIRE_FORMAT_POLICY;
+        use openmls::prelude::*;
+        use openmls_rust_crypto::OpenMlsRustCrypto;
+        use openmls_traits::signatures::{Signer, SignerError};
+        use openmls_traits::OpenMlsProvider;
+        use tls_codec::Serialize as _;
+
+        const AES: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
+
+        struct S {
+            key: Vec<u8>,
+            scheme: SignatureScheme,
+        }
+        impl Signer for S {
+            fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SignerError> {
+                OpenMlsRustCrypto::default()
+                    .crypto()
+                    .sign(self.scheme, payload, &self.key)
+                    .map_err(|_| SignerError::SigningError)
+            }
+            fn signature_scheme(&self) -> SignatureScheme {
+                self.scheme
+            }
+        }
+
+        let provider = OpenMlsRustCrypto::default();
+        let scheme = SignatureScheme::ED25519;
+        let (priv_b, pub_b) = provider.crypto().signature_key_gen(scheme).unwrap();
+        let pk = SignaturePublicKey::try_from(pub_b).unwrap();
+        let cwk = CredentialWithKey {
+            credential: BasicCredential::new(b"alice".to_vec()).into(),
+            signature_key: pk,
+        };
+        let sig = S {
+            key: priv_b,
+            scheme,
+        };
+        let caps = Capabilities::new(
+            None,
+            Some(&[AES]),
+            None,
+            Some(&[
+                ProposalType::Custom(MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE),
+                ProposalType::Custom(MIMI_ROOM_POLICY_PROPOSAL_TYPE),
+                // 0xF7FF: an arbitrary type NEITHER of Haven's registered ones, negotiated here
+                // only so `update_wire_rejects_an_unrecognized_proposal_type` can exercise this
+                // hub's OWN rejection of it, rather than openmls's group-level capability check
+                // refusing to build the commit at all.
+                ProposalType::Custom(0xF7FF),
+            ]),
+            None,
+        );
+        let cfg = MlsGroupCreateConfig::builder()
+            .capabilities(caps)
+            .ciphersuite(AES)
+            .use_ratchet_tree_extension(true)
+            .wire_format_policy(MIXED_PLAINTEXT_WIRE_FORMAT_POLICY)
+            .build();
+        let mut alice = MlsGroup::new(&provider, &sig, &cfg, cwk).unwrap();
+        let custom = CustomProposal::new(proposal_type, payload);
+        alice
+            .propose_custom_proposal_by_value(&provider, &sig, custom)
+            .unwrap();
+        let (commit, _w, _gi) = alice.commit_to_pending_proposals(&provider, &sig).unwrap();
+        commit.tls_serialize_detached().unwrap()
+    }
+
+    #[tokio::test]
+    async fn update_wire_applies_a_participant_list_commit() {
+        use mimi_core::participant_list::{
+            encode_participant_list_update, ParticipantListUpdate, UserRolePair,
+            MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE,
+        };
+
+        let (router, p) = app();
+        let room = "mimi://havenmessenger.com/r/x";
+        p.lock()
+            .unwrap()
+            .add_participant(room, "mimi://havenmessenger.com/u/alice", 1)
+            .unwrap();
+        p.lock()
+            .unwrap()
+            .add_participant(room, "mimi://havenmessenger.com/u/bob", 1)
+            .unwrap();
+
+        let update = ParticipantListUpdate {
+            added_participants: vec![UserRolePair {
+                user_uri: "mimi://havenmessenger.com/u/carol".into(),
+                role_index: 2,
+            }],
+            ..Default::default()
+        };
+        let payload = encode_participant_list_update(&update).unwrap();
+        let commit_bytes =
+            real_single_custom_proposal_commit(MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE, payload);
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mimi/pl/update/mimi%3A%2F%2Fhavenmessenger.com%2Fr%2Fx")
+                    .body(Body::from(commit_bytes))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let participants = p.lock().unwrap().list_participants(room).unwrap();
+        assert!(
+            participants
+                .iter()
+                .any(|(uri, _)| uri == "mimi://havenmessenger.com/u/carol"),
+            "carol must now be a participant"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_wire_applies_a_room_policy_commit() {
+        use mimi_core::room_policy::{
+            BaseRoomPolicy, Role, RoomPolicy, MIMI_ROOM_POLICY_PROPOSAL_TYPE,
+        };
+
+        let (router, p) = app();
+        let room = "mimi://havenmessenger.com/r/x";
+        p.lock()
+            .unwrap()
+            .add_participant(room, "mimi://havenmessenger.com/u/alice", 1)
+            .unwrap();
+
+        let policy = RoomPolicy {
+            base: BaseRoomPolicy::default(),
+            roles: vec![Role {
+                role_index: 2,
+                role_name: "member".into(),
+                capabilities: vec![],
+                authorized_role_changes: vec![],
+            }],
+        };
+        let payload = serde_json::to_vec(&policy).unwrap();
+        let commit_bytes =
+            real_single_custom_proposal_commit(MIMI_ROOM_POLICY_PROPOSAL_TYPE, payload);
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mimi/pl/update/mimi%3A%2F%2Fhavenmessenger.com%2Fr%2Fx")
+                    .body(Body::from(commit_bytes))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let stored = p.lock().unwrap().room_policy(room).unwrap();
+        assert_eq!(stored, Some(policy));
+    }
+
+    #[tokio::test]
+    async fn update_wire_rejects_an_unrecognized_proposal_type() {
+        let (router, p) = app();
+        let room = "mimi://havenmessenger.com/r/x";
+        p.lock()
+            .unwrap()
+            .add_participant(room, "mimi://havenmessenger.com/u/alice", 1)
+            .unwrap();
+        let commit_bytes = real_single_custom_proposal_commit(0xF7FF, vec![1, 2, 3]);
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mimi/pl/update/mimi%3A%2F%2Fhavenmessenger.com%2Fr%2Fx")
+                    .body(Body::from(commit_bytes))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn update_wire_rejects_undecodable_body() {
+        let (router, _p) = app();
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mimi/pl/update/room1")
+                    .body(Body::from(&b"not a Commit"[..]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
