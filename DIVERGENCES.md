@@ -117,14 +117,28 @@ management RPCs, reachable only on the JSON compat lane. They are not among prot
 ten named endpoints; the draft expresses the same operations as AppSync proposals inside an
 `update` transaction (§4.3.2). `update` itself has no live accept path.
 
-Closing this divergence needs the hub to read a `mimiParticipantList`/`mimiRoomPolicy` custom
-proposal out of a real MLS Commit. RFC 9420's own trust model does not expect a delivery service to
-verify a Commit's signature or hold group state - that is the receiving member's responsibility.
-Commits on this hub's groups travel as `PublicMessage` (plaintext-framed, not encrypted), so the
-proposal bytes are visible on the wire without any group-state machinery; what's missing is a codec
-for the relevant slice of RFC 9420's `PublicMessage`/`FramedContent`/`Commit`/`Proposal` structure,
-independent of openmls's own Rust types (whose `Commit` type is private to that crate). This is a
-bounded wire-parsing task, not an open architecture question.
+**Update (reverses the note this entry carried a short time earlier, which said the wire-parsing
+step was still open pending a design question): the parsing step is done.**
+`mimi_core::commit_wire::decode_single_custom_proposal_commit` reads a `mimiParticipantList`/
+`mimiRoomPolicy` custom proposal out of a real, `PublicMessage`-wrapped MLS Commit. RFC 9420's own
+trust model does not expect a delivery service to verify a Commit's signature or hold group state -
+that is the receiving member's responsibility - and Commits on this hub's groups already travel as
+`PublicMessage` (plaintext-framed), so the proposal bytes are visible on the wire without any
+group-state machinery. The decoder is independent of openmls's own Rust types (whose `Commit` type
+is private to that crate), matching how every other MIMI-specific structure in this codebase is
+hand-coded rather than borrowed from a library's internals. Verified against both a captured real
+`openmls` Commit and freshly re-encoded ones each test run, plus a rejection case for an ordinary
+(non-custom) proposal.
+
+Two things remain open, not closed by the above:
+- The decoder only accepts a Commit whose proposal list holds exactly one entry, carried by value.
+  A Commit that mixes the custom proposal with a standard MLS proposal (Add, Remove, ...) in the
+  same list is rejected: skipping past a standard proposal's own body (an `Add`, for instance,
+  embeds a full KeyPackage) needs that proposal's own decoder, which is out of scope here. A sender
+  that wants this hub to read the change sends it as its own Commit.
+- Nothing calls this decoder yet. There is no `update` HTTP route, and no code applies a decoded
+  proposal to the `participant_list`/`room_policy` store - the four room-admin endpoints remain
+  JSON-compat-lane only until that wiring lands.
 
 ## DIV-11 - CLOSED for `consent_extensions`; `update`'s fields stay opaque
 

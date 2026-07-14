@@ -22,6 +22,7 @@
 //! mechanism - see `crate::gate`'s join-model note and `crypto_core::profile`'s policy for
 //! Haven's actual posture, which excludes this feature by default and permanently in the native lane.
 
+pub mod commit_wire;
 pub mod consent;
 pub mod content;
 pub mod gate;
