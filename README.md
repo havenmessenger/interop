@@ -58,10 +58,13 @@ for this repository. (The relays/servers are untrusted by design; the cryptograp
 the client.)
 
 ## Related repositories
-- [`havenmessenger/client`](https://github.com/havenmessenger/client) - Haven's client
-  application.
 - [`havenmessenger/crypto`](https://github.com/havenmessenger/crypto) - the cryptographic core.
+  Its own [`examples/`](https://github.com/havenmessenger/crypto/tree/main/examples) has a
+  runnable usage sample.
 - This repo - the interoperability layer.
+
+Haven's client application is not yet public; the runnable examples in this repo and in
+`havenmessenger/crypto` show the same public APIs the client calls.
 
 ## Try it: MLS Virtual Clients (draft-ietf-mls-virtual-clients-01)
 `src/virtual_clients.rs` implements the Virtual Clients mechanism (§5-§6): multiple
