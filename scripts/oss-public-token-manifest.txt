@@ -6,11 +6,15 @@
 
 # content-09 codec conformance rows (content.rs)
 F1
+F2
 F3
 F4
 F5
+F6
 F7
 F8
+F9
+F10
 
 # MIMI/MLS join-model + gate conformance rows (gate.rs, spec_capability_proof.rs)
 C1
@@ -25,6 +29,7 @@ M2
 M3
 M4
 M5
+M6
 
 # store/custody conformance rows (store.rs)
 K1
@@ -47,3 +52,27 @@ R2
 R3
 L1
 T5
+
+# transport & directory conformance rows (protocol_wire.rs, http.rs)
+T1
+T2
+T3
+T4
+
+# asset-download conformance rows (out-v1, see DIVERGENCES.md DIV-3)
+A1
+A2
+
+# GroupInfo/join conformance rows (out-v1/diverged, see DIVERGENCES.md DIV-1)
+G1
+G2
+
+# wire framing conformance rows (protocol_wire.rs, commit_wire.rs)
+W1
+W2
+W3
+W4
+W5
+W6
+W7
+W8
