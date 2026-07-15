@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "purge" ]; then
+    # Explicit user intent to wipe config and durable state, including the daemon's mTLS private
+    # key material. Left alone on ordinary "remove" - only "purge" implies this.
+    rm -rf /etc/mimi-hubd /var/lib/mimi-hubd
+
+    # The system user is intentionally NOT removed even on purge: reusing a freed system UID/GID
+    # for an unrelated future package is a known packaging hazard, and an unused system account
+    # left behind is harmless. Remove manually if desired: deluser --system mimi-hubd
+fi
+
+#DEBHELPER#
+
+exit 0

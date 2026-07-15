@@ -418,7 +418,7 @@ impl SubmitResponseCode {
 }
 
 /// §5.4 `SubmitMessageResponse`. `frank` (server_frank framing, §5.4.1) is deferred: it is not yet
-/// built in mimi-hub's v1 store-and-forward. The struct still requires the `optional Frank frank`
+/// built in mimi-hubd's v1 store-and-forward. The struct still requires the `optional Frank frank`
 /// presence tag after `accepted_timestamp` even when absent -- TLS presentation-language
 /// `optional<T>` is a 1-byte tag (0/1) followed by the value only if present; omitting the tag
 /// entirely is not additive framing, it desyncs a strict decoder. Building the real frank value is
@@ -820,7 +820,7 @@ impl KeyMaterialRequest {
         if protocol != PROTOCOL_MLS10 {
             return Err(WireError::UnsupportedProtocol(protocol));
         }
-        // Bound every scalar VLBytes decode too - live from mimi-hub's
+        // Bound every scalar VLBytes decode too - live from mimi-hubd's
         // keyMaterial HTTP handler, the most peer-exposed decode in this crate.
         let (requesting_user_bounded, rest) =
             bounded_run_input(rest, "requestingUser", MAX_RUN_AGGREGATE_BYTES)?;
@@ -1817,7 +1817,7 @@ impl FanoutMessage {
 // username lookup and returns NO response body over JSON, by design, so a found-vs-not-found
 // answer can never be distinguished by response shape (only by status). The wire lane preserves
 // this: only the first query element's search value is used (matching the v1 single-username
-// model), and `IdentifierResponse` is built for wire completeness/testing but the actual mimi-hub
+// model), and `IdentifierResponse` is built for wire completeness/testing but the actual mimi-hubd
 // route (like the JSON one) never sends a response body, keeping the DIV-4 property intact rather
 // than reintroducing a body-shaped oracle the JSON lane is built specifically to avoid.
 
@@ -3077,7 +3077,7 @@ mod tests {
         assert!(matches!(err, WireError::Codec { .. }));
     }
 
-    /// `KeyMaterialRequest::decode` is live from `mimi-hub`'s `/keyMaterial` HTTP
+    /// `KeyMaterialRequest::decode` is live from `mimi-hubd`'s `/keyMaterial` HTTP
     /// handler - proves the pre-check is actually wired into the real decoder, not just tested in
     /// isolation on `bounded_run_input`. Hand-built prefix (protocol + 3 URIs, matching what
     /// `decode` expects) plus an over-budget acceptableCiphersuites declared length with NO body

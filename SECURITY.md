@@ -29,10 +29,10 @@ before any public disclosure. Good-faith security research is authorized.
 ## Scope
 **In scope:** this repository - the MIMI/MLS spec-conformant interop library (the wire/content
 codecs, participant-list and URI parsing, the ciphersuite accept-gates, consent, and room-policy
-logic) and `mimi-hub`, the reference hub daemon (mTLS termination, durable state, endpoint
+logic) and `mimi-hubd`, the reference hub daemon (mTLS termination, durable state, endpoint
 handlers). A code-level vulnerability in either is in scope regardless of who is running it.
 
-**Out of scope (different process):** Haven's own production deployment of `mimi-hub` or any
+**Out of scope (different process):** Haven's own production deployment of `mimi-hubd` or any
 other operator's deployment (configuration, infrastructure, and operational issues are the
 deploying party's responsibility, not a code vulnerability in this repository), and Haven's
 other operational infrastructure. You may report deployment-specific issues affecting Haven's

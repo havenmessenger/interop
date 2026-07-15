@@ -61,6 +61,7 @@ EXCLUDE_FILES = {
     "scripts/_tell_scan_denylist.py",  # the sidecar itself contains the real sensitive literals
     "scripts/_tell_scan_denylist.py.example",  # the committed template — placeholder text only
     "SECURITY.md",  # the published security-contact address is intentional disclosure, not a leak
+    "mimi-hubd/Cargo.toml",  # the .deb's Maintainer: field is the same intentional public contact
     # guard 5's self-test fixtures deliberately contain synthetic tell-shaped text (that's how it
     # proves it catches every class) — the same self-referential exclusion as this file's own entry.
     "scripts/check_public_comment_hygiene.py",

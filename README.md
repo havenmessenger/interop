@@ -22,8 +22,11 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 - **Real protocol code against the current drafts.** MIMI protocol-06 (the JSON lane and the
   TLS presentation-language wire lane), mimi-content-09, and room-policy, over MLS (RFC 9420)
   via real openmls. No mocks.
-- **A runnable hub.** `mimi-hub` is an mTLS daemon you can stand up from its quickstart and
-  point an implementation at; its README shows real output from the exact commands it lists.
+- **A runnable, installable hub.** `mimi-hubd` is an mTLS daemon you can stand up from its
+  quickstart and point an implementation at; its README shows real output from the exact commands
+  it lists. It also installs like a normal system service - a systemd unit, a `.deb`, prebuilt
+  Linux binaries, and a Docker image are all built from the same source (see mimi-hubd/README.md's
+  "Installing as a service").
 - **Conformance receipts, not assertions.** 164 tests, including hand-computed byte KATs and
   the official IETF mimi-content test vectors. Cross-implementation vectors against
   openmls-main are published with a full report
@@ -38,7 +41,7 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 - **Standalone.** Apache-2.0, no submodules, no services needed to build and run the tests.
 
 ## See it run
-- [`mimi-hub/README.md`](mimi-hub/README.md) - quickstart for the reference hub daemon: mTLS
+- [`mimi-hubd/README.md`](mimi-hubd/README.md) - quickstart for the reference hub daemon: mTLS
   server, a live directory endpoint, and both the JSON and TLS-PL wire lanes.
 - [`docs/vc-01-vector-report.md`](docs/vc-01-vector-report.md) - a cross-implementation test
   against openmls-main, including the small-space PRP (§5.6.1) divergence found and how it was
@@ -52,7 +55,7 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 - Anyone can check that what Haven ships matches the drafts as written.
 
 ## What lives here (and what does not)
-**Here (open):** the interop library + `mimi-hub` reference hub you can stand up yourself.
+**Here (open):** the interop library + `mimi-hubd` reference hub you can stand up yourself.
 **Not here:** the production service that operates this protocol for real users is out of scope
 for this repository. (The relays/servers are untrusted by design; the cryptographic endpoint is
 the client.)

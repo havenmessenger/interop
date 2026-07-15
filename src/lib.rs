@@ -18,7 +18,7 @@
 //! `external-ops` (default-off Cargo feature): when enabled, compiles a small proof-only test module
 //! (`spec_capability_proof`, `#[cfg(all(feature = "external-ops", test))]`) demonstrating that
 //! openmls's OWN external-commit and external-proposal mechanisms are real and testable, for a
-//! full-fidelity ("SpecProfile") consumer such as `mimi-hub`. It is NOT Haven's own acceptance
+//! full-fidelity ("SpecProfile") consumer such as `mimi-hubd`. It is NOT Haven's own acceptance
 //! mechanism - see `crate::gate`'s join-model note and `crypto_core::profile`'s policy for
 //! Haven's actual posture, which excludes this feature by default and permanently in the native lane.
 

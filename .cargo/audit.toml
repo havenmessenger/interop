@@ -23,7 +23,7 @@ ignore = [
     "RUSTSEC-2026-0173",
 
     # RUSTSEC-2025-0134 - `rustls-pemfile` 2.2.0: unmaintained (warning, not a known vulnerability).
-    # Direct dependency of `mimi-hub` (`mimi-hub/src/tls.rs`, `rustls_pemfile::certs`/`private_key`) plus
+    # Direct dependency of `mimi-hubd` (`mimi-hubd/src/tls.rs`, `rustls_pemfile::certs`/`private_key`) plus
     # a transitive pull via `axum-server`. Verified usage: it parses the mTLS server certificate and
     # private key from local, operator-supplied PEM files at startup, never attacker-controlled network
     # input. No upstream fork with an equivalent API exists yet; re-evaluate if a real vulnerability

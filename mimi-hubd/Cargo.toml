@@ -1,0 +1,88 @@
+# mimi-hubd - a runnable MIMI hub daemon: mTLS-terminated HTTP server, SQLite-backed durable state,
+# 14 endpoints implementing the v1 (JSON) request-handling semantics over `mimi-core`'s gate/consent/
+# room-policy logic. See README.md for the quickstart and the current wire-format status.
+[package]
+name = "mimi-hubd"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.96.0"
+description = "Reference MIMI hub daemon: mTLS HTTP server + durable state over mimi-core"
+license = "Apache-2.0"
+# This crate ships a library target (src/lib.rs) alongside its binary because the binary itself
+# needs to import it - not because it's meant to be depended on as a library by anything outside
+# this workspace. Never publish it to crates.io as one.
+publish = false
+
+[[bin]]
+name = "mimi-hubd"
+path = "src/main.rs"
+
+[dependencies]
+mimi-core = { path = ".." }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+sha2 = { version = "0.10", default-features = false }   # /notify body hashing (dedup)
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+axum = "0.7"
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+# mTLS: the rustls ServerConfig is built explicitly with a client-cert verifier from a configured CA
+# (peer-trust allowlist) and the ring provider. axum-server's `tls-rustls` feature force-enables
+# aws-lc-rs, which needs cmake; `tls-rustls-no-provider` avoids that and the provider is supplied
+# via builder_with_provider instead.
+axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
+# Durable state - one store, no in-memory residue. bundled = sqlite compiled from source, so the
+# binary is container-portable with no system sqlite dependency.
+rusqlite = { version = "0.40", features = ["bundled"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }        # ServiceExt::oneshot for router tests
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }  # real mTLS handshake test
+rcgen = "0.14"                                          # test cert generation (CA + server + client)
+# Build a real 0x0001 KeyPackage for wiring tests (already in the graph via mimi-core).
+openmls = "0.8.1"
+openmls_rust_crypto = "0.5.1"
+openmls_traits = "0.5.0"
+tls_codec = "0.4.2"
+
+[lints.clippy]
+unwrap_used = "warn"
+panic = "warn"
+
+# `cargo deb` packaging - a .deb for GitHub Releases, installing this daemon like a system service
+# (sshd/postfix-shaped), not just a `cargo run` artifact. `debian/` holds the maintainer scripts
+# (system-user creation on install; purge-only data removal), the systemd unit, and the config
+# templates. `depends` is left at cargo-deb's own default ("$auto" - detected from the built
+# binary's actual dynamic links); nothing here hand-lists a dependency list to drift from that.
+[package.metadata.deb]
+maintainer = "Haven Messenger <security@havenmessenger.com>"
+copyright = "2026, Haven Messenger"
+license-file = ["../LICENSE", "0"]
+extended-description = """\
+Reference MIMI hub daemon: an mTLS-terminated HTTP server with SQLite-backed durable state, \
+implementing the v1 (JSON) and protocol-06 (TLS presentation-language) wire lanes over \
+mimi-core's gate, consent, and room-policy logic. See DIVERGENCES.md in the source repository \
+for the exact conformance boundary.\
+"""
+section = "net"
+priority = "optional"
+maintainer-scripts = "debian"
+assets = [
+    ["target/release/mimi-hubd", "usr/bin/", "755"],
+    ["debian/mimi-hubd.toml.example", "etc/mimi-hubd/mimi-hubd.toml.example", "644"],
+    ["debian/mimi-hubd.env.example", "etc/mimi-hubd/mimi-hubd.env.example", "644"],
+    ["README.md", "usr/share/doc/mimi-hubd/README.md", "644"],
+]
+
+# Fail-closed by design (no cert material means no serve) - a fresh install cannot possibly have
+# real mTLS material yet, so auto-starting would just log a startup failure. Leave the unit
+# installed-but-inactive; the admin fills in /etc/mimi-hubd/*.pem + the config template, then runs
+# `systemctl enable --now mimi-hubd` themselves. `unit-scripts` defaults to `maintainer-scripts`
+# above, where `mimi-hubd.service` already lives - no separate systemd/ directory needed.
+[package.metadata.deb.systemd-units]
+enable = false
+start = false

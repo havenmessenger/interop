@@ -197,19 +197,21 @@ async fn key_material_wire(
 /// URI it claims, logs the outcome, and returns whether it matched. Diagnostic only: this hub has
 /// no persistent registry to pin a URI's genuine signing key against (see DIVERGENCES.md's
 /// testing-phase note on this), so a mismatch is logged, never refused - the return value is not
-/// used to gate anything, only tested directly.
+/// used to gate anything, only tested directly. The log line deliberately omits the claimed URI
+/// itself: under a packaged/systemd deployment this line lands in the system journal, a more
+/// persistent and more widely-readable sink than an ad hoc terminal, so it carries only a
+/// match/mismatch outcome - no client-supplied identifier - to avoid making the journal a durable
+/// store of unauthenticated identity claims.
 fn log_key_material_identity_claim(
     requesting_user: &str,
     requester_credential_identity: &[u8],
 ) -> bool {
     let matches = requester_credential_identity == requesting_user.as_bytes();
     if matches {
-        eprintln!(
-            "[mimi-hub] keyMaterial: requesterCredential matches requestingUser={requesting_user}"
-        );
+        eprintln!("[mimi-hubd] keyMaterial: requesterCredential identity claim matched");
     } else {
         eprintln!(
-            "[mimi-hub] keyMaterial: requesterCredential does NOT match requestingUser={requesting_user} (unverified first-contact claim, accepted per testing-phase policy)"
+            "[mimi-hubd] keyMaterial: requesterCredential identity claim did NOT match (unverified first-contact claim, accepted per testing-phase policy)"
         );
     }
     matches

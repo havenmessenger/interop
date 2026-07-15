@@ -1,8 +1,8 @@
 # Divergences from the drafts
 
-`mimi-hub`'s v1 implements a subset of `draft-ietf-mimi-protocol`, `draft-ietf-mimi-content`,
+`mimi-hubd`'s v1 implements a subset of `draft-ietf-mimi-protocol`, `draft-ietf-mimi-content`,
 and `draft-ietf-mimi-room-policy`. The authoritative source is the hub's own `directory`
-endpoint `unsupported` block (`mimi-hub/src/lib.rs`); this file explains the reasoning.
+endpoint `unsupported` block (`mimi-hubd/src/lib.rs`); this file explains the reasoning.
 
 DIV-1 through DIV-4 are scoping decisions: deliberate, documented choices about what v1 does
 not do. DIV-5 through DIV-11 are gaps in what v1 attempts: endpoints or fields the code accepts

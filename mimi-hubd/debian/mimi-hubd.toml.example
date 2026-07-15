@@ -1,0 +1,23 @@
+# mimi-hubd config file template.
+#
+# Copy this file to /etc/mimi-hubd/mimi-hubd.toml and fill in real values before starting the
+# service - the daemon is fail-closed and will refuse to start with placeholder or missing values.
+# Any of the MIMI_* environment variables (same names as below, uppercased with an MIMI_ prefix)
+# still overrides the matching key here, so a deployment can be mostly file-config with one
+# setting pinned by the environment (see /etc/mimi-hubd/mimi-hubd.env for that path).
+
+# This hub's own domain (required, no default).
+provider_domain = "hub.example.org"
+
+# Listen address (default 0.0.0.0:8443 if omitted).
+bind_addr = "0.0.0.0:8443"
+
+# SQLite path for durable state (default /var/lib/mimi/provider.db if omitted; the packaged
+# systemd unit's StateDirectory= makes /var/lib/mimi-hubd/ the natural choice instead).
+db_path = "/var/lib/mimi-hubd/hub.db"
+
+# mTLS material (all three required, no defaults). See the quickstart in README.md for how to
+# generate a throwaway CA + server + client certificate set for testing.
+server_cert = "/etc/mimi-hubd/server-cert.pem"
+server_key = "/etc/mimi-hubd/server-key.pem"
+client_ca = "/etc/mimi-hubd/ca-cert.pem"

@@ -47,7 +47,7 @@ jobs:
     # CI leg 1/3: proves the full-fidelity ("SpecProfile") posture is real and tested,
     # not vaporware — `external-ops` on exercises openmls's own external-commit/external-proposal
     # capability directly (spec_capability_proof; see its module doc for the exact scope — it is NOT
-    # Haven's own acceptance mechanism). A full-fidelity consumer such as mimi-hub can build this way.
+    # Haven's own acceptance mechanism). A full-fidelity consumer such as mimi-hubd can build this way.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

@@ -1,4 +1,4 @@
-//! mimi-hub - a reference MIMI hub daemon (native, server-side).
+//! mimi-hubd - a reference MIMI hub daemon (native, server-side).
 //!
 //! v1 hub semantics: add-driven membership, text-only content, suite 0x0001 only. The stateful
 //! request-handling core is [`Provider`] (backed by the durable [`store::SqliteStore`]); the async

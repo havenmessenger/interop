@@ -72,6 +72,57 @@ pub async fn serve(
         .await
 }
 
+/// Same as [`serve`], but drains in-flight requests on SIGTERM (what `systemctl stop` sends) or
+/// Ctrl+C/SIGINT instead of dropping connections mid-response. `grace_period` bounds how long a
+/// slow in-flight request gets before the process exits regardless.
+pub async fn serve_with_graceful_shutdown(
+    addr: std::net::SocketAddr,
+    router: axum::Router,
+    config: Arc<ServerConfig>,
+    grace_period: std::time::Duration,
+) -> std::io::Result<()> {
+    let tls = axum_server::tls_rustls::RustlsConfig::from_config(config);
+    let handle = axum_server::Handle::new();
+    let shutdown_handle = handle.clone();
+    tokio::spawn(async move {
+        wait_for_shutdown_signal().await;
+        eprintln!(
+            "[mimi-hubd] shutdown signal received, draining in-flight requests (grace period {grace_period:?})"
+        );
+        shutdown_handle.graceful_shutdown(Some(grace_period));
+    });
+    axum_server::bind_rustls(addr, tls)
+        .handle(handle)
+        .serve(router.into_make_service())
+        .await
+}
+
+/// Waits for either SIGTERM (the signal `systemctl stop` sends) or Ctrl+C/SIGINT (interactive
+/// use). SIGTERM handling is unix-only - the shipped systemd unit and .deb both only target
+/// Linux, and `tokio::signal::unix` is unix-only by construction.
+async fn wait_for_shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install the Ctrl+C (SIGINT) handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install the SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

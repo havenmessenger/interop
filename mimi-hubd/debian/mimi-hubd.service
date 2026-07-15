@@ -1,0 +1,55 @@
+[Unit]
+Description=mimi-hubd - reference MIMI hub daemon
+Documentation=https://github.com/havenmessenger/interop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mimi-hubd
+Group=mimi-hubd
+ExecStart=/usr/bin/mimi-hubd --config /etc/mimi-hubd/mimi-hubd.toml
+EnvironmentFile=-/etc/mimi-hubd/mimi-hubd.env
+Restart=on-failure
+RestartSec=5s
+
+# --- Filesystem access ---
+StateDirectory=mimi-hubd
+StateDirectoryMode=0750
+ConfigurationDirectory=mimi-hubd
+ConfigurationDirectoryMode=0750
+ReadWritePaths=/var/lib/mimi-hubd
+ReadOnlyPaths=/etc/mimi-hubd
+# systemd's own default working directory is / (not /var/lib/mimi-hubd, despite StateDirectory=
+# above) - a RELATIVE path in the config file or an env var would resolve against / with no
+# WorkingDirectory= set. The shipped config template uses absolute paths throughout, but this is
+# the correct safety net regardless of what an operator's own config does.
+WorkingDirectory=/var/lib/mimi-hubd
+
+# --- Hardening ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

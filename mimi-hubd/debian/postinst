@@ -1,0 +1,25 @@
+#!/bin/sh
+set -e
+
+# Dedicated, unprivileged system account this daemon runs as. Idempotent: does nothing if it
+# already exists (e.g. on upgrade). systemd's StateDirectory= directive in the shipped unit
+# creates /var/lib/mimi-hubd at the right owner/mode on every service start - this script only
+# needs to make sure the account itself exists first.
+if ! getent passwd mimi-hubd >/dev/null; then
+    adduser --system --group --no-create-home --home /var/lib/mimi-hubd \
+        --shell /usr/sbin/nologin --disabled-login \
+        --gecos "mimi-hubd reference MIMI hub daemon" mimi-hubd
+fi
+
+# /etc/mimi-hubd, unlike /var/lib/mimi-hubd, is created by dpkg itself (to place the two .example
+# files below it) at dpkg's own default directory mode, not by systemd's ConfigurationDirectory=
+# directive - that directive only sets the mode when IT creates the directory, and does nothing
+# if the directory already exists. Verified empirically: without this fix the directory is left
+# at 0755 and every service start logs a ConfigurationDirectoryMode mismatch warning. This
+# directory ends up holding the daemon's mTLS private key material, so 0750 (owner+group only) is
+# also the more correct permission regardless of the cosmetic warning.
+chmod 0750 /etc/mimi-hubd
+
+#DEBHELPER#
+
+exit 0

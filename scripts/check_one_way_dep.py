@@ -42,9 +42,9 @@ def is_comment_only(line: str) -> bool:
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parent.parent
-    # mimi-core's own src/ plus the mimi-hub workspace member (a runnable daemon over mimi-core,
+    # mimi-core's own src/ plus the mimi-hubd workspace member (a runnable daemon over mimi-core,
     # equally subject to "no app-binding-layer symbol" references).
-    src_dirs = [repo_root / "src", repo_root / "mimi-hub" / "src"]
+    src_dirs = [repo_root / "src", repo_root / "mimi-hubd" / "src"]
     hits = []
     for src_dir in src_dirs:
         if not src_dir.is_dir():
