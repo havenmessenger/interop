@@ -3,10 +3,10 @@
 Making secure-messaging protocols interoperable - part of
 [Haven](https://havenmessenger.com).
 
-We don't author the
-protocols - the standards bodies do that. We implement them: **MIMI** (the IETF's *More
-Instant Messaging Interoperability* work) and **MLS** (Messaging Layer Security, RFC 9420),
-as working code another service can run against.
+We implement **MIMI** (the IETF's *More
+Instant Messaging Interoperability* drafts) and **MLS** (Messaging Layer Security, RFC 9420)
+as working code another service can run against, and contribute what implementing surfaces
+back to the working groups.
 
 This repository is a MIMI/MLS interoperability library and reference hub: use it to
 interoperate with Haven, or adopt it as the interop layer for your own service. It is not
