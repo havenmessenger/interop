@@ -1,9 +1,9 @@
 # Haven Interop
 
-Making secure-messaging protocols real and interoperable - part of
+Making secure-messaging protocols interoperable - part of
 [Haven](https://havenmessenger.com).
 
-The future of private messaging is interoperable, not walled. We don't author the
+We don't author the
 protocols - the standards bodies do that. We implement them: **MIMI** (the IETF's *More
 Instant Messaging Interoperability* work) and **MLS** (Messaging Layer Security, RFC 9420),
 as working code another service can run against.
@@ -19,21 +19,21 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 > Feedback welcome.
 
 ## Why use this
-- **Real protocol code against the current drafts.** MIMI protocol-06 (the JSON lane and the
+- **Protocol code against the current drafts.** MIMI protocol-06 (the JSON lane and the
   TLS presentation-language wire lane), mimi-content-09, and room-policy, over MLS (RFC 9420)
-  via real openmls. No mocks.
+  via openmls.
 - **A runnable, installable hub.** `mimi-hubd` is an mTLS daemon you can stand up from its
-  quickstart and point an implementation at; its README shows real output from the exact commands
+  quickstart and point an implementation at; its README shows the output of the commands
   it lists. It also installs like a normal system service - a systemd unit, a `.deb`, prebuilt
   Linux binaries, and a Docker image are all built from the same source (see mimi-hubd/README.md's
   "Installing as a service").
-- **Conformance receipts, not assertions.** 164 tests, including hand-computed byte KATs and
+- **Conformance receipts.** 264 tests, including hand-computed byte KATs and
   the official IETF mimi-content test vectors. Cross-implementation vectors against
   openmls-main are published with a full report
   ([`docs/vc-01-vector-report.md`](docs/vc-01-vector-report.md)), including a §5.6.1
   divergence this work found and narrowed.
 - **Divergences documented.** Every departure from the drafts is recorded in
-  [`DIVERGENCES.md`](DIVERGENCES.md). None are silent.
+  [`DIVERGENCES.md`](DIVERGENCES.md).
 - **Fed back to the working group.** Interactions this implementation surfaces are raised on
   the IETF mls/mimi lists as they are found.
 - **Security invariants indexed.** [`SECURITY-INVARIANTS.md`](SECURITY-INVARIANTS.md) maps
@@ -48,7 +48,7 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
   narrowed down.
 
 ## Why this is open
-- This is the readable, runnable reference for interoperating with Haven.
+- This is the runnable reference for interoperating with Haven.
 - The MIMI drafts are pre-standard and still moving; implementing them has already surfaced
   draft-level questions and divergences, which are documented here and raised with the
   working group.
@@ -56,7 +56,7 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 
 ## What lives here (and what does not)
 **Here (open):** the interop library + `mimi-hubd` reference hub you can stand up yourself.
-**Not here:** the production service that operates this protocol for real users is out of scope
+**Not here:** the production service that operates this protocol is out of scope
 for this repository. (The relays/servers are untrusted by design; the cryptographic endpoint is
 the client.)
 
@@ -72,12 +72,12 @@ Haven's client application is not yet public; the runnable examples in this repo
 ## Try it: MLS Virtual Clients (draft-ietf-mls-virtual-clients-01)
 `src/virtual_clients.rs` implements the Virtual Clients mechanism (§5-§6): multiple
 devices ("emulator clients") jointly acting as one virtual client under a single MLS leaf. This is
-running code against real openmls (not a mock); see the module's own doc comment for the full
+running code against openmls; see the module's own doc comment for the full
 scope statement (what's implemented vs. not, and why an external commit into the
 emulation group doesn't touch Haven's `INV-MLS-001a` no-external-commits invariant).
 
 ```sh
-cargo test --lib virtual_clients        # 12 unit tests + 3 real-openmls conformance tests
+cargo test --lib virtual_clients        # 12 unit tests + 3 openmls conformance tests
 cargo run --example virtual_clients_demo  # a narrated walkthrough: two devices derive identical
                                            # secrets, a third onboards via external commit, one is
                                            # removed and the epoch advances
