@@ -56,9 +56,13 @@ panic = "warn"
 # `cargo deb` packaging - a .deb for GitHub Releases, installing this daemon like a system service
 # (sshd/postfix-shaped), not just a `cargo run` artifact. `debian/` holds the maintainer scripts
 # (system-user creation on install; purge-only data removal), the systemd unit, and the config
-# templates. `depends` is left at cargo-deb's own default ("$auto" - detected from the built
-# binary's actual dynamic links); nothing here hand-lists a dependency list to drift from that.
+# templates. `depends` layers `adduser` onto cargo-deb's own "$auto" default (detected from the
+# built binary's actual dynamic links) - postinst calls `adduser` directly to create the daemon's
+# system account, but a minimal Debian install has no guarantee that package is present, and $auto
+# only covers the BINARY's own linked libraries, never a maintainer SCRIPT's own tool dependency.
+# Without this, postinst dies under `set -e` on a bare install, leaving the package half-configured.
 [package.metadata.deb]
+depends = ["$auto", "adduser"]
 maintainer = "Haven Messenger <security@havenmessenger.com>"
 copyright = "2026, Haven Messenger"
 license-file = ["../LICENSE", "0"]

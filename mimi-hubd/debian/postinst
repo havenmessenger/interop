@@ -14,10 +14,15 @@ fi
 # /etc/mimi-hubd, unlike /var/lib/mimi-hubd, is created by dpkg itself (to place the two .example
 # files below it) at dpkg's own default directory mode, not by systemd's ConfigurationDirectory=
 # directive - that directive only sets the mode when IT creates the directory, and does nothing
-# if the directory already exists. Verified empirically: without this fix the directory is left
-# at 0755 and every service start logs a ConfigurationDirectoryMode mismatch warning. This
-# directory ends up holding the daemon's mTLS private key material, so 0750 (owner+group only) is
-# also the more correct permission regardless of the cosmetic warning.
+# if the directory already exists. Verified empirically on a genuinely fresh install: dpkg leaves
+# the directory root:root, and a chmod-only fix (no chown) leaves it 0750 root:root - the daemon
+# runs as mimi-hubd:mimi-hubd, which is in neither the owning user NOR the owning group, so it has
+# ZERO access to its own config directory (a hard failure, not a cosmetic warning: the daemon
+# cannot read its cert/key paths or any config file placed here). This directory ends up holding
+# the daemon's mTLS private key material, so root:mimi-hubd 0750 (root read/write, daemon group
+# read+traverse, no world access) is both correct and sufficient - the daemon user is a MEMBER of
+# the mimi-hubd group created above, not the mimi-hubd user's own primary ownership.
+chown root:mimi-hubd /etc/mimi-hubd
 chmod 0750 /etc/mimi-hubd
 
 #DEBHELPER#
