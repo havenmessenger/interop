@@ -21,7 +21,7 @@ through one lane is readable through the other (proven below for `keyMaterial`).
 on the request/consent/keyMaterial/update/reportAbuse routes plays the same opaque routing-key role
 the JSON lane's query parameters play; it is not the draft's room-participant-list fanout, which
 this reference hub does not implement for message delivery. The directory (`/.well-known/mimi-
-protocol-directory`) advertises all eight under `wireEndpoints`, with real path templates.
+protocol-directory`) advertises all eight under `wireEndpoints`, with concrete path templates.
 
 `update` (§5.3) is wired for exactly one bounded case: a Commit whose proposal list holds a single
 custom proposal (`mimiParticipantList` or `mimiRoomPolicy`, protocol §5.3/§7.5) is decoded (without
@@ -37,7 +37,7 @@ handler of any kind to frame. The four v1 room-admin JSON endpoints
 they are this hub's own RBAC surface, not part of the draft's wire vocabulary - so there is nothing
 to frame them against.
 
-Real output, proving the wire lane against a live hub with real MLS objects.
+Output from the wire lane against a live hub, with MLS objects on the wire.
 
 `submitMessage`, round-tripped against the JSON lane's store:
 
@@ -71,7 +71,7 @@ HTTP_STATUS=200
 # response: userStatus=success, one ClientKeyMaterial entry, the KeyPackage as published)
 ```
 
-`notify` (a real application message wrapped as `FanoutMessage`) and `identifierQuery` (a real
+`notify` (an application message wrapped as `FanoutMessage`) and `identifierQuery` (a
 wire-encoded query against a non-enrolled user, proving DIV-4's no-body-oracle property holds on
 the wire lane the same way it holds on the JSON lane):
 
@@ -92,8 +92,8 @@ $ wc -c idq_resp.bin
 ## Quickstart (env vars)
 
 **This is a reference implementation, not yet hardened for unsupervised public exposure.** It's
-positioned as a reference/demo artifact — a real deployment you run against actual traffic should
-be network-restricted (an allowlist, not open to the internet), and current limitations (see
+positioned as a reference/demo artifact. A deployment carrying live traffic should be
+network-restricted (an allowlist, not open to the internet), and current limitations (see
 `../SECURITY.md` and `../DIVERGENCES.md`) are disclosed here rather than discovered the hard way.
 
 You need `cargo` and `openssl` (or any tool that can issue a CA and a leaf certificate signed by
@@ -132,7 +132,7 @@ MIMI_CLIENT_CA=/tmp/mimi-hubd-demo/ca-cert.pem \
 cargo run -p mimi-hubd
 ```
 
-Real output from this exact sequence:
+Output from the sequence above:
 
 ```
 [mimi-hubd] MIMI_SERVER_CERT supplied by: env
@@ -149,7 +149,7 @@ curl -s --cacert /tmp/mimi-hubd-demo/ca-cert.pem --cert /tmp/mimi-hubd-demo/clie
   https://localhost:8443/.well-known/mimi-protocol-directory
 ```
 
-Real output from this exact sequence:
+Output from the sequence above:
 
 ```json
 {
@@ -208,7 +208,7 @@ EOF
 cargo run -p mimi-hubd -- --config /tmp/mimi-hubd-demo/mimi-hubd.toml
 ```
 
-Real output from this exact sequence - note `supplied by: file` instead of `env`, the only
+Output from the sequence above - note `supplied by: file` instead of `env`, the only
 observable difference from the env-only run above:
 
 ```
@@ -231,7 +231,7 @@ Beyond `cargo run`, this daemon packages like a normal system service:
   (dedicated non-root user, `ProtectSystem=strict`, `NoNewPrivileges=true`, `UMask=0077`, and more)
   that reads `/etc/mimi-hubd/mimi-hubd.toml` by default. It ships **not** enabled and **not**
   started: this daemon is fail-closed on missing mTLS material, so a fresh install has nothing
-  valid to start with yet. Fill in real certificates and config, then
+  valid to start with yet. Fill in your certificates and config, then
   `systemctl enable --now mimi-hubd` yourself.
 - **`.deb` package**: built via [`cargo-deb`](https://github.com/kornelski/cargo-deb) from
   [`mimi-hubd/Cargo.toml`](Cargo.toml)'s `[package.metadata.deb]` section. Creates a dedicated
