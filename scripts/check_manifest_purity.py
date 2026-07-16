@@ -36,11 +36,12 @@ def main() -> int:
         return 2
     text = lockfile_path.read_text()
 
-    # mimi-core is the repo-root package; mimi-hub is the in-workspace reference hub daemon
-    # (Cargo.toml `[workspace] members = ["mimi-hub"]`). Both are legitimate local packages —
+    # mimi-core is the repo-root package; mimi-hub is the in-workspace reference hub daemon;
+    # mimi-bot is the in-workspace interop test-partner daemon (DISPATCH-184). All are
+    # legitimate local packages (Cargo.toml `[workspace] members = ["mimi-hub", "mimi-bot"]`) —
     # this guard exists to catch a path/git dependency reaching OUTSIDE the workspace, not to
     # forbid a same-repo workspace member.
-    expected_local = {"mimi-core", "mimi-hub"}
+    expected_local = {"mimi-core", "mimi-hub", "mimi-bot"}
     actual_local = local_package_names(text)
     unexpected = actual_local - expected_local
     if unexpected:

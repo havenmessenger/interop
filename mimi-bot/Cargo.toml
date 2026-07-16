@@ -1,0 +1,76 @@
+# mimi-bot - a real, portable MIMI interop test partner: publishes its own KeyPackage, waits to be
+# invited (never decides to add anyone itself - see README.md Security section), and echoes
+# application messages back once in a room. Built directly on mimi-core + openmls (no mock).
+[package]
+name = "mimi-bot"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.96.0"
+description = "Reference MIMI interop test partner: publishes a KeyPackage, accepts invitations, echoes messages"
+license = "Apache-2.0"
+# Same reasoning as mimi-hubd: a lib target exists only so the binary and its own tests can share
+# code; this is not meant to be depended on by anything outside this workspace.
+publish = false
+
+[[bin]]
+name = "mimi-bot"
+path = "src/main.rs"
+
+[dependencies]
+mimi-core = { path = ".." }
+openmls = "0.8.1"
+openmls_rust_crypto = "0.5.1"
+openmls_traits = "0.5.0"
+tls_codec = "0.4.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "io-util"] }
+# Private Unix-socket transport (DISPATCH-184 revision): mimi-bot runs CO-LOCATED with the MIMI
+# provider it pairs with, over a private channel with lease-and-ack delivery - not the public mTLS
+# HTTP compat surface (a design-gutcheck found that surface has no real event-ordering guarantee
+# and deletes-before-processing, both real data-loss/desync risks for an automated consumer). No
+# TLS/cert machinery needed here - there is no network hop to secure, the socket path + filesystem
+# permissions ARE the trust boundary. base64 carries the binary KeyPackage/MLS-message payloads as
+# JSON string fields in the length-prefixed frame protocol (mirrors the provider's own
+# local_channel.rs wire format exactly - kept in sync by contract, not shared code, since this
+# crate is public/open and the provider it pairs with may be closed).
+base64 = "0.22"
+
+[dev-dependencies]
+rcgen = "0.14"                                          # throwaway CA/cert generation for tests
+
+[lints.clippy]
+unwrap_used = "warn"
+panic = "warn"
+
+# `cargo deb` packaging - mirrors mimi-hubd's own contract exactly (dedicated system user, fail-
+# closed on missing mTLS material, purge-only data removal).
+[package.metadata.deb]
+maintainer = "Haven Messenger <security@havenmessenger.com>"
+copyright = "2026, Haven Messenger"
+license-file = ["../LICENSE", "0"]
+extended-description = """\
+A real, portable MIMI interop test partner: it publishes its own discoverable KeyPackage, waits \
+to be invited into a room the normal spec-conformant way (it never adds itself to anything), and \
+echoes application messages back once it is a member - so a third party's own MIMI implementation \
+has a real, always-on conversation partner to test against. Built directly on mimi-core + openmls.\
+"""
+section = "net"
+priority = "optional"
+maintainer-scripts = "debian"
+assets = [
+    ["target/release/mimi-bot", "usr/bin/", "755"],
+    ["debian/mimi-bot.toml.example", "etc/mimi-bot/mimi-bot.toml.example", "644"],
+    ["debian/mimi-bot.env.example", "etc/mimi-bot/mimi-bot.env.example", "644"],
+    ["README.md", "usr/share/doc/mimi-bot/README.md", "644"],
+]
+
+# Same fail-closed reasoning as mimi-hubd: a fresh install has no mTLS material yet, so
+# auto-starting would just log a startup failure. Admin fills in certs + config, then enables.
+[package.metadata.deb.systemd-units]
+enable = false
+start = false
