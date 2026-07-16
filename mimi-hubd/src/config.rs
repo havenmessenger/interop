@@ -106,14 +106,38 @@ pub fn resolve_with_source(
     file: Option<&ConfigFile>,
     default: Option<&str>,
 ) -> (Option<String>, Source) {
-    if let Ok(v) = std::env::var(env_key) {
-        if !v.is_empty() {
-            return (Some(v), Source::Env);
+    // var_os + explicit UTF-8 conversion, not std::env::var: the latter's Err collapses "not
+    // present" and "present but not valid Unicode" into the SAME Err(NotUnicode) case an `if let
+    // Ok` silently treats as absent, falling through to file/default - a genuinely-set but
+    // mis-encoded env var would silently lose to a lower-precedence layer instead of surfacing as
+    // the operator error it is. Distinguish the two explicitly and hard-error on NotUnicode.
+    match std::env::var_os(env_key) {
+        Some(os_v) => match os_v.into_string() {
+            Ok(v) if !v.is_empty() => return (Some(v), Source::Env),
+            Ok(_) => {
+                // Empty string: treated as unset, falls through to file/default below.
+            }
+            // A genuinely dynamic panic message (the bad env var's name + the raw bytes) can't be
+            // a `.expect()` string literal like every other panic site in this crate - this is
+            // the one deliberate exception to the crate's panic lint, not a relaxed convention.
+            #[allow(clippy::panic)]
+            Err(bad) => panic!(
+                "{env_key} is set but is not valid UTF-8 ({bad:?}) - fix the environment, this is \
+                 not silently treated as unset"
+            ),
+        },
+        None => {
+            // Not present at all: falls through to file/default below.
         }
-        // Empty string: treated as unset, falls through to file/default below.
     }
+    // A TOML-sourced empty string gets the SAME "treated as unset" treatment as an empty env var
+    // above - an unchecked empty file value would otherwise reach a caller like
+    // `Connection::open("")`, which SQLite treats as a private, silently-deleted-on-close temp DB
+    // rather than the persistent path the operator meant to configure.
     if let Some(v) = file.and_then(|f| f.get(file_key)) {
-        return (Some(v.clone()), Source::File);
+        if !v.trim().is_empty() {
+            return (Some(v.clone()), Source::File);
+        }
     }
     match default {
         Some(d) => (Some(d.to_string()), Source::Default),
@@ -327,6 +351,55 @@ mod tests {
         assert_eq!(value.as_deref(), Some("0.0.0.0:8443"));
         assert_eq!(source, Source::Default);
         clear_env();
+    }
+
+    #[test]
+    fn empty_file_value_is_treated_as_unset_not_as_an_empty_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_env();
+        // A TOML `db_path = ""` (or whitespace-only) must fall through to the default, not reach a
+        // caller as a real empty path (SQLite treats "" as a private, silently-deleted temp DB).
+        let file = ConfigFile {
+            db_path: Some("   ".to_string()),
+            ..Default::default()
+        };
+        let (value, source) = resolve_with_source(
+            "MIMI_DB_PATH",
+            "db_path",
+            Some(&file),
+            Some("/var/lib/mimi/provider.db"),
+        );
+        assert_eq!(value.as_deref(), Some("/var/lib/mimi/provider.db"));
+        assert_eq!(source, Source::Default);
+        clear_env();
+    }
+
+    #[test]
+    fn env_var_set_to_invalid_utf8_hard_errors_instead_of_silently_falling_through() {
+        use std::os::unix::ffi::OsStringExt;
+        // #[should_panic] would poison the shared ENV_LOCK mutex (the panic unwinds through the
+        // held guard), failing every OTHER test in this file that also locks it - catch_unwind
+        // lets this test clean up its own env var + release the lock before returning, same as
+        // every other test here.
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_env();
+        // A lone 0x80 byte is not valid UTF-8 in any position - std::env::var would report this as
+        // Err(NotUnicode), indistinguishable via `if let Ok` from "not set at all."
+        std::env::set_var("MIMI_BIND_ADDR", std::ffi::OsString::from_vec(vec![0x80]));
+        let result = std::panic::catch_unwind(|| {
+            resolve_with_source("MIMI_BIND_ADDR", "bind_addr", None, Some("0.0.0.0:8443"))
+        });
+        clear_env();
+        let err = result.expect_err("expected a panic on invalid UTF-8, got a normal return");
+        let msg = err
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert!(
+            msg.contains("is set but is not valid UTF-8"),
+            "unexpected panic message: {msg}"
+        );
     }
 
     #[test]

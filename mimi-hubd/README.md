@@ -91,6 +91,11 @@ $ wc -c idq_resp.bin
 
 ## Quickstart (env vars)
 
+**This is a reference implementation, not yet hardened for unsupervised public exposure.** It's
+positioned as a reference/demo artifact — a real deployment you run against actual traffic should
+be network-restricted (an allowlist, not open to the internet), and current limitations (see
+`../SECURITY.md` and `../DIVERGENCES.md`) are disclosed here rather than discovered the hard way.
+
 You need `cargo` and `openssl` (or any tool that can issue a CA and a leaf certificate signed by
 it). This daemon requires mTLS: it will not start without a server certificate, a server key, and
 a client CA to validate incoming peer certificates against.
