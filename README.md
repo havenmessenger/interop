@@ -48,7 +48,8 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
   narrowed down.
 
 ## Why this is open
-- This is the runnable reference for interoperating with Haven.
+- This is the runnable reference for interoperating with Haven, and an interop layer any
+  service can adopt to speak MIMI/MLS with any other service.
 - The MIMI drafts are pre-standard and still moving; implementing them has already surfaced
   draft-level questions and divergences, which are documented here and raised with the
   working group.
