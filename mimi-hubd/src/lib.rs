@@ -779,8 +779,13 @@ impl Provider {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        self.store
-            .apply_participant_list_update(room_uri, &role_changes, &removed, &added, now_unix)
+        self.store.apply_participant_list_update(
+            room_uri,
+            &role_changes,
+            &removed,
+            &added,
+            now_unix,
+        )
     }
 }
 
@@ -1463,11 +1468,18 @@ mod tests {
         let hub = Provider::in_memory("mimi.havenmessenger.com").unwrap();
         let room = "mimi://mimi.havenmessenger.com/r/batch-cap";
         for i in 0..crate::store::MAX_PARTICIPANTS_PER_ROOM - 1 {
-            hub.add_participant(room, &format!("mimi://mimi.havenmessenger.com/u/seed{i}"), 1)
-                .unwrap();
+            hub.add_participant(
+                room,
+                &format!("mimi://mimi.havenmessenger.com/u/seed{i}"),
+                1,
+            )
+            .unwrap();
         }
         let pre_batch_count = hub.list_participants(room).unwrap().len();
-        assert_eq!(pre_batch_count, (crate::store::MAX_PARTICIPANTS_PER_ROOM - 1) as usize);
+        assert_eq!(
+            pre_batch_count,
+            (crate::store::MAX_PARTICIPANTS_PER_ROOM - 1) as usize
+        );
 
         let update = ParticipantListUpdate {
             added_participants: vec![
@@ -1483,7 +1495,10 @@ mod tests {
             ..Default::default()
         };
         let result = hub.apply_participant_list_update(room, &update, 1);
-        assert!(result.is_err(), "the batch must fail once the 2nd addition exceeds the cap");
+        assert!(
+            result.is_err(),
+            "the batch must fail once the 2nd addition exceeds the cap"
+        );
 
         let post_batch_count = hub.list_participants(room).unwrap().len();
         assert_eq!(
