@@ -488,7 +488,19 @@ impl SqliteStore {
         member_uri: &str,
         role_index: u32,
     ) -> anyhow::Result<()> {
-        self.conn.execute(
+        Self::set_member_role_on(&self.conn, room_uri, member_uri, role_index)
+    }
+
+    /// Shared body for `set_member_role`, parameterized over the connection so
+    /// `apply_participant_list_update` can run it inside a transaction (a `rusqlite::Transaction`
+    /// derefs to `Connection`, so a `&Transaction` coerces at the call site with no extra code).
+    fn set_member_role_on(
+        conn: &Connection,
+        room_uri: &str,
+        member_uri: &str,
+        role_index: u32,
+    ) -> anyhow::Result<()> {
+        conn.execute(
             "INSERT INTO member_role (room_uri, member_uri, role_index) VALUES (?1,?2,?3) \
              ON CONFLICT(room_uri, member_uri) DO UPDATE SET role_index=excluded.role_index",
             params![room_uri, member_uri, role_index as i64],
@@ -616,8 +628,19 @@ impl SqliteStore {
         authority: &str,
         now_unix: u64,
     ) -> anyhow::Result<()> {
-        let exists: bool = self
-            .conn
+        Self::add_participant_on(&self.conn, room_uri, member_uri, authority, now_unix)
+    }
+
+    /// Shared body for `add_participant` - see `set_member_role_on`'s doc for why this is
+    /// parameterized over the connection.
+    fn add_participant_on(
+        conn: &Connection,
+        room_uri: &str,
+        member_uri: &str,
+        authority: &str,
+        now_unix: u64,
+    ) -> anyhow::Result<()> {
+        let exists: bool = conn
             .query_row(
                 "SELECT 1 FROM room_participants WHERE room_uri = ?1 AND member_uri = ?2",
                 params![room_uri, member_uri],
@@ -626,8 +649,7 @@ impl SqliteStore {
             .optional()?
             .is_some();
         if !exists {
-            let room_known: bool = self
-                .conn
+            let room_known: bool = conn
                 .query_row(
                     "SELECT 1 FROM room_participants WHERE room_uri = ?1 LIMIT 1",
                     params![room_uri],
@@ -636,7 +658,7 @@ impl SqliteStore {
                 .optional()?
                 .is_some();
             if !room_known {
-                let rooms: i64 = self.conn.query_row(
+                let rooms: i64 = conn.query_row(
                     "SELECT COUNT(DISTINCT room_uri) FROM room_participants",
                     [],
                     |r| r.get(0),
@@ -645,7 +667,7 @@ impl SqliteStore {
                     anyhow::bail!("room cap reached ({MAX_ROOMS})");
                 }
             }
-            let members: i64 = self.conn.query_row(
+            let members: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM room_participants WHERE room_uri = ?1",
                 params![room_uri],
                 |r| r.get(0),
@@ -657,7 +679,7 @@ impl SqliteStore {
         // SECURITY: a re-add may refresh `ts` but MUST NOT silently flip `authority` (the routing key).
         // The WHERE guard makes the UPDATE a no-op if the authority differs; we then detect that and
         // reject, so a member's provider can only change via an explicit remove + fresh add.
-        let changed = self.conn.execute(
+        let changed = conn.execute(
             "INSERT INTO room_participants (room_uri, member_uri, authority, ts) VALUES (?1,?2,?3,?4) \
              ON CONFLICT(room_uri, member_uri) DO UPDATE SET ts=excluded.ts \
              WHERE room_participants.authority = excluded.authority",
@@ -674,11 +696,58 @@ impl SqliteStore {
     /// Remove a participant (R2/R3: a removed member no longer receives fan-out). Returns true if a row
     /// was removed.
     pub fn remove_participant(&self, room_uri: &str, member_uri: &str) -> anyhow::Result<bool> {
-        let n = self.conn.execute(
+        Self::remove_participant_on(&self.conn, room_uri, member_uri)
+    }
+
+    /// Shared body for `remove_participant` - see `set_member_role_on`'s doc for why this is
+    /// parameterized over the connection.
+    fn remove_participant_on(
+        conn: &Connection,
+        room_uri: &str,
+        member_uri: &str,
+    ) -> anyhow::Result<bool> {
+        let n = conn.execute(
             "DELETE FROM room_participants WHERE room_uri = ?1 AND member_uri = ?2",
             params![room_uri, member_uri],
         )?;
         Ok(n > 0)
+    }
+
+    /// Enact a full participant-list transition (role changes, removals, additions) as ONE SQLite
+    /// transaction, so a mid-sequence failure (e.g. the room hits MAX_PARTICIPANTS_PER_ROOM on the
+    /// 2nd of 2 additions) leaves the room's state UNCHANGED rather than partially applied. Order
+    /// matches the caller's own semantics (`mimi_core::participant_list::apply_update`): role
+    /// changes, then removals, then additions - all resolved against indices from the caller's
+    /// PRE-mutation snapshot, so this method does not itself re-derive or reorder anything.
+    ///
+    /// Uses `unchecked_transaction` (rusqlite's `&self`-compatible transaction API) rather than
+    /// `transaction` (which needs `&mut self`) because every other method on this store is `&self`
+    /// throughout - matching the existing shape rather than threading `&mut` through the one
+    /// caller that needs a transaction. Safe here: this connection is only ever reached through a
+    /// single `Provider`, itself held behind one mutex at the request-handling layer, so no caller
+    /// can hold two overlapping transactions on it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_participant_list_update(
+        &self,
+        room_uri: &str,
+        role_changes: &[(String, u32)],
+        removed: &[String],
+        added: &[(String, String, u32)],
+        now_unix: u64,
+    ) -> anyhow::Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for (member_uri, role_index) in role_changes {
+            Self::set_member_role_on(&tx, room_uri, member_uri, *role_index)?;
+        }
+        for member_uri in removed {
+            Self::remove_participant_on(&tx, room_uri, member_uri)?;
+        }
+        for (member_uri, authority, role_index) in added {
+            Self::add_participant_on(&tx, room_uri, member_uri, authority, now_unix)?;
+            Self::set_member_role_on(&tx, room_uri, member_uri, *role_index)?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// All participants of a room as (member_uri, authority), ordered for determinism.

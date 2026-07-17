@@ -713,7 +713,10 @@ impl Provider {
     }
 
     /// Enact a `ParticipantListUpdate` against this room's `room_participants`/`member_role`
-    /// tables. Indices in `update` resolve against [`Self::list_participants`]'s own ordering
+    /// tables, as ONE atomic transition (`store::apply_participant_list_update` wraps it all in a
+    /// single SQLite transaction - a mid-sequence failure, e.g. hitting the room's participant cap
+    /// on the 2nd of 2 additions, now leaves the room's state UNCHANGED rather than partially
+    /// applied). Indices in `update` resolve against [`Self::list_participants`]'s own ordering
     /// (alphabetical by URI) - the same canonical order this hub uses everywhere else it needs a
     /// stable participant ordering. A peer whose index computation used a different ordering
     /// convention will not apply correctly; this reference hub does not attempt to reconcile that
@@ -741,19 +744,43 @@ impl Provider {
         };
         apply_update(&current, update).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        for c in &update.changed_role_participants {
-            let uri = &current.participants[c.user_index as usize].user_uri;
-            self.set_member_role(room_uri, uri, c.role_index)?;
-        }
-        for &idx in &update.removed_indices {
-            let uri = &current.participants[idx as usize].user_uri;
-            self.remove_participant(room_uri, uri)?;
-        }
-        for a in &update.added_participants {
-            self.add_participant(room_uri, &a.user_uri, now_unix)?;
-            self.set_member_role(room_uri, &a.user_uri, a.role_index)?;
-        }
-        Ok(())
+        let role_changes: Vec<(String, u32)> = update
+            .changed_role_participants
+            .iter()
+            .map(|c| {
+                (
+                    current.participants[c.user_index as usize].user_uri.clone(),
+                    c.role_index,
+                )
+            })
+            .collect();
+        let removed: Vec<String> = update
+            .removed_indices
+            .iter()
+            .map(|&idx| current.participants[idx as usize].user_uri.clone())
+            .collect();
+        // authority is DERIVED from each added member's own URI (parsed), never supplied
+        // separately - the same validation the single-item `add_participant` method performs,
+        // hoisted here so the WHOLE transition validates before any mutation starts (an
+        // improvement over the old per-item interleaved validate-then-mutate order).
+        let added: Vec<(String, String, u32)> = update
+            .added_participants
+            .iter()
+            .map(|a| {
+                if a.user_uri.len() > MAX_URI_LEN {
+                    anyhow::bail!("member URI too long");
+                }
+                let m = MimiUri::parse(&a.user_uri)?;
+                if m.kind != Some(MimiKind::User) {
+                    anyhow::bail!("member must be a user URI: {}", a.user_uri);
+                }
+                let authority = m.authority.to_ascii_lowercase();
+                Ok((a.user_uri.clone(), authority, a.role_index))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        self.store
+            .apply_participant_list_update(room_uri, &role_changes, &removed, &added, now_unix)
     }
 }
 
@@ -1423,6 +1450,47 @@ mod tests {
         assert!(hub
             .add_participant(room, "mimi://mimi.havenmessenger.com/u/u0", 2)
             .is_ok());
+    }
+
+    #[test]
+    fn participant_list_update_batch_is_all_or_nothing_on_a_mid_sequence_cap_failure() {
+        // A batch that adds TWO new participants where the room is one below capacity: the first
+        // addition succeeds (brings the room to exactly the cap), the second fails (now over the
+        // cap). The whole batch is one transaction, so a failure on the second addition must
+        // leave the room at its PRE-batch participant count, not one-more-than-that - a partial
+        // application (one added, one rejected) would mean the room's real state and the caller's
+        // understanding of it have silently diverged.
+        let hub = Provider::in_memory("mimi.havenmessenger.com").unwrap();
+        let room = "mimi://mimi.havenmessenger.com/r/batch-cap";
+        for i in 0..crate::store::MAX_PARTICIPANTS_PER_ROOM - 1 {
+            hub.add_participant(room, &format!("mimi://mimi.havenmessenger.com/u/seed{i}"), 1)
+                .unwrap();
+        }
+        let pre_batch_count = hub.list_participants(room).unwrap().len();
+        assert_eq!(pre_batch_count, (crate::store::MAX_PARTICIPANTS_PER_ROOM - 1) as usize);
+
+        let update = ParticipantListUpdate {
+            added_participants: vec![
+                UserRolePair {
+                    user_uri: "mimi://mimi.havenmessenger.com/u/batch-a".into(),
+                    role_index: 1,
+                },
+                UserRolePair {
+                    user_uri: "mimi://mimi.havenmessenger.com/u/batch-b".into(),
+                    role_index: 1,
+                },
+            ],
+            ..Default::default()
+        };
+        let result = hub.apply_participant_list_update(room, &update, 1);
+        assert!(result.is_err(), "the batch must fail once the 2nd addition exceeds the cap");
+
+        let post_batch_count = hub.list_participants(room).unwrap().len();
+        assert_eq!(
+            post_batch_count, pre_batch_count,
+            "a failed batch must leave the room's participant count UNCHANGED - a partial \
+             application (one added, one rejected) is exactly the bug this fix closes"
+        );
     }
 
     // ---- SECURITY regression tests ----
