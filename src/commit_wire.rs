@@ -36,7 +36,7 @@ const MLS_CONTENT_TYPE_COMMIT: u8 = 3;
 /// decoder has no access to.
 const MLS_PROPOSAL_OR_REF_INLINE: u8 = 1;
 
-/// A custom proposal's `proposal_type` and opaque payload, extracted from a Commit. The caller
+/// A custom proposal's `proposal_type` and opaque payload, read out of a Commit. The caller
 /// checks `proposal_type` against the constant it expects
 /// (`participant_list::MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE` /
 /// `room_policy::MIMI_ROOM_POLICY_PROPOSAL_TYPE`) before decoding `payload`.
