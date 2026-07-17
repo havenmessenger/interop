@@ -21,7 +21,8 @@
 //! encoding `tls_codec::VLBytes` implements and this crate already uses throughout
 //! `protocol_wire.rs`, reused here via the same `bounded_run_input` budgeting helper.
 
-use tls_codec::{DeserializeBytes, VLBytes};
+use openmls::prelude::MlsMessageIn;
+use tls_codec::{Deserialize as TlsDeserialize, DeserializeBytes, VLBytes};
 
 use crate::protocol_wire::{bounded_run_input, WireError, MAX_RUN_AGGREGATE_BYTES};
 
@@ -94,6 +95,60 @@ fn read_opaque_vec<'a>(
     Ok((payload.as_slice().to_vec(), rest))
 }
 
+/// Validate that `bytes` is a COMPLETE, well-formed `PublicMessage`-framed MLSMessage carrying a
+/// Commit, using openmls's own `MlsMessageIn` decoder - the same mechanism
+/// `protocol_wire.rs::HandshakeBundle::decode` already uses for the identical purpose. openmls's
+/// decoder understands the FULL structure (`Commit.path`, `FramedContentAuthData`'s signature and
+/// confirmation_tag, `PublicMessage`'s membership_tag) that the hand-walk below deliberately does
+/// NOT re-implement (see the module doc for why the hand-walk stays independent of openmls's
+/// crate-private `Commit` type). Without this check, a byte stream ending immediately after
+/// `Commit.proposals`'s single entry - no path, no signature, no membership tag - passed the
+/// hand-walk unnoticed, because the hand-walk simply discards whatever bytes remain after the one
+/// proposal it reads. This does not change what a legitimate client sends or receives: every real
+/// openmls-produced Commit already carries a complete path/auth-data/membership-tag, so this only
+/// rejects inputs that were never valid MLS messages to begin with.
+fn require_complete_public_message_commit(bytes: &[u8]) -> Result<(), WireError> {
+    // MlsMessageIn::tls_deserialize can PANIC (not just Err) on certain malformed nested-length-
+    // prefix input - the same tls_codec-internal panic risk protocol_wire.rs already guards
+    // against for the identical decoder. catch_unwind turns a hostile/malformed input into a
+    // decode error instead of an unhandled panic in the request task.
+    let (msg, consumed) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut c: &[u8] = bytes;
+        MlsMessageIn::tls_deserialize(&mut c).map(|m| (m, bytes.len() - c.len()))
+    }))
+    .map_err(|_| WireError::Codec {
+        what: "Commit (full-message validation)",
+        detail: "malformed MLSMessage (decoder panicked)".into(),
+    })?
+    .map_err(|e| WireError::Codec {
+        what: "Commit (full-message validation)",
+        detail: format!("{e:?}"),
+    })?;
+    if consumed != bytes.len() {
+        return Err(WireError::Trailing {
+            what: "Commit (full-message validation)",
+            n: bytes.len() - consumed,
+        });
+    }
+    match msg.extract() {
+        openmls::prelude::MlsMessageBodyIn::PublicMessage(pm) => {
+            if pm.content_type() != openmls::prelude::ContentType::Commit {
+                return Err(WireError::Codec {
+                    what: "Commit (full-message validation)",
+                    detail: format!("expected a Commit, got {:?}", pm.content_type()),
+                });
+            }
+        }
+        other => {
+            return Err(WireError::Codec {
+                what: "Commit (full-message validation)",
+                detail: format!("expected a PublicMessage-framed Commit, got {other:?}"),
+            })
+        }
+    }
+    Ok(())
+}
+
 /// Decode a `PublicMessage`-wrapped Commit whose `proposals` list holds exactly one by-value
 /// custom proposal, returning its `proposal_type` and payload. See the module doc for the
 /// bounded scope (single custom proposal, no standard proposals in the same Commit, no
@@ -101,6 +156,8 @@ fn read_opaque_vec<'a>(
 pub fn decode_single_custom_proposal_commit(
     bytes: &[u8],
 ) -> Result<DecodedCustomProposal, WireError> {
+    require_complete_public_message_commit(bytes)?;
+
     let (version, rest) = read_u16(bytes, "MLSMessage.version")?;
     if version != MLS_PROTOCOL_VERSION_MLS10 {
         return Err(WireError::Codec {
@@ -248,6 +305,41 @@ mod tests {
         // by the assertion below, not asserted contents of `err` beyond its being an error).
         // The real safety property callers must apply is checking `proposal_type` before trusting
         // `payload` - exercised in the round-trip test below via an explicit rejection path.
+        let _ = err;
+    }
+
+    #[test]
+    fn rejects_a_commit_truncated_immediately_after_the_proposals_window() {
+        // A byte stream that ends right after Commit.proposals's single entry - no path, no
+        // FramedContentAuthData signature, no PublicMessage membership tag - must be REJECTED,
+        // not silently accepted with the rest of the structure simply absent.
+        // Truncate a real captured Commit to exactly the boundary right after its proposals
+        // window, by replaying the same field walk the decoder itself does (using its own private
+        // helpers, so this test tracks the decoder's actual field order), and confirm the
+        // now-truncated bytes are refused.
+        let full = from_hex(CAPTURED_PARTICIPANT_LIST_COMMIT);
+        let (_version, rest) = read_u16(&full, "v").unwrap();
+        let (_wire_format, rest) = read_u16(rest, "w").unwrap();
+        let (_group_id, rest) = read_opaque_vec(rest, "g").unwrap();
+        let (_epoch, rest) = read_u64(rest, "e").unwrap();
+        let (_sender_type, rest) = read_u8(rest, "s").unwrap();
+        let (_leaf_index, rest) = read_u32(rest, "l").unwrap();
+        let (_auth_data, rest) = read_opaque_vec(rest, "a").unwrap();
+        let (_content_type, rest) = read_u8(rest, "c").unwrap();
+        let (_proposals_window, rest_after_commit) = read_opaque_vec(rest, "p").unwrap();
+        let consumed = full.len() - rest_after_commit.len();
+        assert!(
+            !rest_after_commit.is_empty(),
+            "sanity: the real fixture must actually HAVE trailing bytes (path/auth-data/\
+             membership tag) for this test to prove anything -- if this fails, the fixture's \
+             shape changed"
+        );
+        let truncated = &full[..consumed];
+
+        let err = decode_single_custom_proposal_commit(truncated).expect_err(
+            "a Commit truncated right after Commit.proposals must be rejected, not silently \
+             accepted with the rest of the structure simply absent",
+        );
         let _ = err;
     }
 
