@@ -193,7 +193,7 @@ pub fn keypackage_ref(key_package_bytes: &[u8]) -> Result<Vec<u8>, GateError> {
 /// **K5 accept-gate - Welcome.** Call BEFORE `StagedWelcome::new_from_welcome` on any inbound
 /// Welcome from a foreign provider (we are being added cross-provider). Returns `Ok(())` only
 /// for the pinned suite. Without this gate, an unvalidated foreign-suite Welcome would reach
-/// and drive openmls's libcrux ChaCha implementation.
+/// and drive OpenMlsRustCrypto's ChaCha implementation.
 ///
 /// Mechanism: deserialize the `MlsMessage`, extract the `Welcome`, and read its ciphersuite
 /// from the wire. `Welcome::ciphersuite()` is `pub(crate)` in openmls 0.8.1 (not callable from
