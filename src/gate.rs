@@ -12,9 +12,9 @@
 //!
 //! ## Why the gate is load-bearing
 //! Haven's real receive path **follows the wire's ciphersuite**: a
-//! self-consistent suite-`0x0003` Welcome opens via `process_welcome`, driving the libcrux
-//! ChaCha20-Poly1305 HPKE-open path (RUSTSEC-2026-0124, HIGH 8.2, panic-on-overlong, blocked
-//! upstream). `KeyPackageIn::validate()` is suite-agnostic too. Native chat is safe ONLY
+//! self-consistent suite-`0x0003` Welcome opens via `process_welcome`, driving
+//! OpenMlsRustCrypto's ChaCha20-Poly1305 HPKE-open path. `KeyPackageIn::validate()` is
+//! suite-agnostic too. Native chat is safe ONLY
 //! because we never *hold* a `0x0003` KeyPackage + openmls rejects cross-suite Adds - neither
 //! protection applies to a MIMI path that ingests **foreign** objects whose suite the *remote*
 //! chooses. So a MIMI provider MUST hard-reject any non-`0x0001` object **before** handing
@@ -139,7 +139,7 @@ fn deserialize_keypackage_in_no_panic(
 /// foreign provider (MIMI §5.2 keyMaterial). Returns `Ok(())` only for the pinned suite.
 ///
 /// Mechanism: deserialize → `validate()` (signature-only; this does NOT instantiate any AEAD,
-/// so validating a foreign KeyPackage cannot trip the libcrux panic) →
+/// so validating a foreign KeyPackage cannot reach OpenMlsRustCrypto's AEAD at all) →
 /// read the validated `ciphersuite()` → refuse if it is not `0x0001`. Refusing HERE means the
 /// foreign KeyPackage never reaches `add_member`'s HPKE-seal (where ChaCha would be driven).
 pub fn mimi_gate_keypackage(key_package_bytes: &[u8]) -> Result<(), GateError> {
@@ -237,9 +237,10 @@ pub fn mimi_gate_welcome(mls_message_bytes: &[u8]) -> Result<(), GateError> {
 
 /// **K5 accept-gate - GroupInfo (Full representation only).** Call BEFORE treating a `groupInfo`
 /// (§5.6, or a Commit's Full-representation `groupInfoOption`) as viable join material. Returns
-/// `Ok(())` only for the pinned suite. This closes the same libcrux-reachability class
-/// `mimi_gate_welcome` closes for Welcome, on a second live path: `join_by_external_commit` derives
-/// its HPKE parameters from the GroupInfo's ciphersuite, which a remote peer chooses.
+/// `Ok(())` only for the pinned suite. This closes the same foreign-suite AEAD-reachability
+/// class `mimi_gate_welcome` closes for Welcome, on a second live path:
+/// `join_by_external_commit` derives its HPKE parameters from the GroupInfo's ciphersuite,
+/// which a remote peer chooses.
 ///
 /// Mechanism: `openmls::messages::group_info::VerifiableGroupInfo` derives `TlsDeserialize`
 /// unconditionally (not behind a feature flag) and exposes `ciphersuite()` as the unverified
@@ -470,7 +471,7 @@ mod tests {
         let err = mimi_gate_welcome(&w_cc).unwrap_err();
         assert!(
             err.to_string().contains("0x0003"),
-            "0x0003 Welcome must be refused BEFORE openmls processing (the libcrux ChaCha path), got: {err}"
+            "0x0003 Welcome must be refused BEFORE openmls processing (the OpenMlsRustCrypto ChaCha path), got: {err}"
         );
     }
 
