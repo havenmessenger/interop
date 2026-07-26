@@ -33,7 +33,12 @@
 //!
 //! Why it's load-bearing: GROUP interop with a NON-Haven MIMI client needs the roster via AppSync - a
 //! foreign client does not parse Haven's URI-in-credential convention. This is the portable primitive.
-//! The hub encodes and decodes it in add and remove commits.
+//!
+//! Consumers: this module is the codec, not a deployment. A delivery service is free to build on it,
+//! but is not required to, and the reference provider in this project does not: it treats a
+//! room-changing submission as opaque and fans it out unparsed, tracking a member's role in its own
+//! store instead, written over its authenticated admin API. A deployment that wants the hub's view of
+//! roles to follow the in-group list has to bridge the two deliberately; nothing here does it for you.
 //!
 //! STILL HAVEN-CHOSEN (not resolved by §7.5): the custom `ProposalType` value `0xF7A0` (IANA/WG
 //! registration open) and the credential↔URI binding (BasicCredential-carrying-URI vs X.509
