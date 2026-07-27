@@ -55,6 +55,9 @@ aes = "0.8"
 # (openmls's dependency tree); pinned explicitly here because a *library* primitive should call a
 # portable crate rather than the /dev/urandom-only shortcut mimi-content's CLI bin uses.
 getrandom = "0.2"
+# Wipes derived secret material on drop (virtual_clients::EpochSecrets) — same crate, same
+# posture crypto-core's MlsSigner already uses for a held signing key.
+zeroize = "1"
 
 [dev-dependencies]
 # Test-only: the gate tests build a Lifetime via serde_json::json! to avoid SystemTime::now().

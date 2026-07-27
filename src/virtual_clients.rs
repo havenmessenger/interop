@@ -50,6 +50,7 @@
 
 use openmls_traits::{crypto::OpenMlsCrypto, types::Ciphersuite};
 use tls_codec::{Error as TlsError, Serialize as TlsSerialize, Size as TlsSize, VLBytes};
+use zeroize::Zeroizing;
 
 use fpe::ff1::{FlexibleNumeralString, FF1};
 
@@ -198,13 +199,31 @@ impl TryFrom<u8> for VirtualClientOperationType {
 /// additionally keys the Virtual Client Operation Secret Tree (not modeled as a full tree here - see
 /// [`derive_initial_operation_ratchet_secret`] for the one derivation step this module implements from
 /// that tree: the per-leaf, per-operation-type initial ratchet secret).
-#[derive(Debug, Clone)]
+///
+/// Fields are `Zeroizing<Vec<u8>>`, wiped on drop, matching the posture the `crypto` crate's
+/// `MlsSigner` already uses for a held signing key. `Debug` is implemented manually below to
+/// redact every field - the derived `Debug` on `Zeroizing<Z>` forwards to `Z`'s own impl and
+/// would print the raw bytes otherwise. `Clone` is intentionally not derived: no call site in
+/// this crate clones a value of this type, and a secrets-holding struct should not offer an
+/// unwiped duplication path by default.
 pub struct EpochSecrets {
-    pub epoch_id: Vec<u8>,
-    pub epoch_base_secret: Vec<u8>,
-    pub epoch_encryption_key: Vec<u8>,
-    pub generation_id_secret: Vec<u8>,
-    pub reuse_guard_secret: Vec<u8>,
+    pub epoch_id: Zeroizing<Vec<u8>>,
+    pub epoch_base_secret: Zeroizing<Vec<u8>>,
+    pub epoch_encryption_key: Zeroizing<Vec<u8>>,
+    pub generation_id_secret: Zeroizing<Vec<u8>>,
+    pub reuse_guard_secret: Zeroizing<Vec<u8>>,
+}
+
+impl std::fmt::Debug for EpochSecrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EpochSecrets")
+            .field("epoch_id", &"[REDACTED]")
+            .field("epoch_base_secret", &"[REDACTED]")
+            .field("epoch_encryption_key", &"[REDACTED]")
+            .field("generation_id_secret", &"[REDACTED]")
+            .field("reuse_guard_secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// §5.2: derive the five per-epoch virtual-client secrets from `emulator_epoch_secret`
@@ -216,31 +235,36 @@ pub fn derive_epoch_secrets(
     emulator_epoch_secret: &[u8],
 ) -> Result<EpochSecrets, VirtualClientError> {
     Ok(EpochSecrets {
-        epoch_id: derive_secret(crypto, ciphersuite, emulator_epoch_secret, "Epoch ID")?,
-        epoch_base_secret: derive_secret(
+        epoch_id: Zeroizing::new(derive_secret(
+            crypto,
+            ciphersuite,
+            emulator_epoch_secret,
+            "Epoch ID",
+        )?),
+        epoch_base_secret: Zeroizing::new(derive_secret(
             crypto,
             ciphersuite,
             emulator_epoch_secret,
             "Base Secret",
-        )?,
-        epoch_encryption_key: derive_secret(
+        )?),
+        epoch_encryption_key: Zeroizing::new(derive_secret(
             crypto,
             ciphersuite,
             emulator_epoch_secret,
             "Encryption Key",
-        )?,
-        generation_id_secret: derive_secret(
+        )?),
+        generation_id_secret: Zeroizing::new(derive_secret(
             crypto,
             ciphersuite,
             emulator_epoch_secret,
             "Generation ID Secret",
-        )?,
-        reuse_guard_secret: derive_secret(
+        )?),
+        reuse_guard_secret: Zeroizing::new(derive_secret(
             crypto,
             ciphersuite,
             emulator_epoch_secret,
             "Reuse Guard",
-        )?,
+        )?),
     })
 }
 
@@ -567,6 +591,35 @@ mod tests {
             for j in (i + 1)..all.len() {
                 assert_ne!(all[i], all[j], "secrets at {i} and {j} collided");
             }
+        }
+    }
+
+    #[test]
+    fn epoch_secrets_debug_output_is_fully_redacted() {
+        let backend = crypto();
+        let secrets = derive_epoch_secrets(backend.crypto(), SUITE, &[0x77u8; 32]).unwrap();
+        let debug_output = format!("{secrets:?}");
+
+        // Every field's own redaction placeholder is present.
+        assert_eq!(debug_output.matches("[REDACTED]").count(), 5);
+
+        // None of the five actual derived secret bytes (hex-encoded) appear anywhere in the
+        // debug output - the affirmative check, not just the placeholder's presence.
+        for secret in [
+            &secrets.epoch_id,
+            &secrets.epoch_base_secret,
+            &secrets.epoch_encryption_key,
+            &secrets.generation_id_secret,
+            &secrets.reuse_guard_secret,
+        ] {
+            let hex_secret = secret
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            assert!(
+                !debug_output.contains(&hex_secret),
+                "a secret's hex bytes leaked into the Debug output"
+            );
         }
     }
 
