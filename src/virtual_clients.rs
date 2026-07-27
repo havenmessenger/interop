@@ -200,12 +200,22 @@ impl TryFrom<u8> for VirtualClientOperationType {
 /// [`derive_initial_operation_ratchet_secret`] for the one derivation step this module implements from
 /// that tree: the per-leaf, per-operation-type initial ratchet secret).
 ///
-/// Fields are `Zeroizing<Vec<u8>>`, wiped on drop, matching the posture the `crypto` crate's
-/// `MlsSigner` already uses for a held signing key. `Debug` is implemented manually below to
-/// redact every field - the derived `Debug` on `Zeroizing<Z>` forwards to `Z`'s own impl and
-/// would print the raw bytes otherwise. `Clone` is intentionally not derived: no call site in
-/// this crate clones a value of this type, and a secrets-holding struct should not offer an
-/// unwiped duplication path by default.
+/// Fields are `Zeroizing<Vec<u8>>`, wiped over their full backing capacity on drop, matching
+/// the posture the `crypto` crate's `MlsSigner` already uses for a held signing key. `Debug`
+/// is implemented manually below to redact every field when this STRUCT is formatted as a
+/// whole - the derived `Debug` on `Zeroizing<Z>` forwards to `Z`'s own impl and would print
+/// the raw bytes otherwise. `Clone` is intentionally not derived: no call site in this crate
+/// clones a value of this type.
+///
+/// Two boundaries this redaction does NOT close, disclosed rather than hidden: (1) fields stay
+/// `pub` (needed so existing callers keep direct field access), so formatting a SINGLE field
+/// directly - `format!("{:?}", secrets.epoch_id)` - bypasses the struct-level redaction and
+/// prints the raw bytes via `Zeroizing`'s own derived `Debug`; a caller can likewise produce an
+/// unwiped copy via `secrets.epoch_id.to_vec()` (deref, then copy) without needing `Clone` on
+/// the outer struct at all. (2) the wipe-on-drop guarantee covers this crate's own two heap
+/// allocations for each secret (the KDF backend's returned buffer and this struct's copy of
+/// it) - it cannot reach copies a caller makes through the public fields, nor any internal
+/// buffer inside a swapped-in `OpenMlsCrypto` backend this crate does not control.
 pub struct EpochSecrets {
     pub epoch_id: Zeroizing<Vec<u8>>,
     pub epoch_base_secret: Zeroizing<Vec<u8>>,
@@ -600,11 +610,15 @@ mod tests {
         let secrets = derive_epoch_secrets(backend.crypto(), SUITE, &[0x77u8; 32]).unwrap();
         let debug_output = format!("{secrets:?}");
 
-        // Every field's own redaction placeholder is present.
+        // Every field's own redaction placeholder is present, exactly once each.
         assert_eq!(debug_output.matches("[REDACTED]").count(), 5);
 
-        // None of the five actual derived secret bytes (hex-encoded) appear anywhere in the
-        // debug output - the affirmative check, not just the placeholder's presence.
+        // None of the five actual derived secret bytes appear anywhere in the debug output,
+        // in either byte representation a bare Vec<u8> Debug impl could have produced -
+        // decimal (Vec<u8>'s own derived format, e.g. "[119, 42, ...]") or hex (a caller's
+        // own re-encoding). This is the affirmative check, not just the placeholder count:
+        // it fails if a future edit ever lets a field's real bytes reach this struct's own
+        // Debug output, not only if the placeholder count changes.
         for secret in [
             &secrets.epoch_id,
             &secrets.epoch_base_secret,
@@ -620,7 +634,17 @@ mod tests {
                 !debug_output.contains(&hex_secret),
                 "a secret's hex bytes leaked into the Debug output"
             );
+            let decimal_secret = format!("{:?}", secret.as_slice());
+            assert!(
+                !debug_output.contains(&decimal_secret),
+                "a secret's decimal byte list leaked into the Debug output"
+            );
         }
+
+        // This test covers EpochSecrets' own Debug output only. Printing a single public
+        // field directly (`format!("{:?}", secrets.epoch_id)`) is NOT covered by this
+        // redaction: `Zeroizing<Vec<u8>>` derives its own Debug, which forwards to the
+        // inner Vec's - see the field-level note on the struct definition above.
     }
 
     #[test]
