@@ -7,6 +7,9 @@
 //! - [`content`] - the MIMI content codec (content-09 §4–6): deterministic CBOR (§4.2.1, NOT the
 //!   forbidden length-first order), the part type system, and the validation MUSTs (depth, nohtml,
 //!   reply-loop).
+//! - [`external`] - content-09 §4.4 ExternalPart glue: sealing a blob into an out-of-band
+//!   reference and consuming one. Generic over caller-supplied AEAD and hash traits, so the crate
+//!   performs no cryptography and takes no cryptographic dependency.
 //! - [`uri`] - MIMI identifier URIs (protocol-06 §4): the `mimi://authority/{u|r|d}/path` addressing
 //!   primitive - authority extraction is how a provider knows the destination.
 //! - [`virtual_clients`] - draft-ietf-mls-virtual-clients-01 §5-§6: the emulation-group secret
@@ -25,6 +28,7 @@
 pub mod commit_wire;
 pub mod consent;
 pub mod content;
+pub mod external;
 pub mod gate;
 pub mod participant_list;
 pub mod protocol_wire;

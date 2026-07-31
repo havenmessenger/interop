@@ -76,3 +76,9 @@ W5
 W6
 W7
 W8
+
+# rustc diagnostic codes cited in doc examples (external.rs). A compile_fail example that names the
+# code it expects fails for that reason specifically, rather than for any reason at all - a typo or a
+# renamed item would otherwise satisfy it silently. The codes are public, self-resolving identifiers
+# in the rustc error index.
+E0451
