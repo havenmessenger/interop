@@ -7,6 +7,8 @@
 //! - [`content`] - the MIMI content codec (content-09 §4–6): deterministic CBOR (§4.2.1, NOT the
 //!   forbidden length-first order), the part type system, and the validation MUSTs (depth, nohtml,
 //!   reply-loop).
+//! - [`message_id`] - the content-09 §3.3 message ID derivation: the hash over sender URI, room URI,
+//!   encoded message and salt that names a message for reply, reaction, edit, delete and report.
 //! - [`uri`] - MIMI identifier URIs (protocol-06 §4): the `mimi://authority/{u|r|d}/path` addressing
 //!   primitive - authority extraction is how a provider knows the destination.
 //! - [`virtual_clients`] - draft-ietf-mls-virtual-clients-01 §5-§6: the emulation-group secret
@@ -26,10 +28,13 @@ pub mod commit_wire;
 pub mod consent;
 pub mod content;
 pub mod gate;
+pub mod message_id;
 pub mod participant_list;
 pub mod protocol_wire;
 pub mod room_policy;
 #[cfg(all(feature = "external-ops", test))]
 mod spec_capability_proof;
+#[cfg(test)]
+mod test_vectors;
 pub mod uri;
 pub mod virtual_clients;
