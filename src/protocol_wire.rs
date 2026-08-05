@@ -55,6 +55,17 @@ pub type Protocol = u8;
 pub const PROTOCOL_RESERVED: Protocol = 0;
 pub const PROTOCOL_MLS10: Protocol = 1;
 
+/// The unauthenticated routing header carried in an MLS protocol envelope.
+///
+/// This is deliberately limited to fields exposed before decryption. A delivery service can use the
+/// group id and epoch to route or order ciphertext, but cannot learn its sender or plaintext from this
+/// value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MlsOuterHeader {
+    pub group_id: Vec<u8>,
+    pub epoch: u64,
+}
+
 /// Wire error for this module. Fail-closed: every decode path either produces a valid value or an
 /// error, never a partially-populated struct.
 #[derive(Debug, thiserror::Error)]
@@ -86,6 +97,29 @@ pub enum WireError {
     /// (`RunBudget`) before this decoder finished parsing it.
     #[error("{what}: {detail}")]
     RunBudgetExceeded { what: &'static str, detail: String },
+}
+
+/// Read an MLS protocol envelope's outer routing header without a decryption key.
+///
+/// The MLS envelope parser validates only public framing. This function exposes no content or sender
+/// fields, so a delivery service can route a sealed application message without gaining a path to its
+/// plaintext.
+pub fn inspect_mls_outer_header(bytes: &[u8]) -> Result<MlsOuterHeader, WireError> {
+    let message = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        MlsMessageIn::tls_deserialize_exact(bytes)
+    }))
+    .map_err(|_| WireError::Codec {
+        what: "MLSMessage",
+        detail: "malformed MLSMessage (decoder panicked)".into(),
+    })?
+    .map_err(|e| WireError::MlsMessage(format!("{e:?}")))?
+    .try_into_protocol_message()
+    .map_err(|e| WireError::MlsMessage(format!("{e:?}")))?;
+
+    Ok(MlsOuterHeader {
+        group_id: message.group_id().as_slice().to_vec(),
+        epoch: message.epoch().as_u64(),
+    })
 }
 
 fn codec_err(what: &'static str, e: TlsError) -> WireError {
@@ -2864,7 +2898,7 @@ mod tests {
         }
     }
 
-    fn real_application_message() -> MlsMessageOut {
+    fn real_application_message() -> (MlsMessageOut, Vec<u8>, u64) {
         let provider = OpenMlsRustCrypto::default();
         let suite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
         let scheme = openmls::prelude::SignatureScheme::ED25519;
@@ -2895,13 +2929,27 @@ mod tests {
         let cfg = MlsGroupCreateConfig::builder().ciphersuite(suite).build();
         let mut group = MlsGroup::new(&provider, &signer, &cfg, cwk).unwrap();
         group
+            .propose_self_update(
+                &provider,
+                &signer,
+                openmls::treesync::LeafNodeParameters::default(),
+            )
+            .unwrap();
+        let (_commit, _welcome, _group_info) = group
+            .commit_to_pending_proposals(&provider, &signer)
+            .unwrap();
+        group.merge_pending_commit(&provider).unwrap();
+        let group_id = group.group_id().as_slice().to_vec();
+        let epoch = group.epoch().as_u64();
+        let message = group
             .create_message(&provider, &signer, b"hello mimi wire test")
-            .unwrap()
+            .unwrap();
+        (message, group_id, epoch)
     }
 
     #[test]
     fn submit_message_request_round_trip_with_real_mls_message() {
-        let msg = real_application_message();
+        let (msg, _, _) = real_application_message();
         let req = SubmitMessageRequest::from_mls_message(&msg, "mimi://a.example/u/alice").unwrap();
         let encoded = req.encode().unwrap();
         let decoded = SubmitMessageRequest::decode(&encoded).unwrap();
@@ -2919,7 +2967,7 @@ mod tests {
 
     #[test]
     fn submit_message_request_decode_rejects_trailing_bytes_after_uri() {
-        let msg = real_application_message();
+        let (msg, _, _) = real_application_message();
         let req = SubmitMessageRequest::from_mls_message(&msg, "mimi://a.example/u/alice").unwrap();
         let mut encoded = req.encode().unwrap();
         encoded.push(0xEE);
@@ -2935,6 +2983,27 @@ mod tests {
         assert!(matches!(
             SubmitMessageRequest::decode(&bytes),
             Err(WireError::MlsMessage(_))
+        ));
+    }
+
+    #[test]
+    fn outer_header_inspection_reads_ciphertext_without_a_key_or_plaintext() {
+        let (msg, group_id, epoch) = real_application_message();
+        let mut ciphertext = msg.tls_serialize_detached().unwrap();
+        *ciphertext.last_mut().unwrap() ^= 0x80;
+
+        assert_eq!(
+            inspect_mls_outer_header(&ciphertext).unwrap(),
+            MlsOuterHeader { group_id, epoch },
+            "the outer header remains readable when the sealed body is changed"
+        );
+    }
+
+    #[test]
+    fn outer_header_inspection_refuses_a_malformed_envelope() {
+        assert!(matches!(
+            inspect_mls_outer_header(&[0xff; 32]),
+            Err(WireError::MlsMessage(_)) | Err(WireError::Codec { .. })
         ));
     }
 
@@ -3840,7 +3909,7 @@ mod tests {
         // Note: the draft's literal §5.5 struct starts directly with `uint64
         // timestamp` -- hand-construct the expected bytes independently of `.encode()` to prove
         // there is no leading Protocol byte, not just that encode/decode agree with each other.
-        let msg = real_application_message();
+        let (msg, _, _) = real_application_message();
         let mls_bytes = msg.tls_serialize_detached().unwrap();
         let fm = FanoutMessage {
             protocol: PROTOCOL_MLS10,
