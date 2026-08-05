@@ -103,6 +103,10 @@ impl RoomPolicy {
         self.roles.iter().find(|r| r.role_index == role_index)
     }
 
+    fn role_is_defined_or_reserved(&self, role_index: u32) -> bool {
+        matches!(role_index, ROLE_NON_PARTICIPANT | ROLE_BANNED) || self.role(role_index).is_some()
+    }
+
     /// P5: does the member's role allow sending a message? Reserved roles (non-participant/banned) never
     /// can. An unknown role index cannot send (fail-closed).
     pub fn can_send_message(&self, role_index: u32) -> bool {
@@ -115,7 +119,8 @@ impl RoomPolicy {
     }
 
     /// P1 + structural validation: role indices unique; the reserved indices, if present, are well-formed
-    /// (1 = "banned"); a non-participant/banned role must not carry capabilities.
+    /// (1 = "banned"); a non-participant/banned role must not carry capabilities; and every ordinary
+    /// role reference in an authorized role-change transition names a defined role.
     pub fn validate(&self) -> Result<(), RoomPolicyError> {
         let mut seen = std::collections::HashSet::new();
         for r in &self.roles {
@@ -144,6 +149,25 @@ impl RoomPolicy {
                     "fixed_membership room: role {} must not hold AddParticipant (P3)",
                     r.role_index
                 )));
+            }
+        }
+
+        for r in &self.roles {
+            for transition in &r.authorized_role_changes {
+                if !self.role_is_defined_or_reserved(transition.from_role_index) {
+                    return Err(RoomPolicyError::RoleDefinition(format!(
+                        "role {} authorizes a transition from undefined role {}",
+                        r.role_index, transition.from_role_index
+                    )));
+                }
+                for target_role_index in &transition.target_role_indexes {
+                    if !self.role_is_defined_or_reserved(*target_role_index) {
+                        return Err(RoomPolicyError::RoleDefinition(format!(
+                            "role {} authorizes a transition to undefined role {}",
+                            r.role_index, target_role_index
+                        )));
+                    }
+                }
             }
         }
         Ok(())
@@ -316,6 +340,53 @@ mod tests {
             vec![Capability::SendMessage],
         ));
         assert!(p3.validate().is_err(), "banned role must hold no caps");
+    }
+
+    #[test]
+    fn p1_validate_rejects_undefined_transition_roles_but_allows_reserved_roles() {
+        let mut undefined_target = sample_policy();
+        undefined_target.roles[2].authorized_role_changes[0].target_role_indexes = vec![99];
+        assert!(
+            undefined_target.validate().is_err(),
+            "a transition to undefined role 99 is rejected"
+        );
+
+        let mut undefined_source = sample_policy();
+        undefined_source.roles[2].authorized_role_changes[0].from_role_index = 99;
+        assert!(
+            undefined_source.validate().is_err(),
+            "a transition from undefined role 99 is rejected"
+        );
+
+        let founding_shaped = RoomPolicy {
+            base: BaseRoomPolicy::default(),
+            roles: vec![
+                Role {
+                    role_index: 2,
+                    role_name: "admin".into(),
+                    capabilities: vec![
+                        Capability::AddParticipant,
+                        Capability::RemoveParticipant,
+                        Capability::Ban,
+                    ],
+                    authorized_role_changes: vec![
+                        SingleSourceRoleChangeTargets {
+                            from_role_index: ROLE_NON_PARTICIPANT,
+                            target_role_indexes: vec![3],
+                        },
+                        SingleSourceRoleChangeTargets {
+                            from_role_index: 3,
+                            target_role_indexes: vec![ROLE_NON_PARTICIPANT, ROLE_BANNED],
+                        },
+                    ],
+                },
+                member_role(3, "member", vec![]),
+            ],
+        };
+        assert!(
+            founding_shaped.validate().is_ok(),
+            "reserved roles do not need role definitions"
+        );
     }
 
     #[test]
