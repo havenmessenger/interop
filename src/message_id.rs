@@ -136,7 +136,12 @@ impl HashAlgorithm {
         }
     }
 
-    fn hash(self, input: &[u8]) -> [u8; 32] {
+    /// Hash bytes with this registry-selected algorithm.
+    ///
+    /// This is public so content-09 consumers can compute the `contentHash` over an external
+    /// object's ciphertext using the same named-information-hash registry as message IDs.
+    #[must_use]
+    pub fn digest(self, input: &[u8]) -> [u8; 32] {
         match self {
             Self::Sha256 => Sha256::digest(input).into(),
         }
@@ -204,7 +209,7 @@ pub fn derive_message_id(
     message: &MimiMessage<'_>,
 ) -> Result<MessageId, MessageIdError> {
     let preimage = message_id_preimage(sender_uri, room_uri, message.as_bytes(), message.salt())?;
-    let digest = algorithm.hash(&preimage);
+    let digest = algorithm.digest(&preimage);
 
     let mut id = Vec::with_capacity(MESSAGE_ID_LEN);
     id.push(algorithm.id());

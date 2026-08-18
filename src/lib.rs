@@ -27,6 +27,7 @@
 pub mod commit_wire;
 pub mod consent;
 pub mod content;
+pub mod external;
 pub mod gate;
 pub mod message_id;
 pub mod participant_list;
