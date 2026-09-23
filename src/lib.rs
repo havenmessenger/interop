@@ -36,6 +36,8 @@ pub mod protocol_wire;
 pub mod room_policy;
 #[cfg(all(feature = "external-ops", test))]
 mod spec_capability_proof;
+#[cfg(feature = "test-helpers")]
+pub mod test_helpers;
 #[cfg(test)]
 mod test_vectors;
 pub mod uri;

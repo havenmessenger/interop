@@ -80,6 +80,8 @@ hex = "0.4"
 # real - no Haven call site constructs or accepts either mechanism, under either feature state.
 default = []
 external-ops = []
+test-helpers = []
+browser-js = ["openmls/js"]
 
 [lints.clippy]
 # Discipline: no panics/unwrap in non-test code (the prod fns return Result;
