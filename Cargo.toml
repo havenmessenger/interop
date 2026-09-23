@@ -60,6 +60,7 @@ sha2 = "0.10"
 # (openmls's dependency tree); pinned explicitly here because a *library* primitive should call a
 # portable crate rather than the /dev/urandom-only shortcut mimi-content's CLI bin uses.
 getrandom = "0.2"
+hex = { version = "0.4", optional = true }
 # Wipes derived secret material on drop (virtual_clients::EpochSecrets) — same crate, same
 # posture crypto-core's MlsSigner already uses for a held signing key.
 zeroize = "1"
@@ -80,7 +81,7 @@ hex = "0.4"
 # real - no Haven call site constructs or accepts either mechanism, under either feature state.
 default = []
 external-ops = []
-test-helpers = []
+test-helpers = ["dep:hex"]
 browser-js = ["openmls/js"]
 
 [lints.clippy]
