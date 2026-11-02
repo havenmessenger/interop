@@ -37,7 +37,7 @@
 
 use openmls::ciphersuite::signature::SignaturePublicKey;
 use openmls::prelude::{
-    Ciphersuite, Credential, KeyPackageIn, MlsMessageIn, MlsMessageOut,
+    Capabilities, Ciphersuite, Credential, KeyPackageIn, MlsMessageIn, MlsMessageOut,
     RequiredCapabilitiesExtension,
 };
 use tls_codec::{
@@ -1111,6 +1111,145 @@ pub enum KeyMaterialResponse {
         user_uri: IdentifierUri,
         code: KeyMaterialUserCode,
     },
+    /// Any other well-formed response: the user status as sent and every client entry in order. A response of one of the
+    /// shapes above decodes to that variant; everything else, including several clients, a client URI that is not the
+    /// user's, a `nothingCompatible` entry and the user codes that carry no client, decodes to this one, so a decode followed
+    /// by an encode returns the bytes that were read.
+    Clients {
+        user_uri: IdentifierUri,
+        user_status: KeyMaterialUserCode,
+        clients: Vec<ClientKeyMaterial>,
+    },
+}
+
+/// §5.2 `ClientKeyMaterial`: one client's status and what it supplied. `key_package` is present exactly for `success`
+/// (already suite-gated when decoded); `capabilities` can be present only for `nothingCompatible` (the draft makes them
+/// optional there) and is kept as the bytes that were sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientKeyMaterial {
+    pub status: KeyMaterialClientCode,
+    pub client_uri: IdentifierUri,
+    pub key_package: Option<Vec<u8>>,
+    pub capabilities: Option<Vec<u8>>,
+}
+
+impl ClientKeyMaterial {
+    fn encode_into(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        let shaped = match self.status {
+            KeyMaterialClientCode::Success => {
+                self.key_package.is_some() && self.capabilities.is_none()
+            }
+            KeyMaterialClientCode::KeyMaterialExhausted => {
+                self.key_package.is_none() && self.capabilities.is_none()
+            }
+            KeyMaterialClientCode::NothingCompatible => self.key_package.is_none(),
+        };
+        if !shaped {
+            return Err(WireError::Codec {
+                what: "ClientKeyMaterial",
+                detail: format!("fields do not fit client status {:?}", self.status),
+            });
+        }
+        out.push(self.status.to_u8());
+        self.client_uri
+            .to_vlbytes()
+            .tls_serialize(out)
+            .map_err(|e| codec_err("clientUri", e))?;
+        match self.status {
+            KeyMaterialClientCode::Success => {
+                out.extend_from_slice(self.key_package.as_deref().unwrap_or_default());
+            }
+            KeyMaterialClientCode::KeyMaterialExhausted => {}
+            KeyMaterialClientCode::NothingCompatible => match &self.capabilities {
+                Some(capabilities) => {
+                    out.push(1);
+                    out.extend_from_slice(capabilities);
+                }
+                None => out.push(0),
+            },
+        }
+        Ok(())
+    }
+
+    /// Read one entry from the front of `window`; returns it and the bytes it used.
+    fn decode_from(window: &[u8]) -> Result<(Self, usize), WireError> {
+        let (&status_byte, rest) = window.split_first().ok_or_else(|| WireError::Codec {
+            what: "clientStatus",
+            detail: "truncated".into(),
+        })?;
+        let status = KeyMaterialClientCode::from_u8(status_byte)?;
+        // `clientUri`'s declared length can exceed what is left of this entry, the same short-read class as any
+        // nested element, so it is bounded first.
+        let (uri_bounded, after_uri) =
+            bounded_run_input(rest, "clientUri", MAX_RUN_AGGREGATE_BYTES)?;
+        let (uri_bytes, _tail) =
+            VLBytes::tls_deserialize_bytes(uri_bounded).map_err(|e| codec_err("clientUri", e))?;
+        let client_uri = IdentifierUri::from_vlbytes(uri_bytes)?;
+        let (key_package, capabilities, tail) = match status {
+            KeyMaterialClientCode::Success => {
+                // `KeyPackageIn::tls_deserialize_bytes` can PANIC (not just Err) on certain malformed
+                // nested-length-prefix input, so a hostile KeyPackage becomes a decode error.
+                let (_kp, consumed) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        KeyPackageIn::tls_deserialize_bytes(after_uri)
+                            .map(|(kp, tail)| (kp, after_uri.len() - tail.len()))
+                    }))
+                    .map_err(|_| WireError::Codec {
+                        what: "keyPackage",
+                        detail: "malformed KeyPackage (decoder panicked)".into(),
+                    })?
+                    .map_err(|e| codec_err("keyPackage", e))?;
+                let key_package = after_uri[..consumed].to_vec();
+                // A remote hub's claim that a KeyPackage is well-formed is not a claim that it carries the pinned
+                // ciphersuite: a foreign suite never leaves `decode()` wrapped in a success.
+                crate::gate::mimi_gate_keypackage(&key_package)?;
+                (Some(key_package), None, &after_uri[consumed..])
+            }
+            KeyMaterialClientCode::KeyMaterialExhausted => (None, None, after_uri),
+            KeyMaterialClientCode::NothingCompatible => {
+                let (&present, after_tag) =
+                    after_uri.split_first().ok_or_else(|| WireError::Codec {
+                        what: "clientCapabilities",
+                        detail: "truncated".into(),
+                    })?;
+                match present {
+                    0 => (None, None, after_tag),
+                    1 => {
+                        let (_caps, consumed) =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                Capabilities::tls_deserialize_bytes(after_tag)
+                                    .map(|(c, tail)| (c, after_tag.len() - tail.len()))
+                            }))
+                            .map_err(|_| WireError::Codec {
+                                what: "clientCapabilities",
+                                detail: "malformed Capabilities (decoder panicked)".into(),
+                            })?
+                            .map_err(|e| codec_err("clientCapabilities", e))?;
+                        (
+                            None,
+                            Some(after_tag[..consumed].to_vec()),
+                            &after_tag[consumed..],
+                        )
+                    }
+                    other => {
+                        return Err(WireError::Codec {
+                            what: "clientCapabilities",
+                            detail: format!("presence tag must be 0 or 1, got {other}"),
+                        })
+                    }
+                }
+            }
+        };
+        Ok((
+            Self {
+                status,
+                client_uri,
+                key_package,
+                capabilities,
+            },
+            window.len() - tail.len(),
+        ))
+    }
 }
 
 impl KeyMaterialResponse {
@@ -1168,6 +1307,24 @@ impl KeyMaterialResponse {
                     .tls_serialize(&mut out)
                     .map_err(|e| codec_err("clients", e))?;
             }
+            Self::Clients {
+                user_uri,
+                user_status,
+                clients,
+            } => {
+                out.push(user_status.to_u8());
+                user_uri
+                    .to_vlbytes()
+                    .tls_serialize(&mut out)
+                    .map_err(|e| codec_err("userUri", e))?;
+                let mut window = Vec::new();
+                for client in clients {
+                    client.encode_into(&mut window)?;
+                }
+                VLBytes::new(window)
+                    .tls_serialize(&mut out)
+                    .map_err(|e| codec_err("clients", e))?;
+            }
         }
         Ok(out)
     }
@@ -1221,77 +1378,75 @@ impl KeyMaterialResponse {
                 code: user_status,
             });
         }
-        if client_bytes.is_empty() {
-            return Err(WireError::Codec {
-                what: "KeyMaterialResponse.clients",
-                detail: "expected exactly one client entry, got zero".into(),
-            });
+        let mut clients = Vec::new();
+        let mut budget = RunBudget::new();
+        let mut offset = 0usize;
+        while offset < client_bytes.len() {
+            let (client, used) = ClientKeyMaterial::decode_from(&client_bytes[offset..])?;
+            budget.record("clients[]", used)?;
+            clients.push(client);
+            offset += used;
         }
-        let (&client_status_byte, client_rest) =
-            client_bytes.split_first().ok_or_else(|| WireError::Codec {
-                what: "clientStatus",
-                detail: "truncated".into(),
-            })?;
-        let client_status = KeyMaterialClientCode::from_u8(client_status_byte)?;
-        // `client_rest` sits inside the already-bounded `clients` window, but its
-        // own content is attacker-chosen, so `clientUri`'s declared length can still exceed what
-        // is actually left in `client_rest` - the same short-read panic class as an element
-        // nested inside an outer Vec<T> run, just one field of a hand-parsed struct instead.
-        let (client_uri_bounded, client_rest) =
-            bounded_run_input(client_rest, "clientUri", MAX_RUN_AGGREGATE_BYTES)?;
-        let (_client_uri_bytes, _client_uri_tail) =
-            VLBytes::tls_deserialize_bytes(client_uri_bounded)
-                .map_err(|e| codec_err("clientUri", e))?;
-        match (user_status, client_status) {
-            (KeyMaterialUserCode::Success, KeyMaterialClientCode::Success) => {
-                // `KeyPackageIn::tls_deserialize_bytes` can PANIC (not just Err) on certain
-                // malformed nested-length-prefix input -- the same tls_codec-internal panic risk
-                // as the other peer-controlled KeyPackage sites in this file (clientKeyPackages[]
-                // above, gate.rs's gates). catch_unwind turns a hostile/malformed KeyPackage into
-                // a decode error instead of an unhandled panic in the request task.
-                let (_kp, consumed) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    KeyPackageIn::tls_deserialize_bytes(client_rest)
-                        .map(|(kp, tail)| (kp, client_rest.len() - tail.len()))
-                }))
-                .map_err(|_| WireError::Codec {
-                    what: "keyPackage",
-                    detail: "malformed KeyPackage (decoder panicked)".into(),
-                })?
-                .map_err(|e| codec_err("keyPackage", e))?;
-                let key_package = client_rest[..consumed].to_vec();
-                let cursor = &client_rest[consumed..];
-                if !cursor.is_empty() {
-                    return Err(WireError::Trailing {
-                        what: "KeyMaterialResponse.clients[0]",
-                        n: cursor.len(),
+        // §5.2: success and partialSuccess enumerate every client; noCompatibleMaterial MAY; no other user code
+        // populates the list. Success means key material for every client.
+        match user_status {
+            KeyMaterialUserCode::Success | KeyMaterialUserCode::PartialSuccess => {
+                if clients.is_empty() {
+                    return Err(WireError::Codec {
+                        what: "KeyMaterialResponse.clients",
+                        detail:
+                            "a success or partialSuccess response enumerates its clients, got zero"
+                                .into(),
                     });
                 }
-                // The accept-gate runs here, not left to whichever caller eventually
-                // hands `key_package` to openmls. A remote hub's claim that a KeyPackage is
-                // well-formed is not a claim that it carries the pinned ciphersuite - a foreign
-                // suite must never leave `decode()` wrapped in `Success`.
-                crate::gate::mimi_gate_keypackage(&key_package)?;
-                Ok(Self::Success {
-                    user_uri,
-                    key_package,
-                })
-            }
-            (KeyMaterialUserCode::PartialSuccess, KeyMaterialClientCode::KeyMaterialExhausted) => {
-                if !client_rest.is_empty() {
-                    return Err(WireError::Trailing {
-                        what: "KeyMaterialResponse.clients[0]",
-                        n: client_rest.len(),
+                if user_status == KeyMaterialUserCode::Success
+                    && clients
+                        .iter()
+                        .any(|client| client.status != KeyMaterialClientCode::Success)
+                {
+                    return Err(WireError::Codec {
+                        what: "KeyMaterialResponse.clients",
+                        detail: "a success response carries key material for every client".into(),
                     });
                 }
-                Ok(Self::Exhausted { user_uri })
             }
-            _ => Err(WireError::Codec {
-                what: "KeyMaterialResponse",
-                detail: format!(
-                    "unsupported (userStatus, clientStatus) combination: ({user_status:?}, {client_status:?})"
-                ),
-            }),
+            KeyMaterialUserCode::NoCompatibleMaterial => {}
+            _ => {
+                if !clients.is_empty() {
+                    return Err(WireError::Codec {
+                        what: "KeyMaterialResponse.clients",
+                        detail: format!(
+                            "user status {user_status:?} must carry zero client entries"
+                        ),
+                    });
+                }
+            }
         }
+        // The shapes this hub emits keep their own variants, as long as the bytes would be written back identically.
+        if let [only] = clients.as_slice() {
+            if only.client_uri == user_uri {
+                match (user_status, only.status) {
+                    (KeyMaterialUserCode::Success, KeyMaterialClientCode::Success) => {
+                        if let Some(key_package) = &only.key_package {
+                            return Ok(Self::Success {
+                                user_uri,
+                                key_package: key_package.clone(),
+                            });
+                        }
+                    }
+                    (
+                        KeyMaterialUserCode::PartialSuccess,
+                        KeyMaterialClientCode::KeyMaterialExhausted,
+                    ) => return Ok(Self::Exhausted { user_uri }),
+                    _ => {}
+                }
+            }
+        }
+        Ok(Self::Clients {
+            user_uri,
+            user_status,
+            clients,
+        })
     }
 }
 
@@ -2262,6 +2417,10 @@ impl AbuseReport {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "protocol_wire_key_material_tests.rs"]
+mod key_material_tests;
 
 #[cfg(test)]
 mod tests {

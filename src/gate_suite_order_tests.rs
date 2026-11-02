@@ -2,54 +2,9 @@
 //! signature is verified, so no other suite's arithmetic runs on a peer's bytes.
 
 use super::*;
-use openmls::ciphersuite::signature::SignaturePublicKey;
-use openmls::credentials::{BasicCredential, CredentialWithKey};
-use openmls_traits::signatures::{Signer, SignerError};
+use crate::test_fixtures::key_package;
 
 const PINNED: u16 = HAVEN_MLS_CIPHERSUITE_U16;
-
-struct Ed25519Signer {
-    key: Vec<u8>,
-}
-
-impl Signer for Ed25519Signer {
-    fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SignerError> {
-        OpenMlsRustCrypto::default()
-            .crypto()
-            .sign(SignatureScheme::ED25519, payload, &self.key)
-            .map_err(|_| SignerError::SigningError)
-    }
-
-    fn signature_scheme(&self) -> SignatureScheme {
-        SignatureScheme::ED25519
-    }
-}
-
-/// A genuine KeyPackage under `suite`, signed with Ed25519.
-fn key_package(credential: &[u8], suite: u16) -> Vec<u8> {
-    let provider = OpenMlsRustCrypto::default();
-    let (private_key, public_key) = provider
-        .crypto()
-        .signature_key_gen(SignatureScheme::ED25519)
-        .unwrap();
-    let credential = CredentialWithKey {
-        credential: BasicCredential::new(credential.to_vec()).into(),
-        signature_key: SignaturePublicKey::from(public_key),
-    };
-    KeyPackage::builder()
-        .key_package_extensions(Extensions::empty())
-        .key_package_lifetime(Lifetime::init(0, u64::MAX))
-        .build(
-            Ciphersuite::try_from(suite).expect("known fixture ciphersuite"),
-            &provider,
-            &Ed25519Signer { key: private_key },
-            credential,
-        )
-        .unwrap()
-        .key_package()
-        .tls_serialize_detached()
-        .unwrap()
-}
 
 /// A genuine pinned-suite KeyPackage whose suite field is rewritten to `suite`. Everything after the field is a valid
 /// 0x0001 KeyPackage, so any later stage (decode, signature check) would fail on it; only the order of the stages decides
