@@ -5,7 +5,7 @@ and `draft-ietf-mimi-room-policy`. The authoritative source is the hub's own `di
 endpoint `unsupported` block (`mimi-hubd/src/lib.rs`); this file explains the reasoning.
 
 DIV-1 through DIV-4 are scoping decisions: deliberate, documented choices about what v1 does
-not do. DIV-5 through DIV-14 are gaps in what v1 attempts: endpoints or fields the code accepts
+not do. DIV-5 through DIV-15 are gaps in what v1 attempts: endpoints or fields the code accepts
 and processes without yet enforcing everything the draft requires, or behaviour that differs
 from the draft on a point where the draft is silent or the pinned MLS library falls short. A
 strict implementation of the affected endpoints will not interoperate with this hub on those
@@ -157,6 +157,11 @@ without needing that machinery in the first place.
   same list is refused, not decoded: skipping past a standard proposal's own body (an `Add`, for
   instance, embeds a full KeyPackage) needs that proposal's own decoder, which is out of scope. A
   sender that wants this hub to read the change sends it as its own Commit.
+- **Framing.** §5.3 defines the request body as `UpdateRequest { HandshakeBundle }` (the Commit
+  with an optional Welcome, a `GroupInfoOption` and a `RatchetTreeOption`) and the response as an
+  `UpdateRoomResponse` (`responseCode`, `errorDescription`, then the accepted timestamp, the
+  current epoch or the invalid proposals). This route takes the bare `PublicMessage` Commit and
+  answers with an HTTP status only, so a peer that speaks the draft's framing gets a 400.
 - The four room-admin RPCs (`roomPolicy`/`memberRole`/`addParticipant`/`authorizeSender`) remain
   JSON-compat-lane only - `update` is the wire-lane mechanism for the two operations it actually
   carries (roster and policy changes); it is not a wire-framing of those four RPCs themselves.
@@ -221,9 +226,25 @@ A test pins the refusal (`gate::grease_tests`) and fails when the pinned release
 refusing it; it is then inverted and this entry removed. The fix needs an openmls release, or
 a source dependency, which this crate's manifest-purity guard does not allow.
 
+## DIV-15 - participant-list and room-policy changes are read from private proposal types
+
+`update` reads a change to the participant list or the room policy from a custom proposal of a
+private type: `0xF7A0` for `mimiParticipantList` and `0xF7A1` for `mimiRoomPolicy`
+(`mimi_core::participant_list`, `mimi_core::room_policy`).
+
+draft-ietf-mimi-protocol-06 describes the carrier two ways. §2, §3, §4.2, §5.3 and the sequence
+examples call it an AppSync proposal with an `applicationId` of `mimiParticipantList` or
+`mimiRoomPolicy`. §9 says a `ParticipantListUpdate` is the contents of an AppDataUpdate proposal
+with the component ID for the participant list, and §10.3 registers that component as `0x0022`
+(`participant_list`); §10 registers `0x0020` to `0x0023` and none of them is a room policy. The
+working group's editor's copy now says AppDataUpdate in §5.3 as well. This codec reads none of
+these: a Commit that carries an AppDataUpdate for component `0x0022`, or an AppSync proposal, is
+refused as an unrecognized proposal type. The payload of a `0xF7A0` proposal is the draft's
+`ParticipantListUpdate` encoding, so only the carrier differs.
+
 ---
 
 Divergences are revisited as the drafts move and as the accept-path work (DIV-6, DIV-9, DIV-10)
 lands. DIV-1 through DIV-4 do not block interoperating with another provider on the supported
 surface. DIV-5, DIV-7, and DIV-11 are closed or mostly closed (see above); DIV-6, DIV-8, DIV-9,
-DIV-10, DIV-12, DIV-13, and DIV-14 still do, for the endpoints they touch, until closed.
+DIV-10, DIV-12, DIV-13, DIV-14, and DIV-15 still do, for the endpoints they touch, until closed.
