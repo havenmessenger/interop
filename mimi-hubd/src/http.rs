@@ -444,8 +444,8 @@ async fn report_abuse_wire(
 /// exactly one `mimiParticipantList`/`mimiRoomPolicy` custom proposal (see `mimi_core::commit_wire` for the bounded scope
 /// this decodes - no signature or group-state verification, matching RFC 9420's own delivery-service trust model). The
 /// answer is an `UpdateRoomResponse` in a 200: `success` with the hub's acceptance time, `notAllowed` for a room this hub
-/// does not host, a bundle under another ciphersuite or a store limit (one answer for all, so the response is no
-/// existence oracle), or `invalidProposal` for anything this hub cannot read or apply (a `PrivateMessage`, a mixed commit,
+/// does not host, a bundle under another ciphersuite or a store limit (one answer for all, so a refusal does not say
+/// which applied), or `invalidProposal` for anything this hub cannot read or apply (a `PrivateMessage`, a mixed commit,
 /// an unrecognized proposal type, a by-reference proposal, a bundle of proposals). `wrongEpoch` is never answered: the
 /// hub holds no group state and so no epoch. A store failure is a 500 with no body.
 async fn update_wire(
@@ -1500,7 +1500,7 @@ mod tests {
         real_custom_proposal_and_commit(proposal_type, payload).1
     }
 
-    /// The by-value proposal message and the Commit over it, both real `PublicMessage`s.
+    /// The by-value proposal message and the Commit over it, both `PublicMessage`s built by openmls.
     pub(super) fn real_custom_proposal_and_commit(
         proposal_type: u16,
         payload: Vec<u8>,
@@ -1580,7 +1580,7 @@ mod tests {
     }
 
     /// The `UpdateRequest` body for a Commit: a `HandshakeBundle` with no Welcome, a `Partial` group info (the one
-    /// representation that does not need a real GroupInfo) and no ratchet tree.
+    /// representation that does not need a GroupInfo) and no ratchet tree.
     pub(super) fn bundle_of(commit: Vec<u8>) -> Vec<u8> {
         use mimi_core::protocol_wire::{GroupInfoOption, GroupInfoRepresentation, HandshakeBundle};
         HandshakeBundle::Commit {

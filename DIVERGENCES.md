@@ -160,10 +160,13 @@ without needing that machinery in the first place.
 - **Framing.** The request body is the draft's `UpdateRequest { HandshakeBundle }` and the answer
   is an `UpdateRoomResponse` in a 200: `success` with the hub's acceptance time in milliseconds;
   `notAllowed` for a room this hub does not host, a bundle whose Welcome or GroupInfo is under
-  another ciphersuite, or a store limit (the participant cap), with the same bytes for each so the
-  answer is not an existence oracle; `invalidProposal` (with an empty `invalidProposals` list)
+  another ciphersuite, or a store limit (the participant cap), with the same bytes for each, so a
+  refusal does not say which of them applied; `invalidProposal` (with an empty `invalidProposals` list)
   for a body that is not an `UpdateRequest`, a bundle of proposals, an unrecognized proposal
-  type, or an update that does not fit the room. `wrongEpoch` is never answered, because the hub
+  type, or an update that does not fit the room. The hub checks that the room URI is under its own
+  domain, not that the room exists, and answers `invalidProposal` or `success` for a room it
+  hosts, so a peer on the allowlist can learn a room's participant count from those answers.
+  `wrongEpoch` is never answered, because the hub
   holds no group state and so no epoch. A SQLite failure is a 500 with no body. The Welcome,
   `GroupInfoOption` and `RatchetTreeOption` of a Commit bundle are read and suite-gated, and are
   neither stored nor relayed: `success` means the participant-list or room-policy change was

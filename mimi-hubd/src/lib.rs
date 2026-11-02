@@ -57,8 +57,8 @@ const DELIVERY_TTL_SECS: u64 = 24 * 3600; // 24 hours
 #[derive(Debug, PartialEq, Eq)]
 pub enum UpdateRefusal {
     /// The hub did not accept the update: the room is not one this hub hosts, the bundle carries material under another
-    /// ciphersuite, or a store limit (the participant cap) would be exceeded. One answer covers all of them, so a peer
-    /// cannot tell which rooms this hub hosts from the response.
+    /// ciphersuite, or a store limit (the participant cap) would be exceeded. One answer covers all of them, so a refusal
+    /// does not say which applied.
     NotAllowed,
     /// The request, or the proposal it carries, is not one this hub can read or apply. The text is fixed wording, never
     /// the peer's bytes.
