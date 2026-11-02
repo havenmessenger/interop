@@ -5,9 +5,11 @@ and `draft-ietf-mimi-room-policy`. The authoritative source is the hub's own `di
 endpoint `unsupported` block (`mimi-hubd/src/lib.rs`); this file explains the reasoning.
 
 DIV-1 through DIV-4 are scoping decisions: deliberate, documented choices about what v1 does
-not do. DIV-5 through DIV-11 are gaps in what v1 attempts: endpoints or fields the code accepts
-and processes without yet enforcing everything the draft requires. A strict implementation of
-the affected endpoints will not interoperate with this hub until those close.
+not do. DIV-5 through DIV-14 are gaps in what v1 attempts: endpoints or fields the code accepts
+and processes without yet enforcing everything the draft requires, or behaviour that differs
+from the draft on a point where the draft is silent or the pinned MLS library falls short. A
+strict implementation of the affected endpoints will not interoperate with this hub on those
+points until they close.
 
 ## DIV-1 - GroupInfo / external-commit join
 
@@ -172,12 +174,54 @@ length-prefixed window. `id_request_extensions`/`id_response_extensions` (§5.8)
 `abuse_extensions` (§5.9, the same `AppDataDictionary` type) stay opaque length-prefixed blobs - the
 decoder consumes these fields without interpreting or retaining their contents, since nothing here
 produces or consumes those specific fields.
-`update`'s `RatchetTreeOption`/`GroupInfoOption` fields (§5.3) also stay opaque, for the same
-reason as the rest of `update`'s codec: no live accept-path exists yet.
+`update`'s `RatchetTreeOption` field (§5.3) also stays opaque, for the same reason as the rest
+of `update`'s codec: no live accept-path exists yet. A `Full` `GroupInfoOption` is read raw and
+suite-gated; a `Partial` one stays an opaque length-prefixed blob (DIV-12).
+
+## DIV-12 - a `Partial` `GroupInfoOption` payload carries a length prefix
+
+§5.3 writes the `GroupInfoOption` payload raw: a `GroupInfo` for `full`, a `PartialGroupInfo`
+for `partial`, each ending where its own structure ends, with `ratchetTreeOption` following.
+A `Full` payload is written and read that way here: its end is found by decoding it as an
+openmls `VerifiableGroupInfo`, and it is suite-gated at decode.
+
+A `Partial` payload has no decoder in this crate or in openmls, because `PartialGroupInfo`
+belongs to a sibling draft this code does not implement, so there is nothing that could find
+where one ends. It is written with a `<V>` length prefix, the only way to keep
+`ratchetTreeOption` (the trailing field) findable, and it is not suite-gated. A peer that
+sends a raw `Partial` payload will not decode against this codec until `PartialGroupInfo` is
+implemented. The codec is not wired to any route, so no live exchange depends on it.
+
+## DIV-13 - an exhausted client is answered with `partialSuccess`
+
+When a user has no key material left, the `keyMaterial` response carries user status
+`partialSuccess` with one client entry whose status is `keyMaterialExhausted`. §5.2 defines
+`partialSuccess` as key material for at least one client, so a response with no successful
+client does not fit it, and the draft gives no user code for "known user, nothing left to
+issue": `noCompatibleMaterial` is defined as no client able to supply material compatible with
+the request's required capabilities, which is a different condition. `partialSuccess` is used
+because the user is known and a client was enumerated; the choice is a judgment call on a
+point the draft leaves open, and it is raised with the working group rather than treated as
+settled. The decoder accepts the response as sent, and reads any other well-formed combination
+of user and client statuses back unchanged.
+
+## DIV-14 - KeyPackages that carry a GREASE value are refused
+
+RFC 9420 §13.5 has clients include GREASE values to keep peers tolerant of unknown values. The
+openmls release this crate pins (0.8.1; the 0.8.2, 0.8.3 and 0.9.2 releases still behave the same way) rejects
+a KeyPackage that carries a GREASE extension value with `UnsupportedExtension`, because it
+classifies the same value as a GREASE extension type in the client's capabilities and as an
+unknown extension type in the KeyPackage's own extensions (openmls#2162, fixed on openmls
+`main` and not yet in a release). The gate therefore refuses such a KeyPackage, and the
+`keyMaterial` and consent exchanges cannot take key material from a client that sends one.
+
+A test pins the refusal (`gate::grease_tests`) and fails when the pinned release stops
+refusing it; it is then inverted and this entry removed. The fix needs an openmls release, or
+a source dependency, which this crate's manifest-purity guard does not allow.
 
 ---
 
 Divergences are revisited as the drafts move and as the accept-path work (DIV-6, DIV-9, DIV-10)
 lands. DIV-1 through DIV-4 do not block interoperating with another provider on the supported
-surface. DIV-5, DIV-7, and DIV-11 are closed or mostly closed (see above); DIV-6, DIV-8, DIV-9, and
-DIV-10 still do, for the endpoints they touch, until closed.
+surface. DIV-5, DIV-7, and DIV-11 are closed or mostly closed (see above); DIV-6, DIV-8, DIV-9,
+DIV-10, DIV-12, DIV-13, and DIV-14 still do, for the endpoints they touch, until closed.

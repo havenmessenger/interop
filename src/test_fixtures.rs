@@ -111,3 +111,40 @@ pub(crate) fn add_commit() -> AddCommit {
             .unwrap(),
     }
 }
+
+/// A pinned-suite KeyPackage the way an RFC 9420 §13.5 client builds one: GREASE value `0x0A0A` listed in its capabilities and
+/// present in its KeyPackage extensions.
+pub(crate) fn grease_key_package() -> Vec<u8> {
+    let provider = OpenMlsRustCrypto::default();
+    let (private_key, public_key) = provider
+        .crypto()
+        .signature_key_gen(SignatureScheme::ED25519)
+        .unwrap();
+    let credential = CredentialWithKey {
+        credential: BasicCredential::new(b"grease".to_vec()).into(),
+        signature_key: SignaturePublicKey::from(public_key),
+    };
+    let capabilities = Capabilities::new(
+        None,
+        Some(&[Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519]),
+        Some(&[ExtensionType::Grease(0x0A0A)]),
+        None,
+        None,
+    );
+    KeyPackage::builder()
+        .leaf_node_capabilities(capabilities)
+        .key_package_extensions(
+            Extensions::single(Extension::Unknown(0x0A0A, UnknownExtension(Vec::new()))).unwrap(),
+        )
+        .key_package_lifetime(Lifetime::init(0, u64::MAX))
+        .build(
+            Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
+            &provider,
+            &Ed25519Signer { key: private_key },
+            credential,
+        )
+        .unwrap()
+        .key_package()
+        .tls_serialize_detached()
+        .unwrap()
+}

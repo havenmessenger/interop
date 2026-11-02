@@ -371,6 +371,10 @@ pub const fn identifier_query(is_mimi_enrolled: bool) -> IdentifierQueryResult {
 #[path = "gate_suite_order_tests.rs"]
 mod suite_order_tests;
 
+#[cfg(test)]
+#[path = "gate_grease_tests.rs"]
+mod grease_tests;
+
 // NOTE: the one-time KeyPackage store, /notify dedup, and enrollment state are DURABLE (SQLite),
 // held by the consuming service - there is intentionally NO in-memory store type here (no residue).
 // mimi-core is pure stateless logic: the gates above, `identifier_query`, and the content codec.
