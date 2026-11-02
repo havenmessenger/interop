@@ -38,7 +38,7 @@
 use openmls::ciphersuite::signature::SignaturePublicKey;
 use openmls::prelude::{
     Capabilities, Ciphersuite, Credential, KeyPackageIn, MlsMessageIn, MlsMessageOut,
-    RequiredCapabilitiesExtension,
+    RequiredCapabilitiesExtension, Welcome,
 };
 use tls_codec::{
     Deserialize as TlsDeserialize, DeserializeBytes, Error as TlsError, Serialize as TlsSerialize,
@@ -1492,18 +1492,13 @@ impl GroupInfoRepresentation {
     }
 }
 
-/// §5.3 `GroupInfoOption`. The `full`/`partial` payloads (`GroupInfo`/`PartialGroupInfo`) are
-/// carried as opaque bytes (a disclosed residual -- see DIVERGENCES.md): the draft's
-/// literal struct carries `payload` RAW, self-delimited by its own internal TLS structure, not
-/// `<V>`-length-prefixed -- and `PartialGroupInfo` belongs to the unimplemented sibling draft, so
-/// this codec cannot itself determine where a `Partial` payload ends without a decoder for that
-/// type. (`openmls::messages::group_info::VerifiableGroupInfo` IS reachable and decodable for the
-/// `Full` case -- absent from `openmls::prelude` but not `pub(crate)`-scoped.
-/// `Full`-representation payloads are suite-gated at decode via
-/// `crate::gate::mimi_gate_group_info`, `Partial` is not, since no decoder exists for it here or
-/// in openmls's public surface.) `encode`/`decode` keep a length-prefix wrap here as the only way
-/// to keep `ratchetTreeOption` (which follows it) findable at all; this is a known, disclosed
-/// departure from the literal wire shape for this one field, not a silent one.
+/// §5.3 `GroupInfoOption`. The draft carries `payload` raw, self-delimited by its own TLS structure, not
+/// `<V>`-length-prefixed. A `Full` payload (`GroupInfo`) is written and read that way: its end is found by decoding it as an
+/// `openmls::messages::group_info::VerifiableGroupInfo` (absent from `openmls::prelude` but public), and it is suite-gated at
+/// decode via `crate::gate::mimi_gate_group_info`. A `Partial` payload (`PartialGroupInfo`) belongs to the unimplemented
+/// sibling draft, so there is no decoder that could find where it ends; it keeps a length-prefix wrap as the only way to keep
+/// `ratchetTreeOption` (which follows it) findable, and is not suite-gated. That is a disclosed departure for the `Partial`
+/// representation alone (DIVERGENCES.md).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupInfoOption {
     pub representation: GroupInfoRepresentation,
@@ -1513,11 +1508,11 @@ pub struct GroupInfoOption {
 /// §5.3 `HandshakeBundle`. `proposal_or_commit` is the real MLS wire envelope (bounded the same
 /// way `SubmitMessageRequest.app_message` is: parsed via `MlsMessageIn` to find the boundary, then
 /// the already-consumed bytes are kept verbatim). `welcome` is `optional<Welcome>` -- a presence
-/// tag then the RAW `Welcome` bytes (Note: `Welcome` is TLS-self-delimiting and
-/// openmls's own type, so this codec decodes it exactly like `MlsMessageIn` elsewhere in this
-/// module, no length wrap). `ratchet_tree_option` is the trailing field of the `commit` case, so
+/// tag then the bare RFC 9420 `Welcome` (cipher suite, secrets, encrypted group info), not wrapped in an `MLSMessage`;
+/// it is TLS-self-delimiting, so there is no length wrap, and it is suite-gated at decode via
+/// `crate::gate::mimi_gate_welcome_bare`. `ratchet_tree_option` is the trailing field of the `commit` case, so
 /// it needs no length prefix either -- it is simply everything left after `groupInfoOption`. See
-/// `GroupInfoOption`'s own doc for why THAT field still carries a wrap.
+/// `GroupInfoOption`'s own doc for how the `groupInfoOption` payload is framed.
 ///
 /// `decode` requires `proposal_or_commit` to be `PublicMessage`-framed (matches §4.2's "the
 /// PublicMessage encapsulation provides sender authentication, including the ability for actors
@@ -1554,8 +1549,9 @@ impl HandshakeBundle {
             } => {
                 out.extend_from_slice(proposal_or_commit);
                 match welcome {
-                    // Note: Welcome is self-delimiting TLS -- no length wrap, matching
-                    // the draft's literal `optional<Welcome>` (a presence tag then the value).
+                    // The bare Welcome is self-delimiting TLS -- no length wrap and no MLSMessage
+                    // envelope, matching the draft's literal `optional<Welcome>` (a presence tag then
+                    // the value).
                     Some(w) => {
                         out.push(1);
                         out.extend_from_slice(w);
@@ -1563,11 +1559,18 @@ impl HandshakeBundle {
                     None => out.push(0),
                 }
                 out.push(group_info_option.representation.to_u8());
-                // GroupInfoOption.payload keeps a length wrap: see the type's own doc for why
-                // (no self-delimiting decoder available for either GroupInfo or PartialGroupInfo).
-                VLBytes::new(group_info_option.payload.clone())
-                    .tls_serialize(&mut out)
-                    .map_err(|e| codec_err("groupInfoOption.payload", e))?;
+                match group_info_option.representation {
+                    // A GroupInfo is self-delimiting TLS: raw, as the draft writes it.
+                    GroupInfoRepresentation::Full => {
+                        out.extend_from_slice(&group_info_option.payload)
+                    }
+                    // A PartialGroupInfo has no decoder here, so it keeps a length wrap (see the type's own doc).
+                    GroupInfoRepresentation::Partial => {
+                        VLBytes::new(group_info_option.payload.clone())
+                            .tls_serialize(&mut out)
+                            .map_err(|e| codec_err("groupInfoOption.payload", e))?;
+                    }
+                }
                 // ratchetTreeOption is the trailing field of the commit case -- no length prefix
                 // needed at all, raw bytes to the end.
                 out.extend_from_slice(ratchet_tree_option);
@@ -1624,22 +1627,18 @@ impl HandshakeBundle {
                         what: "welcome presence tag",
                         detail: "truncated".into(),
                     })?;
-                // Note: welcome is RAW self-delimiting bytes, no length wrap. Decoded
-                // via MlsMessageIn (not a bare Welcome): openmls's own add_members returns the
-                // Welcome wrapped in the general MlsMessage envelope (protocol_version +
-                // wire_format + body), which is what any real openmls-based client actually
-                // serializes onto the wire -- confirmed empirically (a bare-Welcome decode
-                // misaligned the fields that follow, against a real openmls-produced Welcome).
-                // catch_unwind for the same tls_codec-internal-panic reason as the KeyPackage
-                // gates -- Welcome is peer-controlled.
+                // The welcome is a bare Welcome, RAW and self-delimiting: no length wrap and no MLSMessage
+                // envelope. The foreign-suite refusal reads its leading cipher suite before anything is
+                // decoded; catch_unwind for the tls_codec-internal-panic reason as the KeyPackage gates,
+                // since a Welcome is peer-controlled.
                 let (welcome, rest) = match welcome_tag {
                     0 => (None, rest),
                     1 => {
+                        crate::gate::refuse_foreign_welcome_suite(rest)?;
                         let (_w, consumed_len) =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 let mut c: &[u8] = rest;
-                                MlsMessageIn::tls_deserialize(&mut c)
-                                    .map(|w| (w, rest.len() - c.len()))
+                                Welcome::tls_deserialize(&mut c).map(|w| (w, rest.len() - c.len()))
                             }))
                             .map_err(|_| WireError::Codec {
                                 what: "welcome",
@@ -1647,11 +1646,9 @@ impl HandshakeBundle {
                             })?
                             .map_err(|e| codec_err("welcome", e))?;
                         let w = rest[..consumed_len].to_vec();
-                        // This is the same MlsMessage-wrapped Welcome shape
-                        // `mimi_gate_welcome` gates on the `/keyMaterial` receive path - a hub
-                        // forwarding a Commit's welcome is exactly the "decode -> join" path the
+                        // A hub forwarding a Commit's welcome is exactly the "decode -> join" path the
                         // accept-gate exists for.
-                        crate::gate::mimi_gate_welcome(&w)?;
+                        crate::gate::mimi_gate_welcome_bare(&w)?;
                         (Some(w), &rest[consumed_len..])
                     }
                     other => {
@@ -1666,24 +1663,41 @@ impl HandshakeBundle {
                     detail: "truncated".into(),
                 })?;
                 let representation = GroupInfoRepresentation::from_u8(repr_byte)?;
-                // groupInfoOption.payload keeps its length wrap (see the type's own doc); this is
-                // what lets ratchetTreeOption below be found without needing to parse it.
-                // Bound before decoding, same short-read panic class as any other
-                // scalar VLBytes field.
-                let (gi_payload_bounded, rest) =
-                    bounded_run_input(rest, "groupInfoOption.payload", MAX_RUN_AGGREGATE_BYTES)?;
-                let (gi_payload, _gi_payload_tail) =
-                    VLBytes::tls_deserialize_bytes(gi_payload_bounded)
-                        .map_err(|e| codec_err("groupInfoOption.payload", e))?;
-                // `Full` representation is decodable as a `VerifiableGroupInfo` (see the
-                // type's own doc for the correction on that point) and is join material a caller
-                // could feed to `join_by_external_commit` - gate it. `Partial`
-                // (`PartialGroupInfo`) has no decoder anywhere in this crate or in openmls's
-                // public surface, so it cannot be suite-checked here; this is a disclosed
-                // residual, not an oversight - see the type's own doc.
-                if representation == GroupInfoRepresentation::Full {
-                    crate::gate::mimi_gate_group_info(gi_payload.as_slice())?;
-                }
+                // A Full GroupInfo is raw and self-delimiting: its end is found by decoding it, and it is
+                // join material a caller could feed to `join_by_external_commit`, so it is suite-gated. A
+                // Partial payload (`PartialGroupInfo`) has no decoder anywhere in this crate or in openmls's
+                // public surface, so it keeps its length wrap and cannot be suite-checked here; that is a
+                // disclosed residual, not an oversight (see the type's own doc).
+                let (gi_payload, rest): (Vec<u8>, &[u8]) = match representation {
+                    GroupInfoRepresentation::Full => {
+                        use openmls::messages::group_info::VerifiableGroupInfo;
+                        let (_info, used) =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                let mut c: &[u8] = rest;
+                                VerifiableGroupInfo::tls_deserialize(&mut c)
+                                    .map(|i| (i, rest.len() - c.len()))
+                            }))
+                            .map_err(|_| WireError::Codec {
+                                what: "groupInfoOption.payload",
+                                detail: "malformed GroupInfo (decoder panicked)".into(),
+                            })?
+                            .map_err(|e| codec_err("groupInfoOption.payload", e))?;
+                        let payload = rest[..used].to_vec();
+                        crate::gate::mimi_gate_group_info(&payload)?;
+                        (payload, &rest[used..])
+                    }
+                    GroupInfoRepresentation::Partial => {
+                        // Bound before decoding, same short-read panic class as any other scalar VLBytes field.
+                        let (bounded, rest) = bounded_run_input(
+                            rest,
+                            "groupInfoOption.payload",
+                            MAX_RUN_AGGREGATE_BYTES,
+                        )?;
+                        let (payload, _tail) = VLBytes::tls_deserialize_bytes(bounded)
+                            .map_err(|e| codec_err("groupInfoOption.payload", e))?;
+                        (payload.as_slice().to_vec(), rest)
+                    }
+                };
                 // ratchetTreeOption is the trailing field -- everything left, raw, no wrap.
                 let rt_option = rest;
                 Ok(Self::Commit {
@@ -1691,7 +1705,7 @@ impl HandshakeBundle {
                     welcome,
                     group_info_option: GroupInfoOption {
                         representation,
-                        payload: gi_payload.as_slice().to_vec(),
+                        payload: gi_payload,
                     },
                     ratchet_tree_option: rt_option.to_vec(),
                 })
@@ -2421,6 +2435,10 @@ impl AbuseReport {
 #[cfg(test)]
 #[path = "protocol_wire_key_material_tests.rs"]
 mod key_material_tests;
+
+#[cfg(test)]
+#[path = "protocol_wire_handshake_bundle_tests.rs"]
+mod handshake_bundle_wire_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3667,7 +3685,7 @@ mod tests {
                 .unwrap();
             let (commit, welcome, gi) = group.add_members(&provider, &asigner, &[bob_kp]).unwrap();
             let commit_bytes = commit.tls_serialize_detached().unwrap();
-            let welcome_bytes = welcome.tls_serialize_detached().unwrap();
+            let welcome_bytes = bare_welcome(&welcome);
             let gi_bytes = gi
                 .expect("use_ratchet_tree_extension(true) must produce a GroupInfo")
                 .tls_serialize_detached()
@@ -3770,9 +3788,20 @@ mod tests {
             )
         }
 
-        /// `HandshakeBundle::decode`'s welcome field is the same MlsMessage-wrapped
-        /// Welcome shape `mimi_gate_welcome` gates on the `/keyMaterial` path - proves the gate
-        /// fires here too, not just there.
+        /// The bare RFC 9420 `Welcome` inside the `MLSMessage` openmls hands back: the envelope is a `version` and a
+        /// `wire_format` (`mls10`, `mls_welcome`), four bytes, and the `Welcome` follows.
+        fn bare_welcome(wrapped: &openmls::prelude::MlsMessageOut) -> Vec<u8> {
+            let bytes = wrapped.tls_serialize_detached().unwrap();
+            assert_eq!(
+                bytes[..4],
+                [0x00, 0x01, 0x00, 0x03],
+                "an MLSMessage carrying a Welcome"
+            );
+            bytes[4..].to_vec()
+        }
+
+        /// `HandshakeBundle::decode`'s welcome field is a bare `Welcome`, and the suite gate fires on it before
+        /// anything is decoded - the same refusal `mimi_gate_welcome` makes for a wrapped one on the `/keyMaterial` path.
         #[test]
         fn commit_decode_rejects_foreign_suite_welcome() {
             let provider = OpenMlsRustCrypto::default();
@@ -3793,7 +3822,7 @@ mod tests {
                 .unwrap();
             let (commit, welcome, _gi) = group.add_members(&provider, &asigner, &[bob_kp]).unwrap();
             let commit_bytes = commit.tls_serialize_detached().unwrap();
-            let welcome_bytes = welcome.tls_serialize_detached().unwrap();
+            let welcome_bytes = bare_welcome(&welcome);
 
             let bundle = HandshakeBundle::Commit {
                 proposal_or_commit: commit_bytes,
@@ -3838,7 +3867,7 @@ mod tests {
                 .unwrap();
             let (commit, welcome, _gi) = group.add_members(&provider, &asigner, &[bob_kp]).unwrap();
             let commit_bytes = commit.tls_serialize_detached().unwrap();
-            let welcome_bytes = welcome.tls_serialize_detached().unwrap();
+            let welcome_bytes = bare_welcome(&welcome);
 
             // A separate foreign-suite group, only to mint a decodable but wrong-suite
             // GroupInfo. INV-MLS-002-ALLOW (test-only): never a production path.

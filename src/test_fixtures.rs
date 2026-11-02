@@ -65,3 +65,49 @@ pub(crate) fn capabilities() -> Vec<u8> {
     .tls_serialize_detached()
     .unwrap()
 }
+
+/// What a commit that adds one member produces on the wire: the PublicMessage Commit, the bare `Welcome`, and the `GroupInfo`.
+pub(crate) struct AddCommit {
+    pub commit: Vec<u8>,
+    pub welcome: Vec<u8>,
+    pub group_info: Vec<u8>,
+}
+
+/// A pinned-suite group of one adds a second member, with the ratchet tree extension on so a GroupInfo is produced.
+pub(crate) fn add_commit() -> AddCommit {
+    use openmls::prelude::tls_codec::Deserialize as _;
+    let provider = OpenMlsRustCrypto::default();
+    let (private_key, public_key) = provider
+        .crypto()
+        .signature_key_gen(SignatureScheme::ED25519)
+        .unwrap();
+    let signer = Ed25519Signer { key: private_key };
+    let credential = CredentialWithKey {
+        credential: BasicCredential::new(b"alice".to_vec()).into(),
+        signature_key: SignaturePublicKey::from(public_key),
+    };
+    let config = MlsGroupCreateConfig::builder()
+        .ciphersuite(Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519)
+        .wire_format_policy(PURE_PLAINTEXT_WIRE_FORMAT_POLICY)
+        .use_ratchet_tree_extension(true)
+        .build();
+    let mut group = MlsGroup::new(&provider, &signer, &config, credential).unwrap();
+    let bob = key_package(b"bob", 1);
+    let mut slice = bob.as_slice();
+    let bob = KeyPackageIn::tls_deserialize(&mut slice)
+        .unwrap()
+        .validate(provider.crypto(), ProtocolVersion::Mls10)
+        .unwrap();
+    let (commit, welcome, group_info) = group.add_members(&provider, &signer, &[bob]).unwrap();
+    // An MLSMessage carrying a Welcome is `version` (mls10) and `wire_format` (mls_welcome), four bytes, then the Welcome.
+    let wrapped = welcome.tls_serialize_detached().unwrap();
+    assert_eq!(wrapped[..4], [0x00, 0x01, 0x00, 0x03]);
+    AddCommit {
+        commit: commit.tls_serialize_detached().unwrap(),
+        welcome: wrapped[4..].to_vec(),
+        group_info: group_info
+            .expect("the ratchet tree extension yields a GroupInfo")
+            .tls_serialize_detached()
+            .unwrap(),
+    }
+}

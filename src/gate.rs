@@ -115,6 +115,9 @@ pub enum GateError {
     /// A `GroupInfo` (Full representation) could not be TLS-deserialized.
     #[error("undecodable GroupInfo: {0}")]
     UndecodableGroupInfo(String),
+    /// A bare `Welcome` could not be TLS-deserialized.
+    #[error("undecodable Welcome: {0}")]
+    UndecodableWelcome(String),
 }
 
 /// `KeyPackageIn::tls_deserialize` can PANIC (not just return `Err`) on certain malformed
@@ -254,6 +257,42 @@ pub fn mimi_gate_welcome(mls_message_bytes: &[u8]) -> Result<(), GateError> {
     let suite = u16::from_be_bytes([wire[0], wire[1]]);
     if suite != HAVEN_MLS_CIPHERSUITE_U16 {
         return Err(ForeignCiphersuite { got: suite }.into());
+    }
+    Ok(())
+}
+
+/// Refuse a bare `Welcome` whose ciphersuite is not the pinned one, before it is decoded.
+///
+/// RFC 9420 §12.4.3.1: `struct { CipherSuite cipher_suite; EncryptedGroupSecrets secrets<V>; opaque encrypted_group_info<V>; }
+/// Welcome`, so the suite is the big-endian `u16` at the front. Read first, a foreign-suite Welcome never reaches a decoder
+/// or the HPKE-open path.
+pub(crate) fn refuse_foreign_welcome_suite(welcome_bytes: &[u8]) -> Result<(), GateError> {
+    let suite = welcome_bytes
+        .get(..2)
+        .map(|suite| u16::from_be_bytes([suite[0], suite[1]]))
+        .ok_or(GateError::WelcomeTooShort)?;
+    if suite != HAVEN_MLS_CIPHERSUITE_U16 {
+        return Err(ForeignCiphersuite { got: suite }.into());
+    }
+    Ok(())
+}
+
+/// **K5 accept-gate - bare Welcome.** The same refusal as [`mimi_gate_welcome`] for a `Welcome` that is not wrapped in an
+/// `MLSMessage`, which is how §5.3's `HandshakeBundle` carries one. Refuses a foreign suite first, then requires the bytes
+/// to be exactly one well-formed `Welcome`.
+pub fn mimi_gate_welcome_bare(welcome_bytes: &[u8]) -> Result<(), GateError> {
+    refuse_foreign_welcome_suite(welcome_bytes)?;
+    let (_welcome, consumed) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut slice = welcome_bytes;
+        Welcome::tls_deserialize(&mut slice).map(|w| (w, welcome_bytes.len() - slice.len()))
+    }))
+    .map_err(|_| GateError::UndecodableWelcome("decoder panicked".into()))?
+    .map_err(|e| GateError::UndecodableWelcome(format!("{e:?}")))?;
+    if consumed != welcome_bytes.len() {
+        return Err(GateError::TrailingBytes {
+            what: "Welcome",
+            n: welcome_bytes.len() - consumed,
+        });
     }
     Ok(())
 }
