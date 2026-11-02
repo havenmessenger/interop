@@ -201,9 +201,11 @@ client does not fit it, and the draft gives no user code for "known user, nothin
 issue": `noCompatibleMaterial` is defined as no client able to supply material compatible with
 the request's required capabilities, which is a different condition. `partialSuccess` is used
 because the user is known and a client was enumerated; the choice is a judgment call on a
-point the draft leaves open, and it is raised with the working group rather than treated as
-settled. The decoder accepts the response as sent, and reads any other well-formed combination
-of user and client statuses back unchanged.
+point the draft leaves open, and is not treated as settled. The decoder accepts the response
+as sent. It refuses the combinations §5.2 rules out: `success` with a client that is not
+`success`, `success` or `partialSuccess` with no client, and a client list under any user
+status other than `success`, `partialSuccess` and `noCompatibleMaterial`. Every other
+combination of user and client statuses is read and written back unchanged.
 
 ## DIV-14 - KeyPackages that carry a GREASE value are refused
 

@@ -279,7 +279,7 @@ pub(crate) fn refuse_foreign_welcome_suite(welcome_bytes: &[u8]) -> Result<(), G
 
 /// **K5 accept-gate - bare Welcome.** The same refusal as [`mimi_gate_welcome`] for a `Welcome` that is not wrapped in an
 /// `MLSMessage`, which is how §5.3's `HandshakeBundle` carries one. Refuses a foreign suite first, then requires the bytes
-/// to be exactly one well-formed `Welcome`.
+/// to be one `Welcome` and nothing after it.
 pub fn mimi_gate_welcome_bare(welcome_bytes: &[u8]) -> Result<(), GateError> {
     refuse_foreign_welcome_suite(welcome_bytes)?;
     let (_welcome, consumed) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

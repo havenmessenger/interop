@@ -1122,9 +1122,9 @@ pub enum KeyMaterialResponse {
     },
 }
 
-/// §5.2 `ClientKeyMaterial`: one client's status and what it supplied. `key_package` is present exactly for `success`
-/// (already suite-gated when decoded); `capabilities` can be present only for `nothingCompatible` (the draft makes them
-/// optional there) and is kept as the bytes that were sent.
+/// §5.2 `ClientKeyMaterial`: one client's status and what it supplied. A `success` client carries a `key_package`, which is
+/// suite-gated when decoded; a `nothingCompatible` client can carry `capabilities` (the draft makes them optional there),
+/// kept as the bytes that were sent. Every other combination is refused on both encode and decode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientKeyMaterial {
     pub status: KeyMaterialClientCode,

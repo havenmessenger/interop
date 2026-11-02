@@ -4,7 +4,7 @@
 //!
 //! `cargo run --example gen_protocol06_vectors --features test-helpers > tests/vectors/protocol06-vectors.json`
 //!
-//! The KeyPackages, Welcome and GroupInfo inside are produced by real openmls operations under the pinned ciphersuite. They
+//! The KeyPackages, Welcome and GroupInfo inside are produced by openmls operations under the pinned ciphersuite. They
 //! are random, so regenerating changes every vector; the committed file is the reference, and the replay test
 //! (`tests/protocol06_vectors_replay.rs`) checks it without regenerating anything.
 //!

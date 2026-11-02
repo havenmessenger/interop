@@ -1,4 +1,4 @@
-//! In-crate MLS fixtures for the sibling test files: genuine KeyPackages under a chosen wire suite, signed with Ed25519.
+//! In-crate MLS fixtures for the sibling test files: KeyPackages built by openmls under a chosen wire suite, signed with Ed25519.
 //! Unlike `test_helpers`, this module is always available to `cargo test`, so tests that run without the
 //! `test-helpers` feature can use it.
 
@@ -27,7 +27,7 @@ impl Signer for Ed25519Signer {
     }
 }
 
-/// A genuine KeyPackage under the wire ciphersuite `suite`, signed with Ed25519.
+/// A KeyPackage built by openmls under the wire ciphersuite `suite`, signed with Ed25519.
 pub(crate) fn key_package(credential: &[u8], suite: u16) -> Vec<u8> {
     let provider = OpenMlsRustCrypto::default();
     let (private_key, public_key) = provider

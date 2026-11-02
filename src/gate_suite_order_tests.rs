@@ -6,7 +6,7 @@ use crate::test_fixtures::key_package;
 
 const PINNED: u16 = HAVEN_MLS_CIPHERSUITE_U16;
 
-/// A genuine pinned-suite KeyPackage whose suite field is rewritten to `suite`. Everything after the field is a valid
+/// A pinned-suite KeyPackage whose suite field is rewritten to `suite`. Everything after the field is a valid
 /// 0x0001 KeyPackage, so any later stage (decode, signature check) would fail on it; only the order of the stages decides
 /// which error comes back.
 fn renamed(suite: u16) -> Vec<u8> {
