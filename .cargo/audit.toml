@@ -70,4 +70,20 @@ ignore = [
     # or linked. Re-evaluate if the libcrux hpke-rs backend is ever activated.
     "RUSTSEC-2026-0330",
     "RUSTSEC-2026-0331",
+
+    # RUSTSEC-2026-0387 - `crypto-bigint` 0.5.5: subtraction, zero counting, division and Montgomery
+    # multiplication can branch on secret values depending on compiler and CPU (fix >=0.7.6).
+    # Chain: crypto-bigint <- elliptic-curve 0.13.8 <- {p256, p384, k256, ecdsa, primeorder} <-
+    # {hpke-rs-rust-crypto 0.6.1, openmls_rust_crypto 0.5.1} <- mimi-core. COMPILED. No upgrade is reachable:
+    # both dependents pin the elliptic-curve 0.13 family and 0.7.6 needs 0.14.
+    # Disposition: ACCEPTED-RISK. The leak needs a secret integer on a NIST or secp curve. This crate generates
+    # only `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519` (X25519 and Ed25519, neither of which uses
+    # crypto-bigint), and every KeyPackage, Welcome and GroupInfo a peer sends is refused as foreign unless it
+    # names that suite. The KeyPackage gate reads the suite from its fixed wire position and refuses before it
+    # decodes or verifies anything (`gate.rs`, `mimi_gate_keypackage` and `keypackage_ref`), so no NIST or secp
+    # signature is verified on a peer's KeyPackage either. With the pinned suite alone, no operation on a secret
+    # NIST or secp scalar runs and no P-curve arithmetic runs on a peer's bytes. Re-evaluate when
+    # openmls_rust_crypto and hpke-rs move to elliptic-curve 0.14, or when this crate or a workspace member adds
+    # another ciphersuite.
+    "RUSTSEC-2026-0387",
 ]
