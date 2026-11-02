@@ -21,8 +21,10 @@
 //! encoding `tls_codec::VLBytes` implements and this crate already uses throughout
 //! `protocol_wire.rs`, reused here via the same `bounded_run_input` budgeting helper.
 
-use openmls::prelude::MlsMessageIn;
-use tls_codec::{Deserialize as TlsDeserialize, DeserializeBytes, VLBytes};
+use openmls::prelude::{MlsMessageIn, ProposalIn};
+use tls_codec::{
+    Deserialize as TlsDeserialize, DeserializeBytes, Serialize as TlsSerialize, VLBytes,
+};
 
 use crate::protocol_wire::{bounded_run_input, WireError, MAX_RUN_AGGREGATE_BYTES};
 
@@ -35,6 +37,19 @@ const MLS_CONTENT_TYPE_COMMIT: u8 = 3;
 /// by-reference `proposal_ref` (discriminant 0) pointing at an earlier standalone message this
 /// decoder has no access to.
 const MLS_PROPOSAL_OR_REF_INLINE: u8 = 1;
+
+/// mls-extensions §4.7 `app_data_update`: the proposal type of an AppDataUpdate (0x0008, the value §7.2.1 of
+/// that draft suggests).
+const APP_DATA_UPDATE_PROPOSAL_TYPE: u16 = 0x0008;
+/// protocol-06 §10.3 `participant_list`: the component an AppDataUpdate addresses to change the participant list.
+const PARTICIPANT_LIST_COMPONENT_ID: u16 = 0x0022;
+/// `AppDataUpdateOperation` values: `update(1)` carries `opaque update<V>`, `remove(2)` carries nothing.
+const APP_DATA_UPDATE_OP_UPDATE: u8 = 1;
+const APP_DATA_UPDATE_OP_REMOVE: u8 = 2;
+/// The private type an AppDataUpdate this crate does not read is rewritten to while a message is being read.
+const APP_DATA_UPDATE_UNREAD_TYPE: u16 = 0xF7A2;
+/// `ProposalOrRef`'s discriminant for a by-reference `proposal_ref`.
+const MLS_PROPOSAL_OR_REF_REFERENCE: u8 = 2;
 
 /// A custom proposal's `proposal_type` and opaque payload, read out of a Commit. The caller
 /// checks `proposal_type` against the constant it expects
@@ -149,6 +164,166 @@ fn require_complete_public_message_commit(bytes: &[u8]) -> Result<(), WireError>
     Ok(())
 }
 
+/// A message rewritten so openmls can read it, and how much longer it is than the original (negative when shorter).
+pub(crate) struct Normalized {
+    pub bytes: Vec<u8>,
+    pub delta: isize,
+}
+
+/// Rewrite the AppDataUpdate proposals of a member-sent `PublicMessage` Commit into custom proposals, so a decoder built
+/// without openmls's `extensions-draft-08` can read the message. Returns `None` when the message is not such a Commit or
+/// carries no AppDataUpdate, and the caller then reads it as it is.
+///
+/// This works around the openmls release this crate pins (0.8.1, built without `extensions-draft-08`): remove it when a
+/// pinned release reads an AppDataUpdate itself.
+///
+/// openmls without that feature reads proposal type `0x0008` as a custom proposal whose body is `payload<V>`. An
+/// AppDataUpdate body begins with a two-byte component id, so the first byte reads as an empty payload and the next byte
+/// as the next `ProposalOrRef` tag, which fails (`UnknownValue(34)` for component `0x0022`). Each AppDataUpdate entry is
+/// therefore rewritten: an update to the participant-list component becomes the `0xF7A0` custom proposal carrying the same
+/// update bytes, which is the form this crate already reads, and any other AppDataUpdate becomes a custom proposal of a
+/// private type that no caller recognizes. Every other entry is copied as it is, sized by openmls's own decoder. The
+/// rewrite is for reading only: the original bytes are what is stored or forwarded, and no signature is verified here
+/// (see the module doc).
+pub(crate) fn normalize_app_data_updates(bytes: &[u8]) -> Result<Option<Normalized>, WireError> {
+    let (version, rest) = read_u16(bytes, "MLSMessage.version")?;
+    if version != MLS_PROTOCOL_VERSION_MLS10 {
+        return Ok(None);
+    }
+    let (wire_format, rest) = read_u16(rest, "MLSMessage.wire_format")?;
+    if wire_format != MLS_WIRE_FORMAT_PUBLIC_MESSAGE {
+        return Ok(None);
+    }
+    let (_group_id, rest) = read_opaque_vec(rest, "FramedContent.group_id")?;
+    let (_epoch, rest) = read_u64(rest, "FramedContent.epoch")?;
+    let (sender_type, rest) = read_u8(rest, "Sender.sender_type")?;
+    if sender_type != MLS_SENDER_TYPE_MEMBER {
+        return Ok(None);
+    }
+    let (_leaf_index, rest) = read_u32(rest, "Sender.leaf_index")?;
+    let (_authenticated_data, rest) = read_opaque_vec(rest, "FramedContent.authenticated_data")?;
+    let (content_type, window_at) = read_u8(rest, "FramedContent.content_type")?;
+    if content_type != MLS_CONTENT_TYPE_COMMIT {
+        return Ok(None);
+    }
+    let (window, after_window) = read_opaque_vec(window_at, "Commit.proposals")?;
+    let window_total = window_at.len() - after_window.len();
+
+    let mut rewritten = Vec::with_capacity(window.len());
+    let mut found = false;
+    let mut offset = 0usize;
+    let budget = crate::protocol_wire::MAX_RUN_ELEMENTS;
+    let mut entries = 0usize;
+    while offset < window.len() {
+        entries += 1;
+        if entries > budget {
+            return Err(WireError::RunBudgetExceeded {
+                what: "Commit.proposals",
+                detail: format!("run exceeds the {budget}-element budget"),
+            });
+        }
+        let entry = &window[offset..];
+        let (&tag, body) = entry.split_first().ok_or_else(|| WireError::Codec {
+            what: "ProposalOrRef.tag",
+            detail: "truncated".into(),
+        })?;
+        let used = match tag {
+            MLS_PROPOSAL_OR_REF_INLINE => {
+                let (proposal_type, after_type) = read_u16(body, "Proposal.proposal_type")?;
+                if proposal_type == APP_DATA_UPDATE_PROPOSAL_TYPE {
+                    found = true;
+                    let (component, after_component) =
+                        read_u16(after_type, "AppDataUpdate.component_id")?;
+                    let (op, after_op) = read_u8(after_component, "AppDataUpdate.op")?;
+                    let (update, tail) = match op {
+                        APP_DATA_UPDATE_OP_UPDATE => {
+                            let (update, tail) = read_opaque_vec(after_op, "AppDataUpdate.update")?;
+                            (Some(update), tail)
+                        }
+                        APP_DATA_UPDATE_OP_REMOVE => (None, after_op),
+                        other => {
+                            return Err(WireError::Codec {
+                                what: "AppDataUpdate.op",
+                                detail: format!("expected update (1) or remove (2), got {other}"),
+                            })
+                        }
+                    };
+                    let (new_type, new_payload) = match (&update, component) {
+                        (Some(update), PARTICIPANT_LIST_COMPONENT_ID) => (
+                            crate::participant_list::MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE,
+                            update.clone(),
+                        ),
+                        _ => {
+                            // The component, the operation and the update, as sent, behind a type nothing recognizes.
+                            let body_used = after_type.len() - tail.len();
+                            (
+                                APP_DATA_UPDATE_UNREAD_TYPE,
+                                after_type[..body_used].to_vec(),
+                            )
+                        }
+                    };
+                    rewritten.push(MLS_PROPOSAL_OR_REF_INLINE);
+                    rewritten.extend_from_slice(&new_type.to_be_bytes());
+                    rewritten.extend_from_slice(
+                        &VLBytes::new(new_payload)
+                            .tls_serialize_detached()
+                            .map_err(|e| WireError::Codec {
+                                what: "Proposal.custom_payload",
+                                detail: e.to_string(),
+                            })?,
+                    );
+                    1 + 2 + (after_type.len() - tail.len())
+                } else {
+                    // Not an AppDataUpdate: openmls reads it, and says where it ends.
+                    let (_proposal, tail) =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            ProposalIn::tls_deserialize_bytes(body)
+                        }))
+                        .map_err(|_| WireError::Codec {
+                            what: "Commit.proposals",
+                            detail: "malformed proposal (decoder panicked)".into(),
+                        })?
+                        .map_err(|e| WireError::Codec {
+                            what: "Commit.proposals",
+                            detail: e.to_string(),
+                        })?;
+                    let used = 1 + (body.len() - tail.len());
+                    rewritten.extend_from_slice(&entry[..used]);
+                    used
+                }
+            }
+            MLS_PROPOSAL_OR_REF_REFERENCE => {
+                let (_reference, tail) = read_opaque_vec(body, "ProposalOrRef.proposal_ref")?;
+                let used = 1 + (body.len() - tail.len());
+                rewritten.extend_from_slice(&entry[..used]);
+                used
+            }
+            other => {
+                return Err(WireError::Codec {
+                    what: "ProposalOrRef.tag",
+                    detail: format!("expected 1 or 2, got {other}"),
+                })
+            }
+        };
+        offset += used;
+    }
+    if !found {
+        return Ok(None);
+    }
+    let new_window = VLBytes::new(rewritten)
+        .tls_serialize_detached()
+        .map_err(|e| WireError::Codec {
+            what: "Commit.proposals",
+            detail: e.to_string(),
+        })?;
+    let window_start = bytes.len() - window_at.len();
+    let mut out = bytes[..window_start].to_vec();
+    out.extend_from_slice(&new_window);
+    out.extend_from_slice(after_window);
+    let delta = new_window.len() as isize - window_total as isize;
+    Ok(Some(Normalized { bytes: out, delta }))
+}
+
 /// Decode a `PublicMessage`-wrapped Commit whose `proposals` list holds exactly one by-value
 /// custom proposal, returning its `proposal_type` and payload. See the module doc for the
 /// bounded scope (single custom proposal, no standard proposals in the same Commit, no
@@ -156,6 +331,9 @@ fn require_complete_public_message_commit(bytes: &[u8]) -> Result<(), WireError>
 pub fn decode_single_custom_proposal_commit(
     bytes: &[u8],
 ) -> Result<DecodedCustomProposal, WireError> {
+    // An AppDataUpdate is read through its rewritten form (see `normalize_app_data_updates`).
+    let normalized = normalize_app_data_updates(bytes)?;
+    let bytes = normalized.as_ref().map_or(bytes, |n| n.bytes.as_slice());
     require_complete_public_message_commit(bytes)?;
 
     let (version, rest) = read_u16(bytes, "MLSMessage.version")?;
@@ -229,6 +407,13 @@ pub fn decode_single_custom_proposal_commit(
         });
     }
 
+    if proposal_type == APP_DATA_UPDATE_UNREAD_TYPE {
+        return Err(WireError::Codec {
+            what: "Proposal.proposal_type",
+            detail: "this AppDataUpdate is not for the participant list, or it removes a component"
+                .into(),
+        });
+    }
     Ok(DecodedCustomProposal {
         proposal_type,
         payload,
@@ -245,6 +430,10 @@ fn read_u32<'a>(bytes: &'a [u8], what: &'static str) -> Result<(u32, &'a [u8]), 
         })?;
     Ok((u32::from_be_bytes(arr), &bytes[4..]))
 }
+
+#[cfg(test)]
+#[path = "commit_wire_app_data_tests.rs"]
+pub(crate) mod app_data_tests;
 
 #[cfg(test)]
 mod tests {
@@ -266,7 +455,7 @@ mod tests {
     /// `MIXED_PLAINTEXT_WIRE_FORMAT_POLICY`, one `propose_custom_proposal_by_value` call adding
     /// one participant) - see `dispatch165_phase2_div10_commit_parser_2026-07-14_plan.md` for the
     /// full byte-walk this fixture was derived from.
-    const CAPTURED_PARTICIPANT_LIST_COMMIT: &str = "000100011086d81b32fdc820d8273b703fa003a27f0000000000000001010000000000033201f7a02e00002b266d696d693a2f2f6d696d692e686176656e6d657373656e6765722e636f6d2f752f6361726f6c000000020040400dfef6a4588d7dc2ef07df261d3af70f6c516cb112309659cc0daa682ac4b24024be15448d121120ac2564eeb0cdc959f3e5d724b85eb5de7b703fd6c4c0a108202679343f28f358284d92562bfd718cf0c5417fb067f89bc0707e07bbf575c30820213fc41210c12b5a97452b4ba17da2a75b5a07da42c509add02a592ca56a09cd";
+    pub(super) const CAPTURED_PARTICIPANT_LIST_COMMIT: &str = "000100011086d81b32fdc820d8273b703fa003a27f0000000000000001010000000000033201f7a02e00002b266d696d693a2f2f6d696d692e686176656e6d657373656e6765722e636f6d2f752f6361726f6c000000020040400dfef6a4588d7dc2ef07df261d3af70f6c516cb112309659cc0daa682ac4b24024be15448d121120ac2564eeb0cdc959f3e5d724b85eb5de7b703fd6c4c0a108202679343f28f358284d92562bfd718cf0c5417fb067f89bc0707e07bbf575c30820213fc41210c12b5a97452b4ba17da2a75b5a07da42c509add02a592ca56a09cd";
 
     /// Real bytes captured the same way, but a plain Add (no custom proposal at all) - proves the
     /// decoder correctly REJECTS a Commit whose one proposal isn't a recognized custom type,

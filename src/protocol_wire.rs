@@ -1601,15 +1601,30 @@ impl HandshakeBundle {
         // moreProposals parses below in this same function (peer-controlled bytes). catch_unwind
         // turns a hostile/malformed proposalOrCommit into a decode error instead of an unhandled
         // panic in the request task.
-        let (msg, consumed) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut c: &[u8] = bytes;
-            MlsMessageIn::tls_deserialize(&mut c).map(|m| (m, bytes.len() - c.len()))
+        //
+        // A Commit that carries an AppDataUpdate is read through its rewritten form, so openmls built without
+        // `extensions-draft-08` can find where it ends; the bytes kept are the original ones.
+        let normalized = crate::commit_wire::normalize_app_data_updates(bytes)?;
+        let readable: &[u8] = normalized.as_ref().map_or(bytes, |n| n.bytes.as_slice());
+        let (msg, readable_len) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut c: &[u8] = readable;
+            MlsMessageIn::tls_deserialize(&mut c).map(|m| (m, readable.len() - c.len()))
         }))
         .map_err(|_| WireError::Codec {
             what: "proposalOrCommit",
             detail: "malformed MLSMessage (decoder panicked)".into(),
         })?
         .map_err(|e| WireError::MlsMessage(format!("{e:?}")))?;
+        let consumed = match &normalized {
+            Some(n) => usize::try_from(readable_len as isize - n.delta)
+                .ok()
+                .filter(|&used| used <= bytes.len())
+                .ok_or_else(|| WireError::Codec {
+                    what: "proposalOrCommit",
+                    detail: "the rewritten commit's end does not map back".into(),
+                })?,
+            None => readable_len,
+        };
         let cursor: &[u8] = &bytes[consumed..];
         let proposal_or_commit = bytes[..consumed].to_vec();
         let content_type = match msg.extract() {

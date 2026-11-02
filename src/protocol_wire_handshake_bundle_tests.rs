@@ -3,6 +3,7 @@
 //! a raw `GroupInfo`, then the ratchet tree.
 
 use super::*;
+use crate::commit_wire::app_data_tests::{app_data_update, commit_with, custom};
 use crate::test_fixtures::{add_commit, AddCommit};
 
 const FULL: u8 = 1;
@@ -199,4 +200,95 @@ fn the_bare_welcome_gate_refuses_a_foreign_suite_and_a_trailer() {
     trailing.push(0);
     assert!(crate::gate::mimi_gate_welcome_bare(&trailing).is_err());
     assert!(crate::gate::mimi_gate_welcome_bare(&[0x00]).is_err());
+}
+
+/// A Commit that carries an AppDataUpdate for the participant list: openmls built without `extensions-draft-08` cannot find
+/// where it ends, so the bundle is read through a rewritten form while the bytes kept are the ones that were sent.
+mod app_data_update {
+    use super::*;
+
+    const UPDATE_OP: u8 = 1;
+    const PARTICIPANT_LIST: u16 = 0x0022;
+
+    fn commit(update_len: usize) -> Vec<u8> {
+        commit_with(&[app_data_update(
+            PARTICIPANT_LIST,
+            UPDATE_OP,
+            Some(&vec![0x5A; update_len]),
+        )])
+    }
+
+    #[test]
+    fn a_whole_bundle_around_the_commit_decodes_and_keeps_the_original_bytes() {
+        let AddCommit {
+            welcome,
+            group_info,
+            ..
+        } = add_commit();
+        // Sizes on both sides of the prefix boundaries, so the bytes after the Commit sit at shifted offsets.
+        for update_len in [0usize, 20, 58, 59, 60, 63, 64, 70, 16380, 16384, 16390] {
+            let sent = commit(update_len);
+            let wire = bundle(&sent, Some(&welcome), FULL, &group_info, &[0xCC, 0xDD]);
+            let decoded = HandshakeBundle::decode(&wire)
+                .unwrap_or_else(|e| panic!("update of {update_len} bytes: {e:?}"));
+            let HandshakeBundle::Commit {
+                proposal_or_commit,
+                welcome: read_welcome,
+                group_info_option,
+                ratchet_tree_option,
+            } = &decoded
+            else {
+                panic!("a commit bundle decodes to Commit");
+            };
+            assert_eq!(
+                proposal_or_commit, &sent,
+                "the bytes kept are the ones sent ({update_len})"
+            );
+            assert_eq!(
+                read_welcome.as_deref(),
+                Some(welcome.as_slice()),
+                "{update_len}"
+            );
+            assert_eq!(group_info_option.payload, group_info, "{update_len}");
+            assert_eq!(ratchet_tree_option, &[0xCC, 0xDD], "{update_len}");
+            assert_eq!(decoded.encode().unwrap(), wire, "{update_len}");
+        }
+    }
+
+    #[test]
+    fn the_private_form_decodes_to_the_same_bundle_shape() {
+        let AddCommit {
+            welcome,
+            group_info,
+            ..
+        } = add_commit();
+        let sent = commit_with(&[custom(0xF7A0, &[0x5A; 20])]);
+        let wire = bundle(&sent, Some(&welcome), FULL, &group_info, &[]);
+        let HandshakeBundle::Commit {
+            proposal_or_commit, ..
+        } = HandshakeBundle::decode(&wire).unwrap()
+        else {
+            panic!("Commit");
+        };
+        assert_eq!(proposal_or_commit, sent);
+    }
+
+    #[test]
+    fn a_bundle_whose_commit_carries_a_malformed_app_data_update_is_refused() {
+        let AddCommit {
+            welcome,
+            group_info,
+            ..
+        } = add_commit();
+        let mut entry = app_data_update(PARTICIPANT_LIST, UPDATE_OP, Some(&[1, 2, 3]));
+        entry.truncate(entry.len() - 2);
+        let wire = bundle(
+            &commit_with(&[entry]),
+            Some(&welcome),
+            FULL,
+            &group_info,
+            &[],
+        );
+        assert!(HandshakeBundle::decode(&wire).is_err());
+    }
 }
