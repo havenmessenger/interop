@@ -233,21 +233,26 @@ A test pins the refusal (`gate::grease_tests`) and fails when the pinned release
 refusing it; it is then inverted and this entry removed. The fix needs an openmls release, or
 a source dependency, which this crate's manifest-purity guard does not allow.
 
-## DIV-15 - participant-list and room-policy changes are read from private proposal types
+## DIV-15 - room-policy changes are read from a private proposal type; AppSync is not read
 
-`update` reads a change to the participant list or the room policy from a custom proposal of a
-private type: `0xF7A0` for `mimiParticipantList` and `0xF7A1` for `mimiRoomPolicy`
-(`mimi_core::participant_list`, `mimi_core::room_policy`).
+`update` reads a participant-list change from either of two carriers: an AppDataUpdate
+(mls-extensions-10 §4.7, proposal type `0x0008` as its §7.2.1 suggests) addressed to
+component `0x0022` (`participant_list`, protocol-06 §9 and §10.3), or the custom proposal of the
+private type `0xF7A0` (`mimiParticipantList`). Both carry the draft's `ParticipantListUpdate`
+encoding and are applied the same way. The openmls release this crate pins (0.8.1) is built
+without `extensions-draft-08` and cannot read an AppDataUpdate, so `commit_wire` reads the
+proposals window itself and rewrites an AppDataUpdate to the `0xF7A0` form for reading only; the
+bytes of the Commit are never changed.
 
-draft-ietf-mimi-protocol-06 describes the carrier two ways. §2, §3, §4.2, §5.3 and the sequence
+A room-policy change is read only from the custom proposal of the private type `0xF7A1`
+(`mimiRoomPolicy`): protocol-06 §10 registers components `0x0020` to `0x0023` and none of them is
+a room policy. An AppDataUpdate for any other component, a removal, and an AppSync proposal are
+refused as an unrecognized proposal type.
+
+draft-ietf-mimi-protocol-06 describes the carrier two ways: §2, §3, §4.2, §5.3 and the sequence
 examples call it an AppSync proposal with an `applicationId` of `mimiParticipantList` or
-`mimiRoomPolicy`. §9 says a `ParticipantListUpdate` is the contents of an AppDataUpdate proposal
-with the component ID for the participant list, and §10.3 registers that component as `0x0022`
-(`participant_list`); §10 registers `0x0020` to `0x0023` and none of them is a room policy. The
-working group's editor's copy now says AppDataUpdate in §5.3 as well. This codec reads none of
-these: a Commit that carries an AppDataUpdate for component `0x0022`, or an AppSync proposal, is
-refused as an unrecognized proposal type. The payload of a `0xF7A0` proposal is the draft's
-`ParticipantListUpdate` encoding, so only the carrier differs.
+`mimiRoomPolicy`, while §9 and §10.3 say AppDataUpdate with a component ID. The working group's
+editor's copy now says AppDataUpdate in §5.3 as well.
 
 ---
 

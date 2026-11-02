@@ -5,7 +5,7 @@
 //! implementation decodes.
 
 use mimi_core::gate::mimi_gate_keypackage;
-use mimi_core::protocol_wire::{HandshakeBundle, KeyMaterialResponse};
+use mimi_core::protocol_wire::{HandshakeBundle, KeyMaterialResponse, UpdateRoomResponse};
 use serde::Deserialize;
 
 const VECTORS_JSON: &str = include_str!("vectors/protocol06-vectors.json");
@@ -50,7 +50,7 @@ fn vectors() -> Vec<Vector> {
 #[test]
 fn every_vector_is_decoded_or_refused_as_recorded() {
     let vectors = vectors();
-    assert!(vectors.len() >= 15, "the vector set is not empty");
+    assert!(vectors.len() >= 27, "the vector set is not empty");
     for vector in vectors {
         let bytes = hex::decode(&vector.hex).unwrap();
         let id = &vector.id;
@@ -63,7 +63,12 @@ fn every_vector_is_decoded_or_refused_as_recorded() {
                 ),
                 Err(_) => (false, None, None),
             },
-            "HandshakeBundle" => match HandshakeBundle::decode(&bytes) {
+            "UpdateRoomResponse" => match UpdateRoomResponse::decode(&bytes) {
+                Ok(response) => (true, None, Some(response.encode().unwrap())),
+                Err(_) => (false, None, None),
+            },
+            // An UpdateRequest is a HandshakeBundle; what the hub answers is replayed in mimi-hubd's own tests.
+            "HandshakeBundle" | "UpdateRequest" => match HandshakeBundle::decode(&bytes) {
                 Ok(bundle) => (
                     true,
                     Some(bundle_variant(&bundle)),
@@ -102,6 +107,10 @@ fn the_set_covers_each_shape_the_draft_defines() {
         "hb-03-partial-group-info",
         "hb-x1-welcome-in-mls-message",
         "kp-x1-grease-key-package",
+        "up-02-participant-list-app-data-update",
+        "up-x1-bare-commit",
+        "ur-01-success",
+        "ur-04-invalid-proposal",
     ] {
         assert!(ids.iter().any(|id| id == wanted), "missing vector {wanted}");
     }

@@ -15,6 +15,7 @@ use mimi_core::participant_list::{
 use mimi_core::protocol_wire::{
     GroupInfoOption, GroupInfoRepresentation, HandshakeBundle, UpdateRoomResponse,
 };
+use tls_codec::Serialize as _;
 use tower::ServiceExt;
 
 use super::tests::{
@@ -260,4 +261,152 @@ fn a_sqlite_failure_is_the_hubs_own_and_any_other_store_error_is_a_refusal() {
         crate::store_refusal(&anyhow::anyhow!("participant cap reached for room (256)")),
         crate::UpdateRefusal::NotAllowed
     );
+}
+
+fn vl(bytes: &[u8]) -> Vec<u8> {
+    tls_codec::VLBytes::new(bytes.to_vec())
+        .tls_serialize_detached()
+        .unwrap()
+}
+
+/// The length prefix a `<V>` field of `len` bytes carries.
+fn length_prefix(len: usize) -> Vec<u8> {
+    let whole = vl(&vec![0u8; len]);
+    whole[..whole.len() - len].to_vec()
+}
+
+/// The Commit with its one custom proposal rewritten as an AppDataUpdate (mls-extensions-10 §4.7: type 0x0008, a two-byte
+/// component id, the operation, `update<V>`), with the proposals window's length prefix adjusted to match.
+fn as_app_data_update(commit: &[u8], payload: &[u8], component: u16) -> Vec<u8> {
+    let entry = [vec![0x01, 0xF7, 0xA0], vl(payload)].concat();
+    let found = [length_prefix(entry.len()), entry].concat();
+    let at = commit
+        .windows(found.len())
+        .position(|w| w == found.as_slice())
+        .expect("the commit's one custom proposal");
+    let entry = [
+        vec![0x01, 0x00, 0x08],
+        component.to_be_bytes().to_vec(),
+        vec![0x01],
+        vl(payload),
+    ]
+    .concat();
+    let replacement = [length_prefix(entry.len()), entry].concat();
+    [&commit[..at], &replacement, &commit[at + found.len()..]].concat()
+}
+
+#[tokio::test]
+async fn an_app_data_update_for_the_participant_list_is_applied_like_the_private_form() {
+    let (router, p) = app();
+    hosted_room_with_alice_and_bob(&p);
+    let payload = add_carol();
+    let commit =
+        real_single_custom_proposal_commit(MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE, payload.clone());
+    let sent = as_app_data_update(&commit, &payload, 0x0022);
+    assert_ne!(sent, commit);
+    let answer = update_answer(post(router, ROOM, bundle_of(sent)).await).await;
+    assert!(
+        matches!(answer, UpdateRoomResponse::Success { .. }),
+        "{answer:?}"
+    );
+    assert!(participants(&p).contains(&"mimi://havenmessenger.com/u/carol".to_string()));
+}
+
+#[tokio::test]
+async fn an_app_data_update_for_another_component_is_invalid_and_changes_nothing() {
+    for component in [0x0020u16, 0x0021, 0x0023] {
+        let (router, p) = app();
+        hosted_room_with_alice_and_bob(&p);
+        let before = participants(&p);
+        let payload = add_carol();
+        let commit = real_single_custom_proposal_commit(
+            MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE,
+            payload.clone(),
+        );
+        let sent = as_app_data_update(&commit, &payload, component);
+        let answer = update_answer(post(router, ROOM, bundle_of(sent)).await).await;
+        assert!(
+            matches!(answer, UpdateRoomResponse::InvalidProposal { .. }),
+            "{component:#06x}: {answer:?}"
+        );
+        assert_eq!(participants(&p), before, "{component:#06x}");
+    }
+}
+
+#[tokio::test]
+async fn an_app_data_update_that_is_not_a_participant_list_update_is_invalid_and_changes_nothing() {
+    let (router, p) = app();
+    hosted_room_with_alice_and_bob(&p);
+    let before = participants(&p);
+    let garbage = vec![0xFF; 5];
+    let commit =
+        real_single_custom_proposal_commit(MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE, garbage.clone());
+    let sent = as_app_data_update(&commit, &garbage, 0x0022);
+    let answer = update_answer(post(router, ROOM, bundle_of(sent)).await).await;
+    assert!(
+        matches!(answer, UpdateRoomResponse::InvalidProposal { .. }),
+        "{answer:?}"
+    );
+    assert_eq!(participants(&p), before);
+}
+
+fn from_hex(h: &str) -> Vec<u8> {
+    (0..h.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+/// Every `UpdateRequest` in the committed protocol-06 vectors is posted to a room that holds the participants the vector
+/// names, and the hub answers as the vector records and leaves the room as the vector records.
+#[tokio::test]
+async fn every_update_request_vector_gets_its_recorded_answer() {
+    let vectors: serde_json::Value =
+        serde_json::from_str(include_str!("../../tests/vectors/protocol06-vectors.json")).unwrap();
+    let mut checked = 0;
+    for vector in vectors["vectors"].as_array().unwrap() {
+        if vector["kind"] != "UpdateRequest" {
+            continue;
+        }
+        let id = vector["id"].as_str().unwrap();
+        let room = vector["room"].as_str().unwrap();
+        let (router, p) = app();
+        for user in vector["participants_before"].as_array().unwrap() {
+            p.lock()
+                .unwrap()
+                .add_participant(room, user.as_str().unwrap(), 1)
+                .unwrap();
+        }
+        let body = from_hex(vector["hex"].as_str().unwrap());
+        let answer = update_answer(post(router, room, body).await).await;
+        let kind = match answer {
+            UpdateRoomResponse::Success { .. } => "success",
+            UpdateRoomResponse::NotAllowed { .. } => "notAllowed",
+            UpdateRoomResponse::InvalidProposal { .. } => "invalidProposal",
+            UpdateRoomResponse::WrongEpoch { .. } => "wrongEpoch",
+        };
+        assert_eq!(kind, vector["answer"].as_str().unwrap(), "{id}: answer");
+        let mut after: Vec<String> = participants_of(&p, room);
+        let mut want: Vec<String> = vector["participants_after"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| u.as_str().unwrap().to_string())
+            .collect();
+        after.sort();
+        want.sort();
+        assert_eq!(after, want, "{id}: participants after");
+        checked += 1;
+    }
+    assert!(checked >= 5, "the vector set carries update requests");
+}
+
+fn participants_of(p: &SharedProvider, room: &str) -> Vec<String> {
+    p.lock()
+        .unwrap()
+        .list_participants(room)
+        .unwrap()
+        .into_iter()
+        .map(|(uri, _)| uri)
+        .collect()
 }

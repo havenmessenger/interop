@@ -10,6 +10,13 @@
 //!
 //! `unwrap` is fine here: this is a generator, not the library.
 
+use mimi_core::participant_list::{
+    encode_participant_list_update, ParticipantListUpdate, UserRolePair,
+    MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE,
+};
+use mimi_core::protocol_wire::{
+    GroupInfoOption, GroupInfoRepresentation, HandshakeBundle, UpdateRoomResponse,
+};
 use mimi_core::test_helpers::key_package;
 use openmls::ciphersuite::signature::SignaturePublicKey;
 use openmls::credentials::{BasicCredential, CredentialWithKey};
@@ -24,6 +31,11 @@ const PROTOCOL_MLS10: u8 = 1;
 const USER: &str = "mimi://example.org/u/alice";
 const CLIENT_A: &str = "mimi://example.org/d/alice-a";
 const CLIENT_B: &str = "mimi://example.org/d/alice-b";
+const ROOM: &str = "mimi://havenmessenger.com/r/x";
+const ALICE: &str = "mimi://havenmessenger.com/u/alice";
+const BOB: &str = "mimi://havenmessenger.com/u/bob";
+const CAROL: &str = "mimi://havenmessenger.com/u/carol";
+const PARTICIPANT_LIST_COMPONENT: u16 = 0x0022;
 const SUITE_PINNED: u16 = 0x0001;
 // The ChaCha20-Poly1305 suite, used only to build the foreign-suite refusals.
 const SUITE_FOREIGN: u16 = 0x0003;
@@ -130,6 +142,93 @@ fn add_commit() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     )
 }
 
+/// The by-value proposal message and the Commit over it: a group of one proposes and commits one custom proposal of
+/// `proposal_type` carrying `payload`.
+fn custom_proposal_and_commit(proposal_type: u16, payload: Vec<u8>) -> (Vec<u8>, Vec<u8>) {
+    let provider = OpenMlsRustCrypto::default();
+    let (private_key, public_key) = provider
+        .crypto()
+        .signature_key_gen(SignatureScheme::ED25519)
+        .unwrap();
+    let signer = Signer25519 { key: private_key };
+    let credential = CredentialWithKey {
+        credential: BasicCredential::new(b"alice".to_vec()).into(),
+        signature_key: SignaturePublicKey::from(public_key),
+    };
+    let capabilities = Capabilities::new(
+        None,
+        Some(&[Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519]),
+        None,
+        Some(&[ProposalType::Custom(proposal_type)]),
+        None,
+    );
+    let config = MlsGroupCreateConfig::builder()
+        .capabilities(capabilities)
+        .ciphersuite(Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519)
+        .wire_format_policy(MIXED_PLAINTEXT_WIRE_FORMAT_POLICY)
+        .build();
+    let mut group = MlsGroup::new(&provider, &signer, &config, credential).unwrap();
+    let (proposal, _reference) = group
+        .propose_custom_proposal_by_value(
+            &provider,
+            &signer,
+            CustomProposal::new(proposal_type, payload),
+        )
+        .unwrap();
+    let (commit, _welcome, _group_info) = group
+        .commit_to_pending_proposals(&provider, &signer)
+        .unwrap();
+    (
+        proposal.tls_serialize_detached().unwrap(),
+        commit.tls_serialize_detached().unwrap(),
+    )
+}
+
+/// The Commit with its one custom proposal rewritten as an AppDataUpdate of `component` (mls-extensions-10 §4.7: type
+/// 0x0008, a two-byte component id, the operation `update`, `update<V>`), with the proposals window's prefix adjusted.
+fn as_app_data_update(commit: &[u8], payload: &[u8], component: u16) -> Vec<u8> {
+    let prefix = |len: usize| {
+        let whole = vl(&vec![0u8; len]);
+        whole[..whole.len() - len].to_vec()
+    };
+    let entry = [vec![0x01, 0xF7, 0xA0], vl(payload)].concat();
+    let found = [prefix(entry.len()), entry].concat();
+    let at = commit
+        .windows(found.len())
+        .position(|w| w == found.as_slice())
+        .unwrap();
+    let entry = [
+        vec![0x01, 0x00, 0x08],
+        component.to_be_bytes().to_vec(),
+        vec![0x01],
+        vl(payload),
+    ]
+    .concat();
+    let replacement = [prefix(entry.len()), entry].concat();
+    [&commit[..at], &replacement, &commit[at + found.len()..]].concat()
+}
+
+fn vl(bytes: &[u8]) -> Vec<u8> {
+    VLBytes::new(bytes.to_vec())
+        .tls_serialize_detached()
+        .unwrap()
+}
+
+/// An `UpdateRequest`: a Commit bundle with no Welcome, a Partial group info and no ratchet tree.
+fn update_request(commit: &[u8]) -> Vec<u8> {
+    HandshakeBundle::Commit {
+        proposal_or_commit: commit.to_vec(),
+        welcome: None,
+        group_info_option: GroupInfoOption {
+            representation: GroupInfoRepresentation::Partial,
+            payload: Vec::new(),
+        },
+        ratchet_tree_option: Vec::new(),
+    }
+    .encode()
+    .unwrap()
+}
+
 fn capabilities() -> Vec<u8> {
     Capabilities::new(
         None,
@@ -160,6 +259,25 @@ fn vector(
     })
 }
 
+/// An `UpdateRequest` vector: the room it is posted to, the participants the room holds first, the participants it holds
+/// after an accepted update, and the `UpdateRoomResponse` kind the hub answers with.
+fn update_vector(
+    id: &str,
+    description: &str,
+    body: &[u8],
+    decode: &str,
+    variant: Option<&str>,
+    outcome: &str,
+    after: &[&str],
+) -> serde_json::Value {
+    let mut v = vector(id, "UpdateRequest", description, body, decode, variant);
+    v["room"] = json!(ROOM);
+    v["participants_before"] = json!([ALICE, BOB]);
+    v["participants_after"] = json!(after);
+    v["answer"] = json!(outcome);
+    v
+}
+
 fn main() {
     let (a, b) = (
         key_package(b"alice-a", SUITE_PINNED),
@@ -176,7 +294,60 @@ fn main() {
         .tls_serialize_detached()
         .unwrap();
 
-    let vectors = vec![
+    let add_carol = encode_participant_list_update(&ParticipantListUpdate {
+        added_participants: vec![UserRolePair {
+            user_uri: CAROL.into(),
+            role_index: 2,
+        }],
+        ..Default::default()
+    })
+    .unwrap();
+    let (proposal_message, commit_message) =
+        custom_proposal_and_commit(MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE, add_carol.clone());
+    let app_data_commit =
+        as_app_data_update(&commit_message, &add_carol, PARTICIPANT_LIST_COMPONENT);
+    let other_component_commit = as_app_data_update(&commit_message, &add_carol, 0x0023);
+    let proposals_bundle = HandshakeBundle::Proposal {
+        proposal_or_commit: proposal_message,
+        more_proposals: Vec::new(),
+    }
+    .encode()
+    .unwrap();
+    let responses = [
+        (
+            "ur-01-success",
+            "UpdateRoomResponse success with the hub's acceptance time in milliseconds",
+            UpdateRoomResponse::Success {
+                error_description: String::new(),
+                accepted_timestamp: 1_762_100_000_123,
+            },
+        ),
+        (
+            "ur-02-wrong-epoch",
+            "UpdateRoomResponse wrongEpoch with the current epoch",
+            UpdateRoomResponse::WrongEpoch {
+                error_description: "stale epoch".into(),
+                current_epoch: 7,
+            },
+        ),
+        (
+            "ur-03-not-allowed",
+            "UpdateRoomResponse notAllowed",
+            UpdateRoomResponse::NotAllowed {
+                error_description: "the hub did not accept this update".into(),
+            },
+        ),
+        (
+            "ur-04-invalid-proposal",
+            "UpdateRoomResponse invalidProposal listing one proposal reference",
+            UpdateRoomResponse::InvalidProposal {
+                error_description: "invalid".into(),
+                invalid_proposals: vec![vec![0x11; 32]],
+            },
+        ),
+    ];
+
+    let mut vectors = vec![
         vector("km-01-two-clients-success", km, "userStatus success, two clients each with a KeyPackage",
             &key_material(0, USER, &[success(CLIENT_A, &a), success(CLIENT_B, &b)]), "ok", Some("Clients")),
         vector("km-02-partial-success-one-exhausted", km, "userStatus partialSuccess: one client with a KeyPackage, one keyMaterialExhausted",
@@ -211,7 +382,29 @@ fn main() {
         vector("kp-x1-grease-key-package", "KeyPackage",
             "a pinned-suite KeyPackage that lists a GREASE value in its capabilities and carries it in its extensions; refused by the pinned openmls release (DIVERGENCES.md DIV-14)",
             &grease_key_package(), "refused", None),
+        update_vector("up-01-participant-list-private-type", "an UpdateRequest whose Commit carries the participant-list update as the 0xF7A0 custom proposal",
+            &update_request(&commit_message), "ok", Some("Commit"), "success", &[ALICE, BOB, CAROL]),
+        update_vector("up-02-participant-list-app-data-update", "the same update carried as an AppDataUpdate for component 0x0022 (mls-extensions-10 section 4.7)",
+            &update_request(&app_data_commit), "ok", Some("Commit"), "success", &[ALICE, BOB, CAROL]),
+        update_vector("up-x1-bare-commit", "the Commit alone, without the HandshakeBundle around it",
+            &commit_message, "refused", None, "invalidProposal", &[ALICE, BOB]),
+        update_vector("up-x2-bundle-of-proposals", "a HandshakeBundle of proposals instead of a Commit",
+            &proposals_bundle, "ok", Some("Proposal"), "invalidProposal", &[ALICE, BOB]),
+        update_vector("up-x3-app-data-update-other-component", "an AppDataUpdate for component 0x0023 (room_metadata), which the hub does not read",
+            &update_request(&other_component_commit), "ok", Some("Commit"), "invalidProposal", &[ALICE, BOB]),
     ];
+    for (id, description, response) in responses {
+        let mut v = vector(
+            id,
+            "UpdateRoomResponse",
+            description,
+            &response.encode().unwrap(),
+            "ok",
+            None,
+        );
+        v["answer"] = json!(null);
+        vectors.push(v);
+    }
     let out = json!({
         "format_version": 1,
         "ciphersuite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",

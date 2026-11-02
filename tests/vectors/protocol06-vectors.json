@@ -147,6 +147,134 @@
       "id": "kp-x1-grease-key-package",
       "kind": "KeyPackage",
       "variant": null
+    },
+    {
+      "answer": "success",
+      "decode": "ok",
+      "description": "an UpdateRequest whose Commit carries the participant-list update as the 0xF7A0 custom proposal",
+      "hex": "000100011062c7007cbc15b7752e6071907649c9c20000000000000000010000000000032d01f7a029000026216d696d693a2f2f686176656e6d657373656e6765722e636f6d2f752f6361726f6c000000020040406bbb9226685c0d932cc06061d4135900b2ce2ef4d5ce3067057a64bc1a296be885ea12ce02b36b5213fdb478203122446701c9e613f04780037a5c98ff1e410920d8d11166d3aef27e26144ae56f6bbd979e2445d2cf7576f2dd4a8e2e48d60928207c0aa1f2d99b34b9ad06fb7e9661a3d20e527e8bdb2439f04a07cef6e0443701000200",
+      "id": "up-01-participant-list-private-type",
+      "kind": "UpdateRequest",
+      "participants_after": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob",
+        "mimi://havenmessenger.com/u/carol"
+      ],
+      "participants_before": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "room": "mimi://havenmessenger.com/r/x",
+      "variant": "Commit"
+    },
+    {
+      "answer": "success",
+      "decode": "ok",
+      "description": "the same update carried as an AppDataUpdate for component 0x0022 (mls-extensions-10 section 4.7)",
+      "hex": "000100011062c7007cbc15b7752e6071907649c9c20000000000000000010000000000033001000800220129000026216d696d693a2f2f686176656e6d657373656e6765722e636f6d2f752f6361726f6c000000020040406bbb9226685c0d932cc06061d4135900b2ce2ef4d5ce3067057a64bc1a296be885ea12ce02b36b5213fdb478203122446701c9e613f04780037a5c98ff1e410920d8d11166d3aef27e26144ae56f6bbd979e2445d2cf7576f2dd4a8e2e48d60928207c0aa1f2d99b34b9ad06fb7e9661a3d20e527e8bdb2439f04a07cef6e0443701000200",
+      "id": "up-02-participant-list-app-data-update",
+      "kind": "UpdateRequest",
+      "participants_after": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob",
+        "mimi://havenmessenger.com/u/carol"
+      ],
+      "participants_before": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "room": "mimi://havenmessenger.com/r/x",
+      "variant": "Commit"
+    },
+    {
+      "answer": "invalidProposal",
+      "decode": "refused",
+      "description": "the Commit alone, without the HandshakeBundle around it",
+      "hex": "000100011062c7007cbc15b7752e6071907649c9c20000000000000000010000000000032d01f7a029000026216d696d693a2f2f686176656e6d657373656e6765722e636f6d2f752f6361726f6c000000020040406bbb9226685c0d932cc06061d4135900b2ce2ef4d5ce3067057a64bc1a296be885ea12ce02b36b5213fdb478203122446701c9e613f04780037a5c98ff1e410920d8d11166d3aef27e26144ae56f6bbd979e2445d2cf7576f2dd4a8e2e48d60928207c0aa1f2d99b34b9ad06fb7e9661a3d20e527e8bdb2439f04a07cef6e0443701",
+      "id": "up-x1-bare-commit",
+      "kind": "UpdateRequest",
+      "participants_after": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "participants_before": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "room": "mimi://havenmessenger.com/r/x",
+      "variant": null
+    },
+    {
+      "answer": "invalidProposal",
+      "decode": "ok",
+      "description": "a HandshakeBundle of proposals instead of a Commit",
+      "hex": "000100011062c7007cbc15b7752e6071907649c9c2000000000000000001000000000002f7a029000026216d696d693a2f2f686176656e6d657373656e6765722e636f6d2f752f6361726f6c000000024040b8a4eec8fe266aa4d2cc20e79eca9e29a129efaffdf906e151a815bfe0d789f8b41d920cebac737084014cf0212c504d6728dc9d5005e13540620089506db70f2062298391a4a9cba02f703c6ac99e94866795608c218f74948341023d5bd5852900",
+      "id": "up-x2-bundle-of-proposals",
+      "kind": "UpdateRequest",
+      "participants_after": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "participants_before": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "room": "mimi://havenmessenger.com/r/x",
+      "variant": "Proposal"
+    },
+    {
+      "answer": "invalidProposal",
+      "decode": "ok",
+      "description": "an AppDataUpdate for component 0x0023 (room_metadata), which the hub does not read",
+      "hex": "000100011062c7007cbc15b7752e6071907649c9c20000000000000000010000000000033001000800230129000026216d696d693a2f2f686176656e6d657373656e6765722e636f6d2f752f6361726f6c000000020040406bbb9226685c0d932cc06061d4135900b2ce2ef4d5ce3067057a64bc1a296be885ea12ce02b36b5213fdb478203122446701c9e613f04780037a5c98ff1e410920d8d11166d3aef27e26144ae56f6bbd979e2445d2cf7576f2dd4a8e2e48d60928207c0aa1f2d99b34b9ad06fb7e9661a3d20e527e8bdb2439f04a07cef6e0443701000200",
+      "id": "up-x3-app-data-update-other-component",
+      "kind": "UpdateRequest",
+      "participants_after": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "participants_before": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "room": "mimi://havenmessenger.com/r/x",
+      "variant": "Commit"
+    },
+    {
+      "answer": null,
+      "decode": "ok",
+      "description": "UpdateRoomResponse success with the hub's acceptance time in milliseconds",
+      "hex": "00000000019a4558357b",
+      "id": "ur-01-success",
+      "kind": "UpdateRoomResponse",
+      "variant": null
+    },
+    {
+      "answer": null,
+      "decode": "ok",
+      "description": "UpdateRoomResponse wrongEpoch with the current epoch",
+      "hex": "010b7374616c652065706f63680000000000000007",
+      "id": "ur-02-wrong-epoch",
+      "kind": "UpdateRoomResponse",
+      "variant": null
+    },
+    {
+      "answer": null,
+      "decode": "ok",
+      "description": "UpdateRoomResponse notAllowed",
+      "hex": "02227468652068756220646964206e6f7420616363657074207468697320757064617465",
+      "id": "ur-03-not-allowed",
+      "kind": "UpdateRoomResponse",
+      "variant": null
+    },
+    {
+      "answer": null,
+      "decode": "ok",
+      "description": "UpdateRoomResponse invalidProposal listing one proposal reference",
+      "hex": "0307696e76616c696421201111111111111111111111111111111111111111111111111111111111111111",
+      "id": "ur-04-invalid-proposal",
+      "kind": "UpdateRoomResponse",
+      "variant": null
     }
   ]
 }
