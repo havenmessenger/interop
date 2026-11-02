@@ -135,8 +135,8 @@ recording what changed and why.** The short version: the wire-parsing step some 
 here called blocked on group-state machinery was not blocked on that at all; it is done, and it is
 now wired end to end for both Haven custom proposal types.
 
-`POST /mimi/pl/update/{roomId}` (§4.3.2) takes a real, `PublicMessage`-wrapped MLS Commit carrying
-exactly one custom proposal. `mimi_core::commit_wire::decode_single_custom_proposal_commit` reads
+`POST /mimi/pl/update/{roomId}` (§5.3) takes an `UpdateRequest`, a `HandshakeBundle` whose
+`PublicMessage`-wrapped MLS Commit carries exactly one custom proposal. `mimi_core::commit_wire::decode_single_custom_proposal_commit` reads
 the proposal's type and payload - independent of openmls's own (crate-private) `Commit` type,
 hand-coded the same way every other MIMI-specific structure in this codebase is - without verifying
 the Commit's signature or holding any group state, matching RFC 9420's own delivery-service trust
@@ -157,11 +157,18 @@ without needing that machinery in the first place.
   same list is refused, not decoded: skipping past a standard proposal's own body (an `Add`, for
   instance, embeds a full KeyPackage) needs that proposal's own decoder, which is out of scope. A
   sender that wants this hub to read the change sends it as its own Commit.
-- **Framing.** §5.3 defines the request body as `UpdateRequest { HandshakeBundle }` (the Commit
-  with an optional Welcome, a `GroupInfoOption` and a `RatchetTreeOption`) and the response as an
-  `UpdateRoomResponse` (`responseCode`, `errorDescription`, then the accepted timestamp, the
-  current epoch or the invalid proposals). This route takes the bare `PublicMessage` Commit and
-  answers with an HTTP status only, so a peer that speaks the draft's framing gets a 400.
+- **Framing.** The request body is the draft's `UpdateRequest { HandshakeBundle }` and the answer
+  is an `UpdateRoomResponse` in a 200: `success` with the hub's acceptance time in milliseconds;
+  `notAllowed` for a room this hub does not host, a bundle whose Welcome or GroupInfo is under
+  another ciphersuite, or a store limit (the participant cap), with the same bytes for each so the
+  answer is not an existence oracle; `invalidProposal` (with an empty `invalidProposals` list)
+  for a body that is not an `UpdateRequest`, a bundle of proposals, an unrecognized proposal
+  type, or an update that does not fit the room. `wrongEpoch` is never answered, because the hub
+  holds no group state and so no epoch. A SQLite failure is a 500 with no body. The Welcome,
+  `GroupInfoOption` and `RatchetTreeOption` of a Commit bundle are read and suite-gated, and are
+  neither stored nor relayed: `success` means the participant-list or room-policy change was
+  applied, not that the Commit was distributed (§5.3's "will be distributed"). A body that is only
+  the Commit, without the bundle around it, is refused.
 - The four room-admin RPCs (`roomPolicy`/`memberRole`/`addParticipant`/`authorizeSender`) remain
   JSON-compat-lane only - `update` is the wire-lane mechanism for the two operations it actually
   carries (roster and policy changes); it is not a wire-framing of those four RPCs themselves.

@@ -38,6 +38,7 @@ use mimi_core::participant_list::{
     apply_update, decode_participant_list_update, ParticipantListData, ParticipantListUpdate,
     UserRolePair, MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE,
 };
+use mimi_core::protocol_wire::{HandshakeBundle, WireError};
 use mimi_core::room_policy::{RoomPolicy, MIMI_ROOM_POLICY_PROPOSAL_TYPE};
 use mimi_core::uri::{MimiKind, MimiUri};
 
@@ -51,6 +52,42 @@ use crate::store::SqliteStore;
 const KEYPACKAGE_TTL_SECS: u64 = 30 * 24 * 3600; // 30 days
 /// Queued welcomes/messages older than this are swept (ephemeral delivery state, not storage).
 const DELIVERY_TTL_SECS: u64 = 24 * 3600; // 24 hours
+
+/// Why `update` did not apply a request, in the terms §5.3's `UpdateRoomResponse` answers with.
+#[derive(Debug, PartialEq, Eq)]
+pub enum UpdateRefusal {
+    /// The hub did not accept the update: the room is not one this hub hosts, the bundle carries material under another
+    /// ciphersuite, or a store limit (the participant cap) would be exceeded. One answer covers all of them, so a peer
+    /// cannot tell which rooms this hub hosts from the response.
+    NotAllowed,
+    /// The request, or the proposal it carries, is not one this hub can read or apply. The text is fixed wording, never
+    /// the peer's bytes.
+    Invalid(&'static str),
+    /// The store failed. This is the hub's own fault, not a verdict on the request.
+    Store,
+}
+
+impl std::fmt::Display for UpdateRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotAllowed => f.write_str("the hub did not accept this update"),
+            Self::Invalid(why) => f.write_str(why),
+            Self::Store => f.write_str("the hub could not store this update"),
+        }
+    }
+}
+
+impl std::error::Error for UpdateRefusal {}
+
+/// A store error is the hub's own failure when it comes from SQLite; any other error the store raises is a limit it
+/// enforces on the request (the participant cap).
+pub(crate) fn store_refusal(error: &anyhow::Error) -> UpdateRefusal {
+    if error.downcast_ref::<rusqlite::Error>().is_some() {
+        UpdateRefusal::Store
+    } else {
+        UpdateRefusal::NotAllowed
+    }
+}
 
 /// Outcome of a `/notify` fanout submission (MIMI §5.5, conformance M5). Both arms map to HTTP 201;
 /// the distinction is whether the caller should PROCESS the body or treat it as an already-handled
@@ -694,21 +731,54 @@ impl Provider {
         room_uri: &str,
         commit_bytes: &[u8],
         now_unix: u64,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), UpdateRefusal> {
         let decoded = decode_single_custom_proposal_commit(commit_bytes)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            .map_err(|_| UpdateRefusal::Invalid("the commit is not one this hub can read"))?;
         match decoded.proposal_type {
             MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE => {
-                let update = decode_participant_list_update(&decoded.payload)
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                let update = decode_participant_list_update(&decoded.payload).map_err(|_| {
+                    UpdateRefusal::Invalid("the participant list update is malformed")
+                })?;
                 self.apply_participant_list_update(room_uri, &update, now_unix)
             }
             MIMI_ROOM_POLICY_PROPOSAL_TYPE => {
                 let policy: RoomPolicy = serde_json::from_slice(&decoded.payload)
-                    .map_err(|e| anyhow::anyhow!("malformed RoomPolicy payload: {e}"))?;
+                    .map_err(|_| UpdateRefusal::Invalid("the room policy is malformed"))?;
+                self.assert_hub_of_record(room_uri)
+                    .map_err(|_| UpdateRefusal::NotAllowed)?;
+                policy
+                    .validate()
+                    .map_err(|_| UpdateRefusal::Invalid("the room policy is not valid"))?;
                 self.set_room_policy(room_uri, &policy, now_unix)
+                    .map_err(|e| store_refusal(&e))
             }
-            other => anyhow::bail!("unrecognized custom proposal_type {other:#06x}"),
+            _ => Err(UpdateRefusal::Invalid(
+                "the proposal type is not recognized",
+            )),
+        }
+    }
+
+    /// `update` (§5.3): the request body is an `UpdateRequest`, which for MLS is a `HandshakeBundle`. A Commit bundle's
+    /// commit goes through [`Self::apply_update_commit`]; a bundle of proposals is refused, since this hub takes a change
+    /// only as a Commit. The Welcome, `GroupInfoOption` and `RatchetTreeOption` of a Commit bundle are read and
+    /// suite-gated by the codec and are neither stored nor relayed. Nothing changes unless the whole request is accepted.
+    pub fn apply_update_request(
+        &self,
+        room_uri: &str,
+        body: &[u8],
+        now_unix: u64,
+    ) -> Result<(), UpdateRefusal> {
+        let bundle = HandshakeBundle::decode(body).map_err(|error| match error {
+            WireError::CiphersuiteGate(_) => UpdateRefusal::NotAllowed,
+            _ => UpdateRefusal::Invalid("the body is not an UpdateRequest this hub can read"),
+        })?;
+        match bundle {
+            HandshakeBundle::Commit {
+                proposal_or_commit, ..
+            } => self.apply_update_commit(room_uri, &proposal_or_commit, now_unix),
+            HandshakeBundle::Proposal { .. } => Err(UpdateRefusal::Invalid(
+                "this hub takes a change as a Commit, not as proposals",
+            )),
         }
     }
 
@@ -726,9 +796,13 @@ impl Provider {
         room_uri: &str,
         update: &ParticipantListUpdate,
         now_unix: u64,
-    ) -> anyhow::Result<()> {
-        self.assert_hub_of_record(room_uri)?;
-        let rows = self.store.list_participants(room_uri)?;
+    ) -> Result<(), UpdateRefusal> {
+        self.assert_hub_of_record(room_uri)
+            .map_err(|_| UpdateRefusal::NotAllowed)?;
+        let rows = self
+            .store
+            .list_participants(room_uri)
+            .map_err(|_| UpdateRefusal::Store)?;
         // apply_update needs only a length + index-bounds check here (this method resolves the
         // actual mutations from `update` directly against `rows`, not against apply_update's own
         // returned list) - reusing it keeps the bounds-checking logic in one place rather than
@@ -742,7 +816,9 @@ impl Provider {
                 })
                 .collect(),
         };
-        apply_update(&current, update).map_err(|e| anyhow::anyhow!("{e}"))?;
+        apply_update(&current, update).map_err(|_| {
+            UpdateRefusal::Invalid("the participant list update does not fit the room")
+        })?;
 
         let role_changes: Vec<(String, u32)> = update
             .changed_role_participants
@@ -767,25 +843,23 @@ impl Provider {
             .added_participants
             .iter()
             .map(|a| {
+                const BAD_MEMBER: UpdateRefusal =
+                    UpdateRefusal::Invalid("an added participant is not a user URI");
                 if a.user_uri.len() > MAX_URI_LEN {
-                    anyhow::bail!("member URI too long");
+                    return Err(BAD_MEMBER);
                 }
-                let m = MimiUri::parse(&a.user_uri)?;
+                let m = MimiUri::parse(&a.user_uri).map_err(|_| BAD_MEMBER)?;
                 if m.kind != Some(MimiKind::User) {
-                    anyhow::bail!("member must be a user URI: {}", a.user_uri);
+                    return Err(BAD_MEMBER);
                 }
                 let authority = m.authority.to_ascii_lowercase();
                 Ok((a.user_uri.clone(), authority, a.role_index))
             })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, UpdateRefusal>>()?;
 
-        self.store.apply_participant_list_update(
-            room_uri,
-            &role_changes,
-            &removed,
-            &added,
-            now_unix,
-        )
+        self.store
+            .apply_participant_list_update(room_uri, &role_changes, &removed, &added, now_unix)
+            .map_err(|e| store_refusal(&e))
     }
 }
 

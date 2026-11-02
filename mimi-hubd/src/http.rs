@@ -439,21 +439,42 @@ async fn report_abuse_wire(
     }
 }
 
-/// `update` (§4.3.2, DIV-10). `room_id` is the path segment (the room the Commit updates), an
-/// opaque routing key like every other wire route except `submitMessage`. The body is a real
-/// `PublicMessage`-wrapped MLS Commit carrying exactly one `mimiParticipantList`/`mimiRoomPolicy`
-/// custom proposal (see `mimi_core::commit_wire` for the bounded scope this decodes - no signature
-/// or group-state verification, matching RFC 9420's own delivery-service trust model). Anything
-/// else this hub cannot or does not support (a `PrivateMessage`, a mixed commit, an unrecognized
-/// proposal type, a by-reference proposal) is a 400, not a silently-swallowed success.
+/// `update` (§5.3, DIV-10). `room_id` is the path segment (the room the request updates), an opaque routing key like
+/// every other wire route except `submitMessage`. The body is an `UpdateRequest`: a `HandshakeBundle` whose Commit carries
+/// exactly one `mimiParticipantList`/`mimiRoomPolicy` custom proposal (see `mimi_core::commit_wire` for the bounded scope
+/// this decodes - no signature or group-state verification, matching RFC 9420's own delivery-service trust model). The
+/// answer is an `UpdateRoomResponse` in a 200: `success` with the hub's acceptance time, `notAllowed` for a room this hub
+/// does not host, a bundle under another ciphersuite or a store limit (one answer for all, so the response is no
+/// existence oracle), or `invalidProposal` for anything this hub cannot read or apply (a `PrivateMessage`, a mixed commit,
+/// an unrecognized proposal type, a by-reference proposal, a bundle of proposals). `wrongEpoch` is never answered: the
+/// hub holds no group state and so no epoch. A store failure is a 500 with no body.
 async fn update_wire(
     State(p): State<SharedProvider>,
     Path(room_id): Path<String>,
     body: Bytes,
-) -> StatusCode {
-    match lock(&p).apply_update_commit(&room_id, &body, now_unix()) {
-        Ok(()) => StatusCode::OK,
-        Err(_) => StatusCode::BAD_REQUEST,
+) -> Response {
+    use mimi_core::protocol_wire::UpdateRoomResponse;
+
+    let accepted_at = now_unix_millis();
+    let answer = match lock(&p).apply_update_request(&room_id, &body, now_unix()) {
+        Ok(()) => UpdateRoomResponse::Success {
+            error_description: String::new(),
+            accepted_timestamp: accepted_at,
+        },
+        Err(refusal @ crate::UpdateRefusal::NotAllowed) => UpdateRoomResponse::NotAllowed {
+            error_description: refusal.to_string(),
+        },
+        Err(crate::UpdateRefusal::Invalid(why)) => UpdateRoomResponse::InvalidProposal {
+            error_description: why.to_string(),
+            invalid_proposals: Vec::new(),
+        },
+        Err(crate::UpdateRefusal::Store) => {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    match answer.encode() {
+        Ok(bytes) => (StatusCode::OK, bytes).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -627,6 +648,10 @@ fn now_unix_millis() -> u64 {
 }
 
 #[cfg(test)]
+#[path = "http_update_tests.rs"]
+mod update_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use axum::body::Body;
@@ -634,7 +659,7 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt; // oneshot
 
-    fn app() -> (Router, SharedProvider) {
+    pub(super) fn app() -> (Router, SharedProvider) {
         let p = Arc::new(Mutex::new(
             Provider::in_memory("havenmessenger.com").unwrap(),
         ));
@@ -1468,7 +1493,18 @@ mod tests {
     /// Build a single-member group and commit exactly one custom proposal (`proposal_type` +
     /// `payload`), returning the real `PublicMessage`-wrapped Commit bytes - the same construction
     /// `commit_wire`'s own tests use, reused here to exercise the route end to end.
-    fn real_single_custom_proposal_commit(proposal_type: u16, payload: Vec<u8>) -> Vec<u8> {
+    pub(super) fn real_single_custom_proposal_commit(
+        proposal_type: u16,
+        payload: Vec<u8>,
+    ) -> Vec<u8> {
+        real_custom_proposal_and_commit(proposal_type, payload).1
+    }
+
+    /// The by-value proposal message and the Commit over it, both real `PublicMessage`s.
+    pub(super) fn real_custom_proposal_and_commit(
+        proposal_type: u16,
+        payload: Vec<u8>,
+    ) -> (Vec<u8>, Vec<u8>) {
         use mimi_core::participant_list::MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE;
         use mimi_core::room_policy::MIMI_ROOM_POLICY_PROPOSAL_TYPE;
         use openmls::ciphersuite::signature::SignaturePublicKey;
@@ -1533,11 +1569,42 @@ mod tests {
             .build();
         let mut alice = MlsGroup::new(&provider, &sig, &cfg, cwk).unwrap();
         let custom = CustomProposal::new(proposal_type, payload);
-        alice
+        let (proposal, _proposal_ref) = alice
             .propose_custom_proposal_by_value(&provider, &sig, custom)
             .unwrap();
         let (commit, _w, _gi) = alice.commit_to_pending_proposals(&provider, &sig).unwrap();
-        commit.tls_serialize_detached().unwrap()
+        (
+            proposal.tls_serialize_detached().unwrap(),
+            commit.tls_serialize_detached().unwrap(),
+        )
+    }
+
+    /// The `UpdateRequest` body for a Commit: a `HandshakeBundle` with no Welcome, a `Partial` group info (the one
+    /// representation that does not need a real GroupInfo) and no ratchet tree.
+    pub(super) fn bundle_of(commit: Vec<u8>) -> Vec<u8> {
+        use mimi_core::protocol_wire::{GroupInfoOption, GroupInfoRepresentation, HandshakeBundle};
+        HandshakeBundle::Commit {
+            proposal_or_commit: commit,
+            welcome: None,
+            group_info_option: GroupInfoOption {
+                representation: GroupInfoRepresentation::Partial,
+                payload: Vec::new(),
+            },
+            ratchet_tree_option: Vec::new(),
+        }
+        .encode()
+        .unwrap()
+    }
+
+    /// The `UpdateRoomResponse` a response carries.
+    pub(super) async fn update_answer(
+        resp: axum::response::Response,
+    ) -> mimi_core::protocol_wire::UpdateRoomResponse {
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        mimi_core::protocol_wire::UpdateRoomResponse::decode(&bytes).unwrap()
     }
 
     #[tokio::test]
@@ -1574,12 +1641,15 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/mimi/pl/update/mimi%3A%2F%2Fhavenmessenger.com%2Fr%2Fx")
-                    .body(Body::from(commit_bytes))
+                    .body(Body::from(bundle_of(commit_bytes)))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(matches!(
+            update_answer(resp).await,
+            mimi_core::protocol_wire::UpdateRoomResponse::Success { .. }
+        ));
         let participants = p.lock().unwrap().list_participants(room).unwrap();
         assert!(
             participants
@@ -1620,12 +1690,15 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/mimi/pl/update/mimi%3A%2F%2Fhavenmessenger.com%2Fr%2Fx")
-                    .body(Body::from(commit_bytes))
+                    .body(Body::from(bundle_of(commit_bytes)))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(matches!(
+            update_answer(resp).await,
+            mimi_core::protocol_wire::UpdateRoomResponse::Success { .. }
+        ));
         let stored = p.lock().unwrap().room_policy(room).unwrap();
         assert_eq!(stored, Some(policy));
     }
@@ -1645,12 +1718,15 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/mimi/pl/update/mimi%3A%2F%2Fhavenmessenger.com%2Fr%2Fx")
-                    .body(Body::from(commit_bytes))
+                    .body(Body::from(bundle_of(commit_bytes)))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(matches!(
+            update_answer(resp).await,
+            mimi_core::protocol_wire::UpdateRoomResponse::InvalidProposal { .. }
+        ));
     }
 
     #[tokio::test]
@@ -1666,7 +1742,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(matches!(
+            update_answer(resp).await,
+            mimi_core::protocol_wire::UpdateRoomResponse::InvalidProposal { .. }
+        ));
     }
 
     #[tokio::test]
