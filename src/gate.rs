@@ -135,14 +135,37 @@ fn deserialize_keypackage_in_no_panic(
     .map_err(|e| GateError::UndecodableKeyPackage(format!("{e:?}")))
 }
 
+/// The ciphersuite a serialized KeyPackage names, read from its fixed wire position without decoding anything else.
+///
+/// RFC 9420 §10.1: `struct { ProtocolVersion version; CipherSuite cipher_suite; ... } KeyPackageTBS`, so the suite is the
+/// big-endian `u16` at bytes 2..4. Reading it here lets a foreign suite be refused before any structure is parsed and before
+/// any signature is verified, so no suite-specific arithmetic runs on a peer's bytes.
+fn keypackage_wire_suite(key_package_bytes: &[u8]) -> Result<u16, GateError> {
+    key_package_bytes
+        .get(2..4)
+        .map(|suite| u16::from_be_bytes([suite[0], suite[1]]))
+        .ok_or_else(|| GateError::UndecodableKeyPackage("too short to carry a ciphersuite".into()))
+}
+
+/// Refuse a KeyPackage whose wire suite is not the pinned one, before it is decoded or verified.
+fn refuse_foreign_keypackage_suite(key_package_bytes: &[u8]) -> Result<(), GateError> {
+    let suite = keypackage_wire_suite(key_package_bytes)?;
+    if suite != HAVEN_MLS_CIPHERSUITE_U16 {
+        return Err(ForeignCiphersuite { got: suite }.into());
+    }
+    Ok(())
+}
+
 /// **K5 accept-gate - KeyPackage.** Call BEFORE `add_member` on any KeyPackage fetched from a
 /// foreign provider (MIMI §5.2 keyMaterial). Returns `Ok(())` only for the pinned suite.
 ///
-/// Mechanism: deserialize → `validate()` (signature-only; this does NOT instantiate any AEAD,
-/// so validating a foreign KeyPackage cannot reach OpenMlsRustCrypto's AEAD at all) →
-/// read the validated `ciphersuite()` → refuse if it is not `0x0001`. Refusing HERE means the
-/// foreign KeyPackage never reaches `add_member`'s HPKE-seal (where ChaCha would be driven).
+/// Mechanism: read the suite from the KeyPackage's fixed wire position and refuse anything but `0x0001` first;
+/// only then deserialize and `validate()` (signature-only; this does NOT instantiate any AEAD) and confirm the
+/// validated suite is the one the bytes named. Refusing first means a foreign-suite KeyPackage reaches neither
+/// signature verification nor `add_member`'s HPKE-seal, so the only signature scheme ever verified on a peer's
+/// KeyPackage is the pinned suite's Ed25519.
 pub fn mimi_gate_keypackage(key_package_bytes: &[u8]) -> Result<(), GateError> {
+    refuse_foreign_keypackage_suite(key_package_bytes)?;
     let provider = OpenMlsRustCrypto::default();
     let (kp_in, consumed) = deserialize_keypackage_in_no_panic(key_package_bytes)?;
     if consumed != key_package_bytes.len() {
@@ -151,7 +174,6 @@ pub fn mimi_gate_keypackage(key_package_bytes: &[u8]) -> Result<(), GateError> {
             n: key_package_bytes.len() - consumed,
         });
     }
-    // validate() is signature-only (no AEAD) - safe to run on a foreign-suite object.
     let validated = kp_in
         .validate(provider.crypto(), ProtocolVersion::Mls10)
         .map_err(|e| GateError::KeyPackageValidation(format!("{e:?}")))?;
@@ -168,11 +190,12 @@ pub fn mimi_gate_keypackage(key_package_bytes: &[u8]) -> Result<(), GateError> {
 /// two §5.2-para-16 association maps are keyed by: the hub associates it with the target *provider* (K3)
 /// and the target provider associates it with the local *client* (K4).
 ///
-/// Pure + portable: production Haven MLS can reuse the same ref computation. Runs the same
-/// deserialize→`validate()` (signature-only, no AEAD) path as the gate, then `hash_ref`. NOT a suite
-/// gate - callers that store foreign objects gate first (`mimi_gate_keypackage`); this only derives the
-/// routing key over the already-validated object.
+/// Pure + portable: production Haven MLS can reuse the same ref computation. It refuses a foreign wire suite
+/// first, as the gate does, then runs the same deserialize→`validate()` (signature-only, no AEAD) path and `hash_ref`.
+/// Callers that store foreign objects still gate first (`mimi_gate_keypackage`); this derives the routing key over the
+/// object the gate accepted, and cannot be used to verify a signature under another suite.
 pub fn keypackage_ref(key_package_bytes: &[u8]) -> Result<Vec<u8>, GateError> {
+    refuse_foreign_keypackage_suite(key_package_bytes)?;
     let provider = OpenMlsRustCrypto::default();
     let (kp_in, consumed) = deserialize_keypackage_in_no_panic(key_package_bytes)?;
     if consumed != key_package_bytes.len() {
@@ -304,6 +327,10 @@ pub const fn identifier_query(is_mimi_enrolled: bool) -> IdentifierQueryResult {
         IdentifierQueryResult::NotFound
     }
 }
+
+#[cfg(test)]
+#[path = "gate_suite_order_tests.rs"]
+mod suite_order_tests;
 
 // NOTE: the one-time KeyPackage store, /notify dedup, and enrollment state are DURABLE (SQLite),
 // held by the consuming service - there is intentionally NO in-memory store type here (no residue).
