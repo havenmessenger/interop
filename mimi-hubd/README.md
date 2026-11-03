@@ -191,7 +191,7 @@ reset), proving mTLS is actually enforced rather than merely configured.
 
 ## Quickstart (config file)
 
-The same six settings can come from a TOML file instead of (or layered under) env vars - useful
+The same settings can come from a TOML file instead of (or layered under) env vars - useful
 for a systemd/`.deb` deployment where a config file is the more natural interface than an
 environment block. Reusing the certs generated above:
 
@@ -256,7 +256,7 @@ packaging changes how you *install* the daemon, never what it *does*.
 
 ## Configuration reference
 
-Six settings, either as env vars or as keys in a `--config <path>` TOML file (see the two
+Seven settings, either as env vars or as keys in a `--config <path>` TOML file (see the two
 quickstarts above). An env var, if set to a non-empty value, always overrides the same key from
 the file - see [`debian/mimi-hubd.toml.example`](debian/mimi-hubd.toml.example) and
 [`debian/mimi-hubd.env.example`](debian/mimi-hubd.env.example) for filled-in templates.
@@ -269,6 +269,7 @@ the file - see [`debian/mimi-hubd.toml.example`](debian/mimi-hubd.toml.example) 
 | `MIMI_CLIENT_CA` | `client_ca` | yes | none | PEM path, the CA that signs client certificates for peers this hub trusts. This is the whole peer-trust model: any peer presenting a cert this CA signed is allowed to call the hub's endpoints. Which layer (env/file) supplied this is logged at startup, since it's a statement about the actual trust boundary, not just an ergonomic detail. |
 | `MIMI_BIND_ADDR` | `bind_addr` | no | `0.0.0.0:8443` | Listen address. |
 | `MIMI_DB_PATH` | `db_path` | no | `/var/lib/mimi/provider.db` | SQLite file path for durable state. This binary-level default is unchanged by packaging - the shipped `.toml.example` template recommends `/var/lib/mimi-hubd/hub.db` instead (matching the systemd unit's `StateDirectory=`), but that is the template's choice, not a change to this daemon's own default. |
+| `MIMI_PUBLIC_BASE_URL` | `public_base_url` | no | `https://{MIMI_PROVIDER_DOMAIN}` | The `https://` URL the directory's endpoint URLs start at, for a hub behind a reverse proxy, on a port other than 443, or on a dedicated host. Identifiers keep using `MIMI_PROVIDER_DOMAIN`. One trailing `/` is dropped; a query, fragment or non-`https` URL is a hard error at startup. |
 
 The daemon never falls back to plain HTTP: a missing certificate, key, or CA path is a hard error
 at startup, not a degraded-but-running mode - and mTLS material is validated *before* the SQLite

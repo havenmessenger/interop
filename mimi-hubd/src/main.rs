@@ -12,6 +12,7 @@
 //!   MIMI_SERVER_CERT       PEM path, this hub's TLS server certificate + chain
 //!   MIMI_SERVER_KEY        PEM path, this hub's TLS server private key
 //!   MIMI_CLIENT_CA         PEM path, the CA that signs client certificates for peers this hub trusts
+//!   MIMI_PUBLIC_BASE_URL   https URL the directory's endpoint URLs start at (default https://{domain})
 //!                          (mTLS peer-trust allowlist; see README.md for how to generate one)
 //!
 //! Startup order is deliberate: mTLS material is read and validated into a `ServerConfig` BEFORE
@@ -31,7 +32,8 @@ use mimi_hubd::{http::build_router, tls, Provider};
 #[command(name = "mimi-hubd", version, about = "Reference MIMI hub daemon")]
 struct Cli {
     /// Path to a TOML config file providing the base values for MIMI_PROVIDER_DOMAIN,
-    /// MIMI_BIND_ADDR, MIMI_DB_PATH, MIMI_SERVER_CERT, MIMI_SERVER_KEY, MIMI_CLIENT_CA. Any of
+    /// MIMI_BIND_ADDR, MIMI_DB_PATH, MIMI_SERVER_CERT, MIMI_SERVER_KEY, MIMI_CLIENT_CA,
+    /// MIMI_PUBLIC_BASE_URL. Any of
     /// these env vars, if set to a non-empty value, overrides the same key from the file. Omit
     /// this flag for the original env-only behavior.
     #[arg(long)]
@@ -70,7 +72,10 @@ async fn main() -> anyhow::Result<()> {
     let client_ca = required_mtls_bytes("MIMI_CLIENT_CA", "client_ca", file.as_ref())?;
     let tls_config = tls::build_mtls_server_config(&server_cert, &server_key, &client_ca)?;
 
-    let provider = Provider::open(&domain, &db_path)?;
+    let mut provider = Provider::open(&domain, &db_path)?;
+    if let Some(url) = &resolved["MIMI_PUBLIC_BASE_URL"] {
+        provider = provider.with_public_base_url(url)?;
+    }
     let shared = Arc::new(Mutex::new(provider));
     let router = build_router(shared);
 
