@@ -237,7 +237,7 @@ pub fn public_proposal_and_commit_with_referenced_psk() -> (String, String) {
     psk.store(&provider, &[0x42; 32])
         .expect("stores external PSK for the pending Commit");
     let (proposal, _) = group
-        .propose_external_psk(&provider, &signer, psk)
+        .propose_pre_shared_key(&provider, &signer, psk)
         .expect("creates a reference-form PSK proposal");
     let (commit, _, _) = group
         .commit_to_pending_proposals(&provider, &signer)

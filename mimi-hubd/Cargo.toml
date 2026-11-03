@@ -44,10 +44,10 @@ tower = { version = "0.5", features = ["util"] }        # ServiceExt::oneshot fo
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }  # real mTLS handshake test
 rcgen = "0.14"                                          # test cert generation (CA + server + client)
 # Build a real 0x0001 KeyPackage for wiring tests (already in the graph via mimi-core).
-openmls = "0.8.1"
-openmls_rust_crypto = "0.5.1"
-openmls_traits = "0.5.0"
-tls_codec = "0.4.2"
+openmls = "0.9.2"
+openmls_rust_crypto = "0.6.0"
+openmls_traits = "0.6.0"
+tls_codec = "0.5"
 
 [lints.clippy]
 unwrap_used = "warn"
