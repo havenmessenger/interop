@@ -1,4 +1,4 @@
-//! MIMI identifier URIs (draft-ietf-mimi-protocol-06 §4) - the ADDRESSING primitive.
+//! MIMI identifier URIs (draft-ietf-mimi-protocol-07 §4) - the ADDRESSING primitive.
 //!
 //! A MIMI identifier is a URI whose **authority is the destination provider** and whose first path
 //! segment is the entity kind. This is how a provider knows WHERE a message goes (the authority) and

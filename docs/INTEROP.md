@@ -11,5 +11,8 @@ protocol surface you build against.
 - Coordinated communication about what is shipped versus experimental.
 
 ## Status
-Early. The first concrete milestone is a cross-provider interoperability test. Reach out via
-the contact in [`SECURITY.md`](../SECURITY.md) / Haven's site to coordinate.
+Early. Haven's hub is running at https://mimi.havenmessenger.com, and no other provider has
+connected to it yet. One independent implementation has run against a local `mimi-hubd`; its
+results are in [issue #1](https://github.com/havenmessenger/interop/issues/1). To test against
+the hub, open an issue, or reach us through the contact in [`SECURITY.md`](../SECURITY.md) /
+Haven's site.

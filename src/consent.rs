@@ -1,4 +1,4 @@
-//! MIMI consent - pure protocol types + validation (protocol-06 §5.7, conformance C1/C2/C3).
+//! MIMI consent - pure protocol types + validation (protocol-07 §5.7, conformance C1/C2/C3).
 //!
 //! Consent is the cross-provider anti-spam/privacy gate: before a requester can reach a target
 //! (claim their KeyPackage, add them to a room), the target's provider must hold a `grant`. This

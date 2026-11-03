@@ -16,7 +16,7 @@
 //!   POST /mimi/v1/addParticipant?room=&member=      (R1, register a room participant)
 //!   POST /mimi/v1/authorizeSender?room=&sender=     (M2/R3/P5, 200 allow / 403 blocked)
 //!
-//! Wire lane (protocol-06 §5 TLS presentation language, alongside the JSON compat lane above; a
+//! Wire lane (protocol-07 §5 TLS presentation language, alongside the JSON compat lane above; a
 //! foreign implementation speaking the draft's actual wire format hits these instead):
 //!   POST /mimi/pl/submitMessage/:room_id            (§5.4, SubmitMessageRequest/Response bodies)
 //!   POST /mimi/pl/requestConsent/:target_domain     (§5.7 C1, ConsentEntry body, always 201)

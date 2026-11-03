@@ -1,4 +1,4 @@
-//! MIMI protocol-06 §5 wire framing (TLS presentation language), the spec wire lane, alongside the
+//! MIMI protocol-07 §5 wire framing (TLS presentation language), the spec wire lane, alongside the
 //! existing JSON `/mimi/v1/*` compat lane a foreign implementation does not speak.
 //!
 //! Scope: `submitMessage` (§5.4, routed), consent (§5.7, routed), `keyMaterial` (§5.2, routed),

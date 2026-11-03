@@ -23,12 +23,15 @@ the JSON lane's query parameters play; it is not the draft's room-participant-li
 this reference hub does not implement for message delivery. The directory (`/.well-known/mimi-
 protocol-directory`) advertises all eight under `wireEndpoints`, with concrete path templates.
 
-`update` (§5.3) is wired for exactly one bounded case: a Commit whose proposal list holds a single
-custom proposal or an AppDataUpdate (participant list, `roles_list` or `base_room_policy`, protocol §5.3/§7.5) is decoded (without
-verifying its signature or holding live MLS group state - RFC 9420's own delivery-service trust
-model does not expect a DS to do either) and applied to the room's stored participant list or
-policy. A Commit mixing a custom proposal with a standard MLS proposal (Add/Remove/Update, ...) in
-the same proposal list is refused - full general Commit processing is out of scope for this
+`update` (§5.3) takes an `UpdateRequest` and answers an `UpdateRoomResponse`. It handles one bounded
+case: a Commit whose proposal list holds a single proposal changing the room. A participant-list
+change is read from an AppDataUpdate for component `0x0022` or from the private type `0xF7A0`, and a
+room-policy change from an AppDataUpdate for `roles_list` (`0x0025`) or `base_room_policy` (`0x0027`). The hub reads that proposal without verifying the
+Commit's signature or holding live MLS group state (RFC 9420's own delivery-service trust model does
+not expect a DS to do either) and applies it to the room's stored participant list or policy.
+`success` means that change was applied. The hub does not store or relay the Commit, and it never
+answers `wrongEpoch`. A Commit mixing that proposal with a standard MLS proposal (Add/Remove/Update,
+...) in the same proposal list is refused - full general Commit processing is out of scope for this
 reference hub. `groupInfo` (§5.6) is out of scope for a different reason: it is the external-commit
 join endpoint DIV-1 disallows in Haven's own product build, and framing it without the accept-path
 behind it would wire-format half of a security-relevant endpoint. Asset download (§5.10) has no v1
@@ -315,10 +318,10 @@ diagnostic instead of a silent no-op.
 - **Non-0x0001 ciphersuites.** Rejected at the gate before they reach any MLS processing.
 - **Assets / OHTTP (§5.10).** v1 is messaging-only.
 - **General `update` (§5.3) Commit processing.** Only a Commit whose proposal list holds exactly
-  one custom proposal or AppDataUpdate (participant list, `roles_list` or `base_room_policy`) is applied - a Commit mixing a
-  custom proposal with a standard MLS proposal in the same list is refused. This hub does not hold
-  live MLS group state or verify a Commit's signature (matching RFC 9420's own delivery-service
-  trust model).
+  one participant-list or room-policy proposal is applied - a Commit mixing it with a standard MLS
+  proposal in the same list is refused. This hub does not hold live MLS group state or verify a
+  Commit's signature (matching RFC 9420's own delivery-service trust model), and it does not store
+  or relay the Commit.
 - **A per-caller room-admin principal.** The mutating room-policy endpoints trust any mTLS peer in
   the allowlist to administer any room this hub hosts; they do not yet bind an authenticated
   principal and check a per-room admin role before mutating. See the `SECURITY SCOPE` comment in
