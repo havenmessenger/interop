@@ -21,3 +21,7 @@ db_path = "/var/lib/mimi-hubd/hub.db"
 server_cert = "/etc/mimi-hubd/server-cert.pem"
 server_key = "/etc/mimi-hubd/server-key.pem"
 client_ca = "/etc/mimi-hubd/ca-cert.pem"
+
+# Where the directory's endpoint URLs start (optional; default https://<provider_domain>). Set it
+# when the hub is reached through a reverse proxy, on a port other than 443, or on its own host.
+# public_base_url = "https://mimi.hub.example.org:8443"

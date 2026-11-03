@@ -116,6 +116,9 @@ pub struct FanoutPlan {
 pub struct Provider {
     /// This hub's own domain, e.g. "example.com", used in the directory response and From handling.
     domain: String,
+    /// Where this hub's endpoints are reachable, e.g. "https://mimi.example.com:8443", when that is
+    /// not `https://{domain}`. Only the directory's endpoint URLs use it; identifiers keep `domain`.
+    public_base_url: Option<String>,
     store: SqliteStore,
 }
 
@@ -124,6 +127,7 @@ impl Provider {
     pub fn open(domain: impl Into<String>, db_path: &str) -> anyhow::Result<Self> {
         Ok(Self {
             domain: domain.into(),
+            public_base_url: None,
             store: SqliteStore::open(db_path)?,
         })
     }
@@ -132,8 +136,25 @@ impl Provider {
     pub fn in_memory(domain: impl Into<String>) -> anyhow::Result<Self> {
         Ok(Self {
             domain: domain.into(),
+            public_base_url: None,
             store: SqliteStore::in_memory()?,
         })
+    }
+
+    /// Serve the directory's endpoint URLs from `url` instead of `https://{domain}` - for a hub
+    /// behind a reverse proxy, on a port other than 443, or on a dedicated host (protocol-06 §5.1:
+    /// the directory conveys the endpoint URLs rather than hard-coding them). `url` must be an
+    /// `https://` URL with a host and no query or fragment; one trailing `/` is dropped.
+    pub fn with_public_base_url(mut self, url: &str) -> anyhow::Result<Self> {
+        let rest = url
+            .strip_prefix("https://")
+            .ok_or_else(|| anyhow::anyhow!("public base URL must start with https://: {url:?}"))?;
+        let host_len = rest.find('/').unwrap_or(rest.len());
+        if host_len == 0 || rest.contains(['?', '#']) || rest.contains(char::is_whitespace) {
+            anyhow::bail!("public base URL needs a host and no query, fragment or spaces: {url:?}");
+        }
+        self.public_base_url = Some(url.strip_suffix('/').unwrap_or(url).to_string());
+        Ok(self)
     }
 
     pub fn domain(&self) -> &str {
@@ -174,6 +195,8 @@ impl Provider {
     /// same "advertise only what's served" discipline as `unsupported` below. `endpoints` (relative paths,
     /// JSON compat lane) and `wireEndpoints` (relative paths, mirrors the flat keys) are additive
     /// non-standard keys kept for existing consumers - a strict §5.1 client ignores unknown keys.
+    /// The flat URLs start at `https://{domain}`, or at the public base URL when one is set
+    /// ([`Provider::with_public_base_url`]).
     pub fn directory(&self) -> serde_json::Value {
         let mut doc = serde_json::json!({
             "provider": self.domain,
@@ -191,7 +214,7 @@ impl Provider {
             },
             "wireEndpoints": {
                 "keyMaterial": "/mimi/pl/keyMaterial/{targetUser}",
-                "submitMessage": "/mimi/pl/submitMessage/{recipient}",
+                "submitMessage": "/mimi/pl/submitMessage/{roomId}",
                 "notify": "/mimi/pl/notify/{roomId}",
                 "identifierQuery": "/mimi/pl/identifierQuery/{domain}",
                 "requestConsent": "/mimi/pl/requestConsent/{targetDomain}",
@@ -207,10 +230,13 @@ impl Provider {
                 "reportAbuse_with_abusive_messages": "DIV-9: a report attaching an AbusiveMessage is refused (its Frank cannot yet be verified) - metadata-only reports are accepted"
             }
         });
-        let domain = &self.domain;
+        let base = self
+            .public_base_url
+            .clone()
+            .unwrap_or_else(|| format!("https://{}", self.domain));
         for (key, path) in [
             ("keyMaterial", "/mimi/pl/keyMaterial/{targetUser}"),
-            ("submitMessage", "/mimi/pl/submitMessage/{recipient}"),
+            ("submitMessage", "/mimi/pl/submitMessage/{roomId}"),
             ("notify", "/mimi/pl/notify/{roomId}"),
             ("identifierQuery", "/mimi/pl/identifierQuery/{domain}"),
             ("requestConsent", "/mimi/pl/requestConsent/{targetDomain}"),
@@ -218,7 +244,7 @@ impl Provider {
             ("reportAbuse", "/mimi/pl/reportAbuse/{roomId}"),
             ("update", "/mimi/pl/update/{roomId}"),
         ] {
-            doc[key] = serde_json::Value::String(format!("https://{domain}{path}"));
+            doc[key] = serde_json::Value::String(format!("{base}{path}"));
         }
         doc
     }
@@ -1294,7 +1320,7 @@ mod tests {
         let p = Provider::in_memory("havenmessenger.com").unwrap();
         let dir = p.directory();
         let wire = &dir["wireEndpoints"];
-        assert_eq!(wire["submitMessage"], "/mimi/pl/submitMessage/{recipient}");
+        assert_eq!(wire["submitMessage"], "/mimi/pl/submitMessage/{roomId}");
         assert_eq!(wire["keyMaterial"], "/mimi/pl/keyMaterial/{targetUser}");
         assert_eq!(wire["notify"], "/mimi/pl/notify/{roomId}");
         assert_eq!(wire["identifierQuery"], "/mimi/pl/identifierQuery/{domain}");
@@ -1329,7 +1355,7 @@ mod tests {
         );
         assert_eq!(
             dir["submitMessage"],
-            "https://havenmessenger.com/mimi/pl/submitMessage/{recipient}"
+            "https://havenmessenger.com/mimi/pl/submitMessage/{roomId}"
         );
         assert_eq!(
             dir["notify"],
@@ -1359,6 +1385,58 @@ mod tests {
         // only what's actually wire-routed.
         assert!(dir.get("groupInfo").is_none());
         assert!(dir.get("proxyDownload").is_none());
+    }
+
+    #[test]
+    fn directory_flat_keys_use_the_public_base_url() {
+        let p = Provider::in_memory("havenmessenger.com")
+            .unwrap()
+            .with_public_base_url("https://mimi.havenmessenger.com:8443/")
+            .unwrap();
+        let dir = p.directory();
+        assert_eq!(
+            dir["keyMaterial"],
+            "https://mimi.havenmessenger.com:8443/mimi/pl/keyMaterial/{targetUser}"
+        );
+        assert_eq!(
+            dir["update"],
+            "https://mimi.havenmessenger.com:8443/mimi/pl/update/{roomId}"
+        );
+        // Identifiers and the relative-path nestings are unaffected.
+        assert_eq!(dir["provider"], "havenmessenger.com");
+        assert_eq!(
+            dir["wireEndpoints"]["keyMaterial"],
+            "/mimi/pl/keyMaterial/{targetUser}"
+        );
+    }
+
+    #[test]
+    fn public_base_url_must_be_https_with_a_host() {
+        for bad in [
+            "http://mimi.example.com",
+            "https://",
+            "https:///mimi",
+            "https://mimi.example.com?x=1",
+            "https://mimi.example.com/#top",
+            "https://mimi example.com",
+            "mimi.example.com",
+        ] {
+            assert!(
+                Provider::in_memory("example.com")
+                    .unwrap()
+                    .with_public_base_url(bad)
+                    .is_err(),
+                "{bad}"
+            );
+        }
+        let p = Provider::in_memory("example.com")
+            .unwrap()
+            .with_public_base_url("https://proxy.example.com/hub")
+            .unwrap();
+        assert_eq!(
+            p.directory()["notify"],
+            "https://proxy.example.com/hub/mimi/pl/notify/{roomId}"
+        );
     }
 
     #[test]

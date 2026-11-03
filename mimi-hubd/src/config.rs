@@ -4,8 +4,8 @@
 //! deployment can be "mostly file, override one thing via env" without two separate code paths. If
 //! no `--config` is passed, resolution never looks at a file and behaves exactly as before. An env
 //! var set to the empty string is treated as unset (falls through to the file/default), not as an
-//! explicit override to an empty value - matching how these six settings (a domain name, an
-//! address, three file paths) have no meaningful empty-string value in the first place, so
+//! explicit override to an empty value - matching how these settings (a domain name, an address,
+//! three file paths, a URL) have no meaningful empty-string value in the first place, so
 //! treating "set but empty" as "not set" avoids a confusing silent-empty-value failure mode.
 
 use std::collections::HashMap;
@@ -21,10 +21,10 @@ const KNOWN_KEYS: &[&str] = &[
     "server_key",
     "client_ca",
     "directory_bind_addr",
+    "public_base_url",
 ];
 
-/// The six settings this daemon has always taken from env vars, now also loadable from a TOML
-/// file. Field names match the env var suffix in lowercase (`MIMI_PROVIDER_DOMAIN` ->
+/// The settings this daemon takes from env vars, also loadable from a TOML file. Field names match the env var suffix in lowercase (`MIMI_PROVIDER_DOMAIN` ->
 /// `provider_domain`).
 #[derive(Debug, Default, Deserialize)]
 pub struct ConfigFile {
@@ -36,6 +36,7 @@ pub struct ConfigFile {
     pub client_ca: Option<String>,
     /// Where the directory-only listener binds. Unset means there is none.
     pub directory_bind_addr: Option<String>,
+    pub public_base_url: Option<String>,
 }
 
 impl ConfigFile {
@@ -72,6 +73,7 @@ impl ConfigFile {
             "server_key" => self.server_key.as_ref(),
             "client_ca" => self.client_ca.as_ref(),
             "directory_bind_addr" => self.directory_bind_addr.as_ref(),
+            "public_base_url" => self.public_base_url.as_ref(),
             _ => None,
         }
     }
@@ -209,6 +211,10 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
             None,
         ),
     );
+    m.insert(
+        "MIMI_PUBLIC_BASE_URL",
+        resolve("MIMI_PUBLIC_BASE_URL", "public_base_url", file, None),
+    );
     m
 }
 
@@ -225,6 +231,7 @@ mod tests {
             "MIMI_SERVER_KEY",
             "MIMI_CLIENT_CA",
             "MIMI_DIRECTORY_BIND_ADDR",
+            "MIMI_PUBLIC_BASE_URL",
         ] {
             std::env::remove_var(k);
         }
@@ -490,6 +497,27 @@ client_ca = "/etc/mimi-hubd/ca-cert.pem"
             Some("/etc/mimi-hubd/server-key.pem")
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn public_base_url_is_optional_and_layered_like_the_rest() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_env();
+        assert_eq!(resolve_all(None)["MIMI_PUBLIC_BASE_URL"], None);
+        let file = ConfigFile {
+            public_base_url: Some("https://mimi.example.org".to_string()),
+            ..ConfigFile::default()
+        };
+        assert_eq!(
+            resolve_all(Some(&file))["MIMI_PUBLIC_BASE_URL"].as_deref(),
+            Some("https://mimi.example.org")
+        );
+        std::env::set_var("MIMI_PUBLIC_BASE_URL", "https://proxy.example.org:8443");
+        assert_eq!(
+            resolve_all(Some(&file))["MIMI_PUBLIC_BASE_URL"].as_deref(),
+            Some("https://proxy.example.org:8443")
+        );
+        clear_env();
     }
 
     #[test]
