@@ -78,8 +78,14 @@ the wire lane the same way it holds on the JSON lane):
 ```
 $ curl -s --cacert ca-cert.pem --cert client-cert.pem --key client-key.pem \
     -X POST --data-binary @notify.bin \
-    https://localhost:8443/mimi/pl/notify -w '\nHTTP_STATUS=%{http_code}\n'
+    https://localhost:8443/mimi/pl/notify/mimi%3A%2F%2Fexample.com%2Fr%2Fdemo -w '\nHTTP_STATUS=%{http_code}\n'
 HTTP_STATUS=201
+
+# The same body for a room hosted by another provider: this certificate is not that provider's.
+$ curl -s --cacert ca-cert.pem --cert client-cert.pem --key client-key.pem \
+    -X POST --data-binary @notify.bin \
+    https://localhost:8443/mimi/pl/notify/mimi%3A%2F%2Fother.example%2Fr%2Fdemo -w '\nHTTP_STATUS=%{http_code}\n'
+HTTP_STATUS=403
 
 $ curl -s --cacert ca-cert.pem --cert client-cert.pem --key client-key.pem \
     -X POST --data-binary @idq.bin \
@@ -115,11 +121,14 @@ openssl x509 -req -in $CERTDIR/server-req.pem -CA $CERTDIR/ca-cert.pem -CAkey $C
   -CAcreateserial -out $CERTDIR/server-cert.pem -days 365 \
   -extfile <(echo "subjectAltName=DNS:localhost")
 
-# A client certificate, also signed by that CA - this is what a peer presents to be trusted.
+# A client certificate, also signed by that CA - this is what a peer presents to be trusted. Its
+# DNS name is the provider domain it speaks for: `notify` is accepted only from the provider that
+# hosts the room it names (protocol-07 §5.5), so this one is the hub of rooms under example.com.
 openssl req -newkey rsa:2048 -nodes -keyout $CERTDIR/client-key.pem -out $CERTDIR/client-req.pem \
   -subj "/CN=demo-client"
 openssl x509 -req -in $CERTDIR/client-req.pem -CA $CERTDIR/ca-cert.pem -CAkey $CERTDIR/ca-key.pem \
-  -CAcreateserial -out $CERTDIR/client-cert.pem -days 365
+  -CAcreateserial -out $CERTDIR/client-cert.pem -days 365 \
+  -extfile <(echo "subjectAltName=DNS:example.com")
 
 # Run the hub from the repo root (cargo needs the workspace Cargo.toml; the cert paths above are
 # already absolute, so this does not need to run from $CERTDIR).
@@ -174,9 +183,9 @@ Output from the sequence above:
         "update_wire_endpoint_mixed_commits": "DIV-10: a Commit combining a custom proposal with a standard MLS proposal (Add, Remove, ...) in the same proposal list is refused - only a Commit whose list holds exactly one custom proposal is applied"
     },
     "wireEndpoints": {
-        "identifierQuery": "/mimi/pl/identifierQuery",
+        "identifierQuery": "/mimi/pl/identifierQuery/{domain}",
         "keyMaterial": "/mimi/pl/keyMaterial/{targetUser}",
-        "notify": "/mimi/pl/notify",
+        "notify": "/mimi/pl/notify/{roomId}",
         "reportAbuse": "/mimi/pl/reportAbuse/{roomId}",
         "requestConsent": "/mimi/pl/requestConsent/{targetDomain}",
         "submitMessage": "/mimi/pl/submitMessage/{recipient}",
@@ -284,13 +293,13 @@ diagnostic instead of a silent no-op.
 | GET | `/.well-known/mimi-protocol-directory` | Advertises supported ciphersuite, draft revisions, and endpoint URLs. |
 | GET | `/mimi/v1/keyMaterial?user=` | Serve one local user's one-time KeyPackage. |
 | POST | `/mimi/v1/keyMaterial/ingest` | Gate + optionally publish a KeyPackage (local or foreign). |
-| POST | `/mimi/v1/notify` | Idempotent fanout receipt. |
+| POST | `/mimi/v1/notify?room=` | Idempotent fanout receipt; the peer must be the hub of `room` (403 otherwise). |
 | POST | `/mimi/v1/welcome/ingest` | Gate + optionally relay a Welcome. |
 | GET | `/mimi/v1/welcome?user=` | Deliver-once pull of a queued Welcome. |
 | POST | `/mimi/v1/submitMessage?recipient=` | Deposit an opaque application message for a recipient. |
 | GET | `/mimi/v1/message?user=` | Deliver-once pull of a queued message. |
 | POST | `/mimi/v1/identifierQuery` | Opt-in-only identifier lookup. |
-| POST | `/mimi/v1/requestConsent` | Consent request (§5.7 C1), always 201. |
+| POST | `/mimi/v1/requestConsent` | Consent request (§5.7 C1), always 201. The wire route answers 202, and 422 for an operation it does not take. |
 | POST | `/mimi/v1/updateConsent` | Consent grant/revoke (§5.7 C2), always 201. |
 | POST | `/mimi/v1/roomPolicy?room=` | Set a room's RBAC policy. |
 | POST | `/mimi/v1/memberRole?room=&member=&role=` | Assign a member's role in a room. |

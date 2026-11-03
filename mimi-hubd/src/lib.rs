@@ -23,6 +23,8 @@
 //! assets+OHTTP §5.10 (DIV-3).
 
 pub mod http;
+pub mod notify_source;
+pub mod peer;
 pub mod store;
 pub mod tls;
 
@@ -190,7 +192,7 @@ impl Provider {
             "wireEndpoints": {
                 "keyMaterial": "/mimi/pl/keyMaterial/{targetUser}",
                 "submitMessage": "/mimi/pl/submitMessage/{recipient}",
-                "notify": "/mimi/pl/notify",
+                "notify": "/mimi/pl/notify/{roomId}",
                 "identifierQuery": "/mimi/pl/identifierQuery/{domain}",
                 "requestConsent": "/mimi/pl/requestConsent/{targetDomain}",
                 "updateConsent": "/mimi/pl/updateConsent/{requesterDomain}",
@@ -209,7 +211,7 @@ impl Provider {
         for (key, path) in [
             ("keyMaterial", "/mimi/pl/keyMaterial/{targetUser}"),
             ("submitMessage", "/mimi/pl/submitMessage/{recipient}"),
-            ("notify", "/mimi/pl/notify"),
+            ("notify", "/mimi/pl/notify/{roomId}"),
             ("identifierQuery", "/mimi/pl/identifierQuery/{domain}"),
             ("requestConsent", "/mimi/pl/requestConsent/{targetDomain}"),
             ("updateConsent", "/mimi/pl/updateConsent/{requesterDomain}"),
@@ -343,7 +345,14 @@ impl Provider {
 
     // ---- M5: /notify idempotency ----
 
-    pub fn submit_notify(&self, body: &[u8], now_unix: u64) -> anyhow::Result<NotifyOutcome> {
+    /// Record a `/notify` body for dedup. The proof says the request came from the hub of the room it names
+    /// (`notify_source`); there is no way to call this without one, so a request from anyone else is never stored.
+    pub fn submit_notify(
+        &self,
+        _source: &notify_source::VerifiedNotifySource,
+        body: &[u8],
+        now_unix: u64,
+    ) -> anyhow::Result<NotifyOutcome> {
         if self.store.notify_seen(body, now_unix)? {
             Ok(NotifyOutcome::DuplicateIgnored)
         } else {
@@ -1287,7 +1296,7 @@ mod tests {
         let wire = &dir["wireEndpoints"];
         assert_eq!(wire["submitMessage"], "/mimi/pl/submitMessage/{recipient}");
         assert_eq!(wire["keyMaterial"], "/mimi/pl/keyMaterial/{targetUser}");
-        assert_eq!(wire["notify"], "/mimi/pl/notify");
+        assert_eq!(wire["notify"], "/mimi/pl/notify/{roomId}");
         assert_eq!(wire["identifierQuery"], "/mimi/pl/identifierQuery/{domain}");
         assert_eq!(
             wire["requestConsent"],
@@ -1322,7 +1331,10 @@ mod tests {
             dir["submitMessage"],
             "https://havenmessenger.com/mimi/pl/submitMessage/{recipient}"
         );
-        assert_eq!(dir["notify"], "https://havenmessenger.com/mimi/pl/notify");
+        assert_eq!(
+            dir["notify"],
+            "https://havenmessenger.com/mimi/pl/notify/{roomId}"
+        );
         assert_eq!(
             dir["identifierQuery"],
             "https://havenmessenger.com/mimi/pl/identifierQuery/{domain}"
@@ -1387,16 +1399,17 @@ mod tests {
     #[test]
     fn notify_is_idempotent() {
         let p = Provider::in_memory("havenmessenger.com").unwrap();
+        let source = notify_source::VerifiedNotifySource::for_tests();
         assert_eq!(
-            p.submit_notify(b"fanout-1", 1_000).unwrap(),
+            p.submit_notify(&source, b"fanout-1", 1_000).unwrap(),
             NotifyOutcome::Process
         );
         assert_eq!(
-            p.submit_notify(b"fanout-1", 1_000).unwrap(),
+            p.submit_notify(&source, b"fanout-1", 1_000).unwrap(),
             NotifyOutcome::DuplicateIgnored
         );
         assert_eq!(
-            p.submit_notify(b"fanout-2", 1_000).unwrap(),
+            p.submit_notify(&source, b"fanout-2", 1_000).unwrap(),
             NotifyOutcome::Process
         );
     }

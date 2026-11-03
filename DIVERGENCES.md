@@ -65,6 +65,11 @@ JSON compat lane's `submit_message` is intentionally left as the pre-existing un
 demo/admin path (`?recipient=` accepts any opaque string, no room semantics) - it predates and
 is independent of the wire protocol surface.
 
+Protocol-07 §5.5 adds that the exemption for a client's own message does not cover a Welcome: the
+hub sends a Welcome to every provider associated with a `KeyPackageRef` in its `secrets` array,
+including the provider of the client that submitted it. This hub relays no Welcome to another
+provider, which is the residual above, so that rule is not exercised here.
+
 ## DIV-6 - client-asserted identity is not bound to an authenticated channel
 
 This reference hub authenticates the TRANSPORT PEER via mTLS (an allowlisted certificate), never
@@ -242,30 +247,58 @@ A test pins the refusal (`gate::grease_tests`) and fails when the pinned release
 refusing it; it is then inverted and this entry removed. The fix needs an openmls release, or
 a source dependency, which this crate's manifest-purity guard does not allow.
 
-## DIV-15 - room-policy changes are read from a private proposal type; AppSync is not read
+## DIV-15 - room-policy changes are read from a private proposal type; room-policy components are not read
 
 `update` reads a participant-list change from either of two carriers: an AppDataUpdate
 (mls-extensions-10 §4.7, proposal type `0x0008` as its §7.2.1 suggests) addressed to
-component `0x0022` (`participant_list`, protocol-06 §9 and §10.3), or the custom proposal of the
+component `0x0022` (`participant_list`, protocol-07 §10.3), or the custom proposal of the
 private type `0xF7A0` (`mimiParticipantList`). Both carry the draft's `ParticipantListUpdate`
 encoding and are applied the same way. The openmls release this crate pins (0.9.2) is built
 without its `extensions-draft` feature and cannot read an AppDataUpdate, so `commit_wire` reads
 the proposals window itself and rewrites an AppDataUpdate to the `0xF7A0` form for reading only; the
 bytes of the Commit are never changed.
 
-A room-policy change is read only from the custom proposal of the private type `0xF7A1`
-(`mimiRoomPolicy`): protocol-06 §10 registers components `0x0020` to `0x0023` and none of them is
-a room policy. An AppDataUpdate for any other component, a removal, and an AppSync proposal are
-refused as an unrecognized proposal type.
+Protocol-07 §5.3 sends a room-policy change as an AppDataUpdate for the room policy components of
+room-policy-04 (`mls_operational_policy`, `roles_list`, `base_room_policy` and ten more, with
+values `0x0024` to `0x0030` suggested and not yet registered). This hub reads none of them. It
+reads a room-policy change only from the custom proposal of the private type `0xF7A1`
+(`mimiRoomPolicy`), whose payload is the JSON form of this crate's `RoomPolicy`. An AppDataUpdate
+for any other component, including `room_metadata` (`0x0023`, protocol-07 §10.4), a removal, and an
+AppSync proposal are refused as an unrecognized proposal type, so a sender is told the change was not
+applied and never that it was.
 
-draft-ietf-mimi-protocol-06 describes the carrier two ways: §2, §3, §4.2, §5.3 and the sequence
-examples call it an AppSync proposal with an `applicationId` of `mimiParticipantList` or
-`mimiRoomPolicy`, while §9 and §10.3 say AppDataUpdate with a component ID. The working group's
-editor's copy now says AppDataUpdate in §5.3 as well.
+Protocol-06 described the carrier two ways (AppSync in §2 to §5.3 and AppDataUpdate in §9 and
+§10.3); protocol-07 says AppDataUpdate throughout and no longer mentions AppSync.
+
+## DIV-16 - a certificate names the provider domains it carries, and any CA in the client bundle may issue any name
+
+Protocol-07 §4.1 has the TLS certificates presented in the handshake authenticate the source and
+target provider domains (RFC 6125). This hub's mTLS listener accepts a client certificate only if it
+chains to a CA in `MIMI_CLIENT_CA`; the request handlers then see the end-entity certificate, and
+`/notify/{roomId}` (§5.5) is accepted only when that certificate is valid for the room's hub, the
+domain in the authority of the room URI. A certificate is valid for a domain when a `dNSName`
+subject alternative name matches it, exactly or by a leftmost wildcard label; the common name is not
+read. The same question gates the JSON-lane `/mimi/v1/notify`, which takes a `room` query for it.
+
+- **What this does not bind.** The check says which names a certificate carries. It does not say
+  which names the CA that signed it may issue. Every CA in the client bundle can issue a certificate
+  for any provider domain, so trusting a CA means trusting it to name any provider, and a peer with a
+  certificate from such a CA passes the `/notify` check for any room. Binding a CA to its names would
+  take a name constraint per CA (an X.509 name-constraints extension on the CA certificate, or a
+  configured list of allowed domains for each CA in the bundle, enforced when the chain is built).
+  This hub has neither; a deployment that trusts an outside CA is trusting it with every domain.
+- **`From`.** §4.1 says a request MUST identify its source provider in a `From` header (`mimi@<provider domain>`).
+  This hub does not require the header, since the draft's own note questions it, and it refuses a
+  request whose header names a domain the peer's certificate does not carry, is not of that form, or
+  arrives on a connection that presented no certificate (403). The `Host` header, which names the
+  target provider, is not compared with this hub's domain.
+- **`submitMessage`, `update` and the rest.** Only `/notify` is bound to the room's hub. A peer that
+  passes mTLS is not otherwise tied to the provider domain in its certificate on the other routes,
+  as DIV-6 says for the identities inside a request body.
 
 ---
 
 Divergences are revisited as the drafts move and as the accept-path work (DIV-6, DIV-9, DIV-10)
 lands. DIV-1 through DIV-4 do not block interoperating with another provider on the supported
 surface. DIV-5, DIV-7, and DIV-11 are closed or mostly closed (see above); DIV-6, DIV-8, DIV-9,
-DIV-10, DIV-12, DIV-13, DIV-14, and DIV-15 still do, for the endpoints they touch, until closed.
+DIV-10, DIV-12, DIV-13, DIV-14, DIV-15, and DIV-16 still do, for the endpoints they touch, until closed.

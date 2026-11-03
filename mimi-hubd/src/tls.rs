@@ -6,6 +6,8 @@
 
 use std::sync::Arc;
 
+use crate::peer::PeerIdentityAcceptor;
+
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig};
@@ -68,6 +70,7 @@ pub async fn serve(
 ) -> std::io::Result<()> {
     let tls = axum_server::tls_rustls::RustlsConfig::from_config(config);
     axum_server::bind_rustls(addr, tls)
+        .map(PeerIdentityAcceptor::new)
         .serve(router.into_make_service())
         .await
 }
@@ -92,6 +95,7 @@ pub async fn serve_with_graceful_shutdown(
         shutdown_handle.graceful_shutdown(Some(grace_period));
     });
     axum_server::bind_rustls(addr, tls)
+        .map(PeerIdentityAcceptor::new)
         .handle(handle)
         .serve(router.into_make_service())
         .await
@@ -124,7 +128,7 @@ async fn wait_for_shutdown_signal() {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     // Throwaway CA (rcgen 0.14 Issuer) + leaf cert/key issuance for handshake tests.

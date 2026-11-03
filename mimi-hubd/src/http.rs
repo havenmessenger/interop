@@ -22,7 +22,7 @@
 //!   POST /mimi/pl/requestConsent/:target_domain     (§5.7 C1, ConsentEntry body, always 201)
 //!   POST /mimi/pl/updateConsent/:requester_domain   (§5.7 C2, ConsentEntry body, always 201)
 //!   POST /mimi/pl/keyMaterial/:target_user          (§5.2, KeyMaterialRequest/Response bodies)
-//!   POST /mimi/pl/notify                            (§5.5, inbound-receive only, FanoutMessage)
+//!   POST /mimi/pl/notify/{roomId}                   (§5.5, inbound-receive only, FanoutMessage)
 //!   POST /mimi/pl/identifierQuery                   (§5.8, DIV-4 no-body-oracle preserved)
 //!   POST /mimi/pl/reportAbuse/:room_id              (§5.9, DIV-8 metadata-only - no AbusiveMessage)
 //!   POST /mimi/pl/update/:room_id                   (§4.3.2, DIV-10 - single custom proposal only)
@@ -38,17 +38,20 @@ use std::sync::{Arc, Mutex};
 
 use axum::{
     body::Bytes,
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::StatusCode,
+    middleware::Next,
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use mimi_core::consent::{ConsentEntry, ConsentOperation};
 use mimi_core::gate::IdentifierQueryResult;
 use mimi_core::protocol_wire::{AbuseReport, SubmitMessageRequest, SubmitMessageResponse};
 use serde::Deserialize;
 
+use crate::notify_source::{NotifyRefusal, VerifiedNotifySource};
+use crate::peer::{provider_of_from_header, PeerCert};
 use crate::{NotifyOutcome, Provider};
 
 /// Shared, mutating provider state (some handlers consume KeyPackages, record dedup, or enrollment).
@@ -94,7 +97,7 @@ fn wire_router() -> Router<SharedProvider> {
             post(update_consent_wire),
         )
         .route("/mimi/pl/keyMaterial/:target_user", post(key_material_wire))
-        .route("/mimi/pl/notify", post(notify_wire))
+        .route("/mimi/pl/notify/:room_id", post(notify_wire))
         .route("/mimi/pl/identifierQuery", post(identifier_query_wire))
         .route(
             "/mimi/pl/identifierQuery/:domain",
@@ -103,6 +106,27 @@ fn wire_router() -> Router<SharedProvider> {
         .route("/mimi/pl/reportAbuse/:room_id", post(report_abuse_wire))
         .route("/mimi/pl/update/:room_id", post(update_wire))
         .layer(axum::middleware::map_response(label_wire_body))
+        .layer(axum::middleware::from_fn(check_from_header))
+}
+
+/// §4.1: a request names its source provider in the `From` header (`mimi@<provider domain>`), and the TLS certificate must
+/// authenticate that domain. The header is not required, since the draft's own text questions it; where one is present
+/// it must name a domain the peer's certificate authenticates, and a request whose header names another provider, is
+/// not an addr-spec of that form, or arrives on a connection with no peer certificate is refused (403).
+async fn check_from_header(request: Request, next: Next) -> Response {
+    if let Some(value) = request.headers().get(axum::http::header::FROM) {
+        let peer = request
+            .extensions()
+            .get::<PeerCert>()
+            .and_then(|PeerCert(identity)| identity.as_ref());
+        let named = value.to_str().ok().and_then(provider_of_from_header);
+        let authenticated =
+            matches!((named, peer), (Some(domain), Some(peer)) if peer.authenticates(&domain));
+        if !authenticated {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
+    next.run(request).await
 }
 
 /// The media type of a protocol request or response body (protocol-07 §10.6). The directory (`application/json`) and
@@ -380,31 +404,75 @@ async fn fetch_message(State(p): State<SharedProvider>, Query(q): Query<UserQuer
     }
 }
 
-/// Fanout `/notify` (M5): ALWAYS 201, whether first-seen or a byte-exact duplicate (the spec's
+/// Fanout `/notify` (M5), JSON lane: ALWAYS 201, whether first-seen or a byte-exact duplicate (the spec's
 /// idempotency requirement); 500 only on a store error. The body decides process-vs-ignore.
-async fn notify(State(p): State<SharedProvider>, body: Bytes) -> StatusCode {
-    match lock(&p).submit_notify(&body, now_unix()) {
-        Ok(NotifyOutcome::Process) => StatusCode::CREATED, // (process happens here in the full build)
-        Ok(NotifyOutcome::DuplicateIgnored) => StatusCode::CREATED,
+///
+/// `?room=` names the room the fanout is for, and the peer's certificate must authenticate that room's hub
+/// (protocol-07 §5.5), exactly as on the wire lane: [`verify_notify_source`] is the one place either lane asks. A request
+/// that names no room, or whose peer is not the hub, is refused without being stored.
+async fn notify(
+    State(p): State<SharedProvider>,
+    Query(q): Query<NotifyQuery>,
+    peer: Option<Extension<PeerCert>>,
+    body: Bytes,
+) -> StatusCode {
+    let Some(room) = q.room else {
+        return StatusCode::BAD_REQUEST;
+    };
+    match verify_notify_source(&room, peer.as_ref()) {
+        Ok(source) => accept_notify(&p, &source, &body),
+        Err(status) => status,
+    }
+}
+
+#[derive(Deserialize)]
+struct NotifyQuery {
+    room: Option<String>,
+}
+
+/// Verify that the peer is the hub of `room_uri`. Both lanes ask here, and `Provider::submit_notify` takes the proof
+/// this makes ([`VerifiedNotifySource`]), so a lane that skipped the question would not compile.
+fn verify_notify_source(
+    room_uri: &str,
+    peer: Option<&Extension<PeerCert>>,
+) -> Result<VerifiedNotifySource, StatusCode> {
+    let identity = peer.and_then(|Extension(PeerCert(identity))| identity.as_ref());
+    VerifiedNotifySource::verify(room_uri, identity).map_err(|refusal| match refusal {
+        NotifyRefusal::NotARoom => StatusCode::BAD_REQUEST,
+        NotifyRefusal::NotFromTheHub => StatusCode::FORBIDDEN,
+    })
+}
+
+/// Record a notify body whose source has been verified.
+fn accept_notify(p: &SharedProvider, source: &VerifiedNotifySource, body: &[u8]) -> StatusCode {
+    match lock(p).submit_notify(source, body, now_unix()) {
+        Ok(NotifyOutcome::Process | NotifyOutcome::DuplicateIgnored) => StatusCode::CREATED,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
 /// §5.5 wire twin of [`notify`], inbound-receive shape only (see
-/// `mimi_core::protocol_wire`'s module doc on `FanoutMessage`). Confirms the body decodes as a
-/// well-formed `FanoutMessage` (a real MLS envelope, not garbage) before handing the SAME opaque
-/// bytes the JSON lane would receive to the identical dedup-by-content-hash store call. Rejecting
-/// undecodable bodies with 400, rather than treating them as valid-but-different content the way
-/// `submit_notify` treats any other byte string, keeps the wire lane honest about actually
-/// speaking the protocol rather than accepting anything.
-async fn notify_wire(State(p): State<SharedProvider>, body: Bytes) -> StatusCode {
+/// `mimi_core::protocol_wire`'s module doc on `FanoutMessage`). `POST /notify/{roomId}`: the room is the path
+/// segment, and the peer must be that room's hub (see [`verify_notify_source`]); the source is checked first, so a
+/// request from anyone but the hub is refused whatever its body holds. Confirms the body decodes as a well-formed
+/// `FanoutMessage` (an MLS envelope, not garbage) before handing the SAME opaque bytes the JSON lane would receive to
+/// the identical dedup-by-content-hash store call. Rejecting undecodable bodies with 400, rather than treating them as
+/// valid-but-different content the way `submit_notify` treats any other byte string, keeps the wire lane to the
+/// protocol it speaks.
+async fn notify_wire(
+    State(p): State<SharedProvider>,
+    Path(room_id): Path<String>,
+    peer: Option<Extension<PeerCert>>,
+    body: Bytes,
+) -> StatusCode {
+    let source = match verify_notify_source(&room_id, peer.as_ref()) {
+        Ok(source) => source,
+        Err(status) => return status,
+    };
     if mimi_core::protocol_wire::FanoutMessage::decode(&body).is_err() {
         return StatusCode::BAD_REQUEST;
     }
-    match lock(&p).submit_notify(&body, now_unix()) {
-        Ok(NotifyOutcome::Process | NotifyOutcome::DuplicateIgnored) => StatusCode::CREATED,
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    }
+    accept_notify(&p, &source, &body)
 }
 
 #[derive(Deserialize)]
@@ -709,6 +777,10 @@ mod update_tests;
 mod wire_tests;
 
 #[cfg(test)]
+#[path = "http_notify_tests.rs"]
+mod notify_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use axum::body::Body;
@@ -792,26 +864,6 @@ mod tests {
         assert_eq!(
             b1, b2,
             "the two 404s must be byte-identical (no existence leak)"
-        );
-    }
-
-    #[tokio::test]
-    async fn notify_is_always_201_even_on_duplicate() {
-        let (router, _p) = app();
-        let req = || {
-            Request::builder()
-                .method("POST")
-                .uri("/mimi/v1/notify")
-                .body(Body::from("fanout-body"))
-                .unwrap()
-        };
-        let first = router.clone().oneshot(req()).await.unwrap();
-        let dup = router.clone().oneshot(req()).await.unwrap();
-        assert_eq!(first.status(), StatusCode::CREATED);
-        assert_eq!(
-            dup.status(),
-            StatusCode::CREATED,
-            "duplicate /notify must still be 201 (M5)"
         );
     }
 
@@ -1995,45 +2047,6 @@ mod tests {
             .unwrap()
             .tls_serialize_detached()
             .unwrap()
-    }
-
-    #[tokio::test]
-    async fn notify_wire_accepts_real_fanout_message() {
-        use mimi_core::protocol_wire::FanoutMessage;
-
-        let (router, _p) = app();
-        let fm = FanoutMessage {
-            protocol: mimi_core::protocol_wire::PROTOCOL_MLS10,
-            timestamp: now_unix(),
-            message_and_tail: real_mls_envelope_bytes(),
-        };
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/mimi/pl/notify")
-                    .body(Body::from(fm.encode().unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
-    }
-
-    #[tokio::test]
-    async fn notify_wire_rejects_undecodable_body() {
-        let (router, _p) = app();
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/mimi/pl/notify")
-                    .body(Body::from(&b"not a FanoutMessage"[..]))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

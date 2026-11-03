@@ -34,6 +34,8 @@ toml = "0.8"
 axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-pemfile = "2"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }  # the TLS stream type the peer-identity acceptor names
+tower = "0.5"                                           # Layer, to attach the peer certificate to a connection
 # Durable state - one store, no in-memory residue. bundled = sqlite compiled from source, so the
 # binary is container-portable with no system sqlite dependency.
 rusqlite = { version = "0.40", features = ["bundled"] }
@@ -41,7 +43,6 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 [dev-dependencies]
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }        # ServiceExt::oneshot for router tests
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }  # real mTLS handshake test
 rcgen = "0.14"                                          # test cert generation (CA + server + client)
 # Build a real 0x0001 KeyPackage for wiring tests (already in the graph via mimi-core).
 openmls = "0.9.2"

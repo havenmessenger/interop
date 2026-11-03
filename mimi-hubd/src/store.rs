@@ -849,6 +849,14 @@ impl SqliteStore {
         Ok(w + m)
     }
 
+    /// How many fanout bodies the dedup ledger holds (tests read it to prove a refused request stored nothing).
+    #[cfg(test)]
+    pub(crate) fn notify_seen_count(&self) -> i64 {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM notify_seen", [], |r| r.get(0))
+            .unwrap()
+    }
+
     /// Drop KeyPackageRef associations whose `not_after` has passed (K3/K4 cleanup). Returns rows
     /// removed. Keyed on the association's own expiry, NOT the delivery TTL: these track the KeyPackage
     /// lifetime, so the caller passes `now` (not `now - DELIVERY_TTL`).
