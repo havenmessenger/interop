@@ -20,6 +20,7 @@ const KNOWN_KEYS: &[&str] = &[
     "server_cert",
     "server_key",
     "client_ca",
+    "directory_bind_addr",
 ];
 
 /// The six settings this daemon has always taken from env vars, now also loadable from a TOML
@@ -33,6 +34,8 @@ pub struct ConfigFile {
     pub server_cert: Option<String>,
     pub server_key: Option<String>,
     pub client_ca: Option<String>,
+    /// Where the directory-only listener binds. Unset means there is none.
+    pub directory_bind_addr: Option<String>,
 }
 
 impl ConfigFile {
@@ -68,6 +71,7 @@ impl ConfigFile {
             "server_cert" => self.server_cert.as_ref(),
             "server_key" => self.server_key.as_ref(),
             "client_ca" => self.client_ca.as_ref(),
+            "directory_bind_addr" => self.directory_bind_addr.as_ref(),
             _ => None,
         }
     }
@@ -195,6 +199,16 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
         "MIMI_CLIENT_CA",
         resolve("MIMI_CLIENT_CA", "client_ca", file, None),
     );
+    // No default: the directory-only listener exists only where an operator asks for it.
+    m.insert(
+        "MIMI_DIRECTORY_BIND_ADDR",
+        resolve(
+            "MIMI_DIRECTORY_BIND_ADDR",
+            "directory_bind_addr",
+            file,
+            None,
+        ),
+    );
     m
 }
 
@@ -210,6 +224,7 @@ mod tests {
             "MIMI_SERVER_CERT",
             "MIMI_SERVER_KEY",
             "MIMI_CLIENT_CA",
+            "MIMI_DIRECTORY_BIND_ADDR",
         ] {
             std::env::remove_var(k);
         }
@@ -247,6 +262,27 @@ mod tests {
     }
 
     #[test]
+    fn the_directory_listener_exists_only_where_it_is_asked_for() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_env();
+        assert_eq!(resolve_all(None)["MIMI_DIRECTORY_BIND_ADDR"], None);
+        std::env::set_var("MIMI_DIRECTORY_BIND_ADDR", "127.0.0.1:8448");
+        assert_eq!(
+            resolve_all(None)["MIMI_DIRECTORY_BIND_ADDR"].as_deref(),
+            Some("127.0.0.1:8448")
+        );
+        clear_env();
+        let file = ConfigFile {
+            directory_bind_addr: Some("192.0.2.2:8448".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_all(Some(&file))["MIMI_DIRECTORY_BIND_ADDR"].as_deref(),
+            Some("192.0.2.2:8448")
+        );
+    }
+
+    #[test]
     fn file_only_supplies_every_value_when_env_is_unset() {
         let _guard = ENV_LOCK.lock().unwrap();
         clear_env();
@@ -257,6 +293,7 @@ mod tests {
             server_cert: Some("/file/cert.pem".to_string()),
             server_key: Some("/file/key.pem".to_string()),
             client_ca: Some("/file/ca.pem".to_string()),
+            ..Default::default()
         };
         let resolved = resolve_all(Some(&file));
         assert_eq!(
@@ -291,6 +328,7 @@ mod tests {
             server_cert: Some("/file/cert.pem".to_string()),
             server_key: Some("/file/key.pem".to_string()),
             client_ca: Some("/file/ca.pem".to_string()),
+            ..Default::default()
         };
         let resolved = resolve_all(Some(&file));
         // The overridden key wins from env...

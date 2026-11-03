@@ -79,6 +79,16 @@ pub fn build_router(provider: SharedProvider) -> Router {
         .with_state(provider)
 }
 
+/// The directory and nothing else: `GET /.well-known/mimi-protocol-directory`, for a listener that needs no client
+/// certificate. Protocol-07 §5.1 has a provider's directory fetched before there is any peer to authenticate, and the
+/// document names endpoints without granting access to any of them. No other route is mounted here, so a request for
+/// anything else is a 404 and a request that is not a GET for the directory is a 405.
+pub fn build_directory_router(provider: SharedProvider) -> Router {
+    Router::new()
+        .route("/.well-known/mimi-protocol-directory", get(directory))
+        .with_state(provider)
+}
+
 /// The `/mimi/pl/*` routes: the draft's TLS presentation-language wire framing. Every body they answer with is
 /// labeled `application/mimi-protocol` (§10.6) in one place, [`label_wire_body`], so a route added here cannot be
 /// answered under another type.
@@ -779,6 +789,10 @@ mod wire_tests;
 #[cfg(test)]
 #[path = "http_notify_tests.rs"]
 mod notify_tests;
+
+#[cfg(test)]
+#[path = "http_directory_tests.rs"]
+mod directory_tests;
 
 #[cfg(test)]
 mod tests {

@@ -13,6 +13,7 @@
 //!   MIMI_SERVER_KEY        PEM path, this hub's TLS server private key
 //!   MIMI_CLIENT_CA         PEM path, the CA that signs client certificates for peers this hub trusts
 //!                          (mTLS peer-trust allowlist; see README.md for how to generate one)
+//!   MIMI_DIRECTORY_BIND_ADDR  optional; a second listener, plain HTTP, that serves the directory document only
 //!
 //! Startup order is deliberate: mTLS material is read and validated into a `ServerConfig` BEFORE
 //! any durable state is opened. A hub with bad or missing certificates should fail before it
@@ -25,7 +26,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use clap::Parser;
-use mimi_hubd::{http::build_router, tls, Provider};
+use mimi_hubd::{
+    http::{build_directory_router, build_router},
+    tls, Provider,
+};
 
 #[derive(Parser)]
 #[command(name = "mimi-hubd", version, about = "Reference MIMI hub daemon")]
@@ -72,7 +76,21 @@ async fn main() -> anyhow::Result<()> {
 
     let provider = Provider::open(&domain, &db_path)?;
     let shared = Arc::new(Mutex::new(provider));
-    let router = build_router(shared);
+    let router = build_router(shared.clone());
+
+    // The directory-only listener, when asked for. Plain HTTP, no client certificate: it answers one GET with the
+    // directory document and nothing else, and is meant to sit behind whatever terminates TLS for the public name.
+    if let Some(addr) = resolved["MIMI_DIRECTORY_BIND_ADDR"].as_deref() {
+        let addr: std::net::SocketAddr = addr.parse()?;
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        let directory = build_directory_router(shared);
+        eprintln!("[mimi-hubd] directory only (no client certificate) listening on {addr}");
+        tokio::spawn(async move {
+            if let Err(error) = axum::serve(listener, directory).await {
+                eprintln!("[mimi-hubd] directory listener stopped: {error}");
+            }
+        });
+    }
 
     eprintln!(
         "[mimi-hubd {}] domain={domain} db={db_path} listening (mTLS) on {bind}",
