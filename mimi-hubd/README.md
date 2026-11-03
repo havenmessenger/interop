@@ -265,7 +265,7 @@ packaging changes how you *install* the daemon, never what it *does*.
 
 ## Configuration reference
 
-Seven settings, either as env vars or as keys in a `--config <path>` TOML file (see the two
+Nine settings, either as env vars or as keys in a `--config <path>` TOML file (see the two
 quickstarts above). An env var, if set to a non-empty value, always overrides the same key from
 the file - see [`debian/mimi-hubd.toml.example`](debian/mimi-hubd.toml.example) and
 [`debian/mimi-hubd.env.example`](debian/mimi-hubd.env.example) for filled-in templates.
@@ -279,6 +279,8 @@ the file - see [`debian/mimi-hubd.toml.example`](debian/mimi-hubd.toml.example) 
 | `MIMI_BIND_ADDR` | `bind_addr` | no | `0.0.0.0:8443` | Listen address. |
 | `MIMI_DB_PATH` | `db_path` | no | `/var/lib/mimi/provider.db` | SQLite file path for durable state. This binary-level default is unchanged by packaging - the shipped `.toml.example` template recommends `/var/lib/mimi-hubd/hub.db` instead (matching the systemd unit's `StateDirectory=`), but that is the template's choice, not a change to this daemon's own default. |
 | `MIMI_PUBLIC_BASE_URL` | `public_base_url` | no | `https://{MIMI_PROVIDER_DOMAIN}` | The `https://` URL the directory's endpoint URLs start at, for a hub behind a reverse proxy, on a port other than 443, or on a dedicated host. Identifiers keep using `MIMI_PROVIDER_DOMAIN`. One trailing `/` is dropped; a query, fragment or non-`https` URL is a hard error at startup. |
+| `MIMI_DIRECTORY_BIND_ADDR` | `directory_bind_addr` | no | none | A second listener, plain HTTP and with no client certificate, that answers `GET /.well-known/mimi-protocol-directory` and nothing else. It is meant to sit behind whatever terminates TLS for the public name. Unset means there is no such listener. |
+| `MIMI_ACTIVITY_LOG` | `activity_log` | no | off | `1` prints one line per request on the peer-facing listener to stderr: `[mimi-activity] method=POST route=/mimi/pl/update/:room_id status=200`. The route is the template the request matched (`route=unmatched` when none did), so no path, query string, header, certificate or body appears in it. Any other value, or none, leaves it off. The directory-only listener is not logged. |
 
 The daemon never falls back to plain HTTP: a missing certificate, key, or CA path is a hard error
 at startup, not a degraded-but-running mode - and mTLS material is validated *before* the SQLite

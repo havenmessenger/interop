@@ -22,6 +22,7 @@ const KNOWN_KEYS: &[&str] = &[
     "client_ca",
     "directory_bind_addr",
     "public_base_url",
+    "activity_log",
 ];
 
 /// The settings this daemon takes from env vars, also loadable from a TOML file. Field names match the env var suffix in lowercase (`MIMI_PROVIDER_DOMAIN` ->
@@ -37,6 +38,8 @@ pub struct ConfigFile {
     /// Where the directory-only listener binds. Unset means there is none.
     pub directory_bind_addr: Option<String>,
     pub public_base_url: Option<String>,
+    /// `1` turns on the activity line (see `activity.rs`). Anything else, or no value, leaves it off.
+    pub activity_log: Option<String>,
 }
 
 impl ConfigFile {
@@ -74,6 +77,7 @@ impl ConfigFile {
             "client_ca" => self.client_ca.as_ref(),
             "directory_bind_addr" => self.directory_bind_addr.as_ref(),
             "public_base_url" => self.public_base_url.as_ref(),
+            "activity_log" => self.activity_log.as_ref(),
             _ => None,
         }
     }
@@ -215,6 +219,11 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
         "MIMI_PUBLIC_BASE_URL",
         resolve("MIMI_PUBLIC_BASE_URL", "public_base_url", file, None),
     );
+    // No default: the activity line is off unless an operator sets this to `1`.
+    m.insert(
+        "MIMI_ACTIVITY_LOG",
+        resolve("MIMI_ACTIVITY_LOG", "activity_log", file, None),
+    );
     m
 }
 
@@ -232,6 +241,7 @@ mod tests {
             "MIMI_CLIENT_CA",
             "MIMI_DIRECTORY_BIND_ADDR",
             "MIMI_PUBLIC_BASE_URL",
+            "MIMI_ACTIVITY_LOG",
         ] {
             std::env::remove_var(k);
         }
@@ -265,6 +275,16 @@ mod tests {
             resolved["MIMI_SERVER_CERT"].as_deref(),
             Some("/env/cert.pem")
         );
+        clear_env();
+    }
+
+    #[test]
+    fn the_activity_line_is_off_unless_it_is_set() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_env();
+        assert_eq!(resolve_all(None)["MIMI_ACTIVITY_LOG"], None);
+        std::env::set_var("MIMI_ACTIVITY_LOG", "1");
+        assert_eq!(resolve_all(None)["MIMI_ACTIVITY_LOG"].as_deref(), Some("1"));
         clear_env();
     }
 

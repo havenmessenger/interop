@@ -22,6 +22,7 @@
 //! GroupInfo/external-commit join (DIV-1), non-0x0001 suites (DIV-2, enforced by the gate),
 //! assets+OHTTP §5.10 (DIV-3).
 
+pub mod activity;
 pub mod http;
 pub mod notify_source;
 pub mod peer;

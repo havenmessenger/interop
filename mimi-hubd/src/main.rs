@@ -14,6 +14,7 @@
 //!   MIMI_CLIENT_CA         PEM path, the CA that signs client certificates for peers this hub trusts
 //!   MIMI_PUBLIC_BASE_URL   https URL the directory's endpoint URLs start at (default https://{domain})
 //!                          (mTLS peer-trust allowlist; see README.md for how to generate one)
+//!   MIMI_ACTIVITY_LOG      optional; 1 prints one line per peer request (method, route template, status); off otherwise
 //!   MIMI_DIRECTORY_BIND_ADDR  optional; a second listener, plain HTTP, that serves the directory document only
 //!
 //! Startup order is deliberate: mTLS material is read and validated into a `ServerConfig` BEFORE
@@ -28,6 +29,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use mimi_hubd::{
+    activity::{enabled as activity_enabled, with_activity_log},
     http::{build_directory_router, build_router},
     tls, Provider,
 };
@@ -86,7 +88,12 @@ async fn main() -> anyhow::Result<()> {
         provider = provider.with_public_base_url(url)?;
     }
     let shared = Arc::new(Mutex::new(provider));
-    let router = build_router(shared.clone());
+    // The activity line is for the peer-facing listener only, and off unless MIMI_ACTIVITY_LOG is 1.
+    let router = with_activity_log(
+        build_router(shared.clone()),
+        activity_enabled(resolved["MIMI_ACTIVITY_LOG"].as_deref()),
+        Arc::new(|line| eprintln!("{line}")),
+    );
 
     // The directory-only listener, when asked for. Plain HTTP, no client certificate: it answers one GET with the
     // directory document and nothing else, and is meant to sit behind whatever terminates TLS for the public name.
