@@ -256,5 +256,22 @@ fn a_store_opened_on_the_older_table_keeps_the_order_it_was_written_in() {
     assert_eq!(members(&hub), named(&["alice", "zoe", "bob"]));
     hub.add_participant(ROOM, &user("amy"), 2).unwrap();
     assert_eq!(members(&hub), named(&["alice", "zoe", "bob", "amy"]));
+    drop(hub);
+    // Every row holds a position of its own, in the order the rows were written: not a tie that a query happens to
+    // break the same way today.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let mut stmt = conn
+        .prepare("SELECT seq FROM room_participants ORDER BY rowid")
+        .unwrap();
+    let positions: Vec<i64> = stmt
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(positions.len(), 4);
+    assert!(
+        positions.iter().all(|seq| *seq > 0) && positions.windows(2).all(|w| w[0] < w[1]),
+        "positions are {positions:?}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
