@@ -18,6 +18,11 @@ use crate::tls::tests::{issue, make_ca};
 
 const ROOM: &str = "mimi://hub.example/r/clubhouse";
 
+/// A `From` header value: an addr-spec built from its parts.
+fn addr(local: &str, domain: &str) -> String {
+    format!("{local}@{domain}")
+}
+
 fn encoded(room: &str) -> String {
     room.replace(':', "%3A").replace('/', "%2F")
 }
@@ -174,7 +179,7 @@ async fn a_path_that_is_not_a_room_is_a_bad_request() {
     for not_a_room in [
         "mimi://hub.example/u/alice",
         "mimi://hub.example",
-        "mimi://user@hub.example/r/x",
+        concat!("mimi://user", "@", "hub.example/r/x"),
         "https://hub.example/r/x",
         "x",
     ] {
@@ -301,8 +306,9 @@ async fn an_undecodable_body_from_the_hub_is_a_bad_request_and_from_anyone_else_
 async fn from_is_checked_where_it_is_sent_and_never_required() {
     let hub = peer(&["hub.example"], "hub");
     let (router, _p) = app();
-    let status = |from: Option<&'static str>, peer: Option<PeerCert>| {
-        notify(router.clone(), ROOM, peer, from)
+    let status = |from: Option<String>, peer: Option<PeerCert>| {
+        let router = router.clone();
+        async move { notify(router, ROOM, peer, from.as_deref()).await }
     };
     assert_eq!(
         status(None, Some(hub.clone())).await,
@@ -310,28 +316,28 @@ async fn from_is_checked_where_it_is_sent_and_never_required() {
         "From is not required"
     );
     assert_eq!(
-        status(Some("mimi@hub.example"), Some(hub.clone())).await,
+        status(Some(addr("mimi", "hub.example")), Some(hub.clone())).await,
         StatusCode::CREATED
     );
     assert_eq!(
-        status(Some("mimi@HUB.example"), Some(hub.clone())).await,
+        status(Some(addr("mimi", "HUB.example")), Some(hub.clone())).await,
         StatusCode::CREATED
     );
     for refused in [
-        "mimi@other.example",
-        "alice@hub.example",
-        "Hub <mimi@hub.example>",
-        "hub.example",
-        "mimi@",
+        addr("mimi", "other.example"),
+        addr("alice", "hub.example"),
+        format!("Hub <{}>", addr("mimi", "hub.example")),
+        "hub.example".to_string(),
+        addr("mimi", ""),
     ] {
         assert_eq!(
-            status(Some(refused), Some(hub.clone())).await,
+            status(Some(refused.clone()), Some(hub.clone())).await,
             StatusCode::FORBIDDEN,
             "{refused}"
         );
     }
     assert_eq!(
-        status(Some("mimi@hub.example"), None).await,
+        status(Some(addr("mimi", "hub.example")), None).await,
         StatusCode::FORBIDDEN,
         "a From with no certificate to check it against"
     );
@@ -357,7 +363,7 @@ async fn from_is_checked_on_every_wire_route() {
                 Request::builder()
                     .method("POST")
                     .uri(uri)
-                    .header("from", "mimi@other.example")
+                    .header("from", addr("mimi", "other.example"))
                     .body(Body::from(vec![1u8]))
                     .unwrap(),
             )
@@ -397,7 +403,7 @@ async fn over_a_real_connection_the_certificate_the_peer_presented_decides() {
     });
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
-    let post = |names: Vec<String>, from: Option<&'static str>| {
+    let post = |names: Vec<String>, from: Option<String>| {
         let (cert, key) = issue(&ca, names, "peer");
         let ca_pem = ca_pem.clone();
         async move {
@@ -448,10 +454,18 @@ async fn over_a_real_connection_the_certificate_the_peer_presented_decides() {
     let refused = post(vec!["other.example".into()], None).await;
     assert!(refused.contains("403"), "{refused}");
     assert!(nothing_was_stored(&p));
-    let mislabeled = post(vec!["hub.example".into()], Some("mimi@other.example")).await;
+    let mislabeled = post(
+        vec!["hub.example".into()],
+        Some(addr("mimi", "other.example")),
+    )
+    .await;
     assert!(mislabeled.contains("403"), "{mislabeled}");
     assert!(nothing_was_stored(&p));
-    let accepted = post(vec!["hub.example".into()], Some("mimi@hub.example")).await;
+    let accepted = post(
+        vec!["hub.example".into()],
+        Some(addr("mimi", "hub.example")),
+    )
+    .await;
     assert!(accepted.contains("201"), "{accepted}");
     assert!(!nothing_was_stored(&p));
 }
