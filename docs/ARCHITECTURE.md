@@ -32,8 +32,9 @@ This crate tracks the relevant IETF drafts/RFCs. Known divergences from the draf
   system, and the validation MUSTs (nesting depth, no-HTML, reply-loop).
 - `consent` - the cross-provider anti-spam/privacy gate (protocol-06 §5.7): consent request,
   grant, and revoke, checked before a requester can reach a target.
-- `participant_list` - participant-list changes as an AppSync proposal (protocol §5.3, §7.5).
-- `room_policy` - the role model and authorization logic (room-policy-03); roles live in the
+- `participant_list` - participant-list changes and their apply rules (protocol §7.5), carried as
+  an AppDataUpdate or a private proposal type.
+- `room_policy` - the role model and authorization logic (room-policy-04); roles live in the
   participant list, this module enforces what each role may do.
 - `protocol_wire` - the protocol-06 §5 TLS presentation-language wire framing, alongside the
   JSON `/mimi/v1/*` compatibility lane a foreign implementation does not speak.

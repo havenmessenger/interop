@@ -14,20 +14,21 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 
 > **Status:** a reference implementation of the MIMI content codec and room-policy roles, with
 > content-09 test vectors byte-verified against the official IETF examples, and a hub
-> demonstrating the core mechanisms (directory, key material, message relay, consent). Known
-> gaps against the full protocol-06 surface are listed in [`DIVERGENCES.md`](DIVERGENCES.md).
+> demonstrating the core mechanisms (directory, key material, message relay, consent). Main
+> implements protocol-06, and protocol-07 is in progress on a branch. Known gaps against the
+> full protocol-06 surface are listed in [`DIVERGENCES.md`](DIVERGENCES.md).
 > Feedback welcome.
 
 ## Why use this
-- **Protocol code against the current drafts.** MIMI protocol-06 (the JSON lane and the
-  TLS presentation-language wire lane), mimi-content-09, and room-policy, over MLS (RFC 9420)
-  via openmls.
+- **Protocol code against the IETF drafts.** MIMI protocol-06 (the JSON lane and the
+  TLS presentation-language wire lane), mimi-content-09, and room-policy-04, over MLS (RFC 9420)
+  via openmls. Protocol-07 and content-10 are published; work on protocol-07 is in progress.
 - **A runnable, installable hub.** `mimi-hubd` is an mTLS daemon you can stand up from its
   quickstart and point an implementation at; its README shows the output of the commands
   it lists. It also installs like a normal system service - a systemd unit, a `.deb`, prebuilt
   Linux binaries, and a Docker image are all built from the same source (see mimi-hubd/README.md's
   "Installing as a service").
-- **Conformance receipts.** 264 tests, including hand-computed byte KATs and
+- **Conformance receipts.** The tests include hand-computed byte KATs and
   the official IETF mimi-content test vectors. Cross-implementation vectors against
   openmls-main are published with a full report
   ([`docs/vc-01-vector-report.md`](docs/vc-01-vector-report.md)), including a §5.6.1
@@ -41,6 +42,9 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 - **Standalone.** Apache-2.0, no submodules, no services needed to build and run the tests.
 
 ## See it run
+- [mimi.havenmessenger.com](https://mimi.havenmessenger.com) - Haven's running hub, built from the
+  protocol-07 branch. The directory is public; the protocol endpoints need a client certificate. No
+  other provider has connected to it yet. To test against it, open an issue.
 - [`mimi-hubd/README.md`](mimi-hubd/README.md) - quickstart for the reference hub daemon: mTLS
   server, a live directory endpoint, and both the JSON and TLS-PL wire lanes.
 - [`docs/vc-01-vector-report.md`](docs/vc-01-vector-report.md) - a cross-implementation test
@@ -75,10 +79,10 @@ Haven's client application is not yet public; the runnable examples in this repo
 devices ("emulator clients") jointly acting as one virtual client under a single MLS leaf. This is
 running code against openmls; see the module's own doc comment for the full
 scope statement (what's implemented vs. not, and why an external commit into the
-emulation group doesn't touch Haven's `INV-MLS-001a` no-external-commits invariant).
+emulation group doesn't touch Haven's rule against external commits).
 
 ```sh
-cargo test --lib virtual_clients        # 12 unit tests + 3 openmls conformance tests
+cargo test --lib virtual_clients        # unit tests and openmls conformance tests
 cargo run --example virtual_clients_demo  # a narrated walkthrough: two devices derive identical
                                            # secrets, a third onboards via external commit, one is
                                            # removed and the epoch advances
