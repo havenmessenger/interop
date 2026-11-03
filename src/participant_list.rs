@@ -279,6 +279,17 @@ pub fn apply_update(
             )));
         }
     }
+    // §7.5 (protocol-07): an update is invalid if a user in addedParticipants is already in the participant list.
+    // The list an update is checked against is the one before it, so a user removed and added again in one update is
+    // invalid too: the user is still listed when the update is checked.
+    for a in &u.added_participants {
+        if current.index_of(&a.user_uri).is_some() {
+            return Err(ParticipantListError::RosterRule(format!(
+                "cannot add a user already in the participant list: {}",
+                a.user_uri
+            )));
+        }
+    }
     let mut participants = current.participants.clone();
     // 1. role changes (indices still valid - no removal/add has happened yet).
     for c in &u.changed_role_participants {
@@ -680,6 +691,10 @@ pub fn decode_participant_list_data(
             .collect::<Result<Vec<_>, ParticipantListError>>()?,
     })
 }
+
+#[cfg(test)]
+#[path = "participant_list_update_tests.rs"]
+mod update_tests;
 
 #[cfg(test)]
 mod tests {

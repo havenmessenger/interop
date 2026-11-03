@@ -106,6 +106,9 @@ CREATE TABLE IF NOT EXISTS room_participants (
     member_uri TEXT NOT NULL,
     authority  TEXT NOT NULL,
     ts         INTEGER NOT NULL,
+    -- Position in the room's participants vector (protocol §7.5): the order participants joined in. A
+    -- ParticipantListUpdate names participants by this position, so it is stored, never derived from the URI.
+    seq        INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (room_uri, member_uri)
 );
 CREATE INDEX IF NOT EXISTS idx_room ON room_participants(room_uri);
@@ -145,6 +148,16 @@ pub const MAX_KEYPACKAGES_PER_USER: i64 = 64;
 // without bound). note<V> is bounded independently at decode time (MAX_RUN_AGGREGATE_BYTES).
 pub const MAX_ABUSE_REPORTS: i64 = 65536;
 
+/// One entry of a room's participants vector as the hub stores it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParticipantRow {
+    pub member_uri: String,
+    /// The member's own provider, derived from their URI; the fan-out routing key.
+    pub authority: String,
+    /// The role the hub holds for the member, or `None` where none was assigned.
+    pub role_index: Option<u32>,
+}
+
 impl SqliteStore {
     /// Open (or create) the store at `path`, running migrations. Use for production.
     pub fn open(path: &str) -> anyhow::Result<Self> {
@@ -179,6 +192,17 @@ impl SqliteStore {
                 return Err(e.into());
             }
         }
+        // Migration: room_participants gained `seq`, the position in the room's participants vector. Rows
+        // written before it hold 0; they take their insertion order (rowid) as their position.
+        if let Err(e) = conn.execute(
+            "ALTER TABLE room_participants ADD COLUMN seq INTEGER NOT NULL DEFAULT 0",
+            [],
+        ) {
+            if !e.to_string().contains("duplicate column name") {
+                return Err(e.into());
+            }
+        }
+        conn.execute("UPDATE room_participants SET seq = rowid WHERE seq = 0", [])?;
         Ok(Self { conn })
     }
 
@@ -680,7 +704,8 @@ impl SqliteStore {
         // The WHERE guard makes the UPDATE a no-op if the authority differs; we then detect that and
         // reject, so a member's provider can only change via an explicit remove + fresh add.
         let changed = conn.execute(
-            "INSERT INTO room_participants (room_uri, member_uri, authority, ts) VALUES (?1,?2,?3,?4) \
+            "INSERT INTO room_participants (room_uri, member_uri, authority, ts, seq) \
+             VALUES (?1,?2,?3,?4, (SELECT COALESCE(MAX(seq), 0) + 1 FROM room_participants WHERE room_uri = ?1)) \
              ON CONFLICT(room_uri, member_uri) DO UPDATE SET ts=excluded.ts \
              WHERE room_participants.authority = excluded.authority",
             params![room_uri, member_uri, authority, now_unix as i64],
@@ -713,54 +738,101 @@ impl SqliteStore {
         Ok(n > 0)
     }
 
-    /// Enact a full participant-list transition (role changes, removals, additions) as ONE SQLite
-    /// transaction, so a mid-sequence failure (e.g. the room hits MAX_PARTICIPANTS_PER_ROOM on the
-    /// 2nd of 2 additions) leaves the room's state UNCHANGED rather than partially applied. Order
-    /// matches the caller's own semantics (`mimi_core::participant_list::apply_update`): role
-    /// changes, then removals, then additions - all resolved against indices from the caller's
-    /// PRE-mutation snapshot, so this method does not itself re-derive or reorder anything.
-    ///
-    /// Uses `unchecked_transaction` (rusqlite's `&self`-compatible transaction API) rather than
-    /// `transaction` (which needs `&mut self`) because every other method on this store is `&self`
-    /// throughout - matching the existing shape rather than threading `&mut` through the one
-    /// caller that needs a transaction. Safe here: this connection is only ever reached through a
-    /// single `Provider`, itself held behind one mutex at the request-handling layer, so no caller
-    /// can hold two overlapping transactions on it.
-    #[allow(clippy::too_many_arguments)]
-    pub fn apply_participant_list_update(
-        &self,
-        room_uri: &str,
-        role_changes: &[(String, u32)],
-        removed: &[String],
-        added: &[(String, String, u32)],
-        now_unix: u64,
-    ) -> anyhow::Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        for (member_uri, role_index) in role_changes {
-            Self::set_member_role_on(&tx, room_uri, member_uri, *role_index)?;
-        }
-        for member_uri in removed {
-            Self::remove_participant_on(&tx, room_uri, member_uri)?;
-        }
-        for (member_uri, authority, role_index) in added {
-            Self::add_participant_on(&tx, room_uri, member_uri, authority, now_unix)?;
-            Self::set_member_role_on(&tx, room_uri, member_uri, *role_index)?;
-        }
-        tx.commit()?;
-        Ok(())
+    /// All participants of a room as (member_uri, authority), in the order of the room's participants
+    /// vector (protocol §7.5): the order they joined in, with a removal closing the gap.
+    pub fn list_participants(&self, room_uri: &str) -> anyhow::Result<Vec<(String, String)>> {
+        Ok(self
+            .list_participant_rows(room_uri)?
+            .into_iter()
+            .map(|row| (row.member_uri, row.authority))
+            .collect())
     }
 
-    /// All participants of a room as (member_uri, authority), ordered for determinism.
-    pub fn list_participants(&self, room_uri: &str) -> anyhow::Result<Vec<(String, String)>> {
+    /// The same list with each participant's assigned role (None where the hub holds none).
+    pub fn list_participant_rows(&self, room_uri: &str) -> anyhow::Result<Vec<ParticipantRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT member_uri, authority FROM room_participants WHERE room_uri = ?1 ORDER BY member_uri",
+            "SELECT p.member_uri, p.authority, r.role_index \
+             FROM room_participants p \
+             LEFT JOIN member_role r ON r.room_uri = p.room_uri AND r.member_uri = p.member_uri \
+             WHERE p.room_uri = ?1 ORDER BY p.seq",
         )?;
         let rows = stmt
             .query_map(params![room_uri], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                Ok(ParticipantRow {
+                    member_uri: r.get(0)?,
+                    authority: r.get(1)?,
+                    role_index: r.get::<_, Option<i64>>(2)?.map(|n| n as u32),
+                })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Write a room's whole participants vector as ONE SQLite transaction: `rows` become the room's list, in
+    /// that order, so a failure (the participant or room cap) leaves the room exactly as it was. A member who was
+    /// already listed keeps the time they were last seen; one who is no longer listed loses their role.
+    ///
+    /// The caller computes `rows` from the draft's own rules (`mimi_core::participant_list::apply_update`); this
+    /// method only stores the result, so there is a single place that decides what an update does to a list.
+    ///
+    /// Uses `unchecked_transaction` (rusqlite's `&self`-compatible transaction API) rather than `transaction`
+    /// (which needs `&mut self`) because every other method on this store is `&self`. Safe here: this connection is
+    /// only reached through a single `Provider`, held behind one mutex at the request-handling layer.
+    pub fn replace_participants(
+        &self,
+        room_uri: &str,
+        rows: &[ParticipantRow],
+        now_unix: u64,
+    ) -> anyhow::Result<()> {
+        if rows.len() as i64 > MAX_PARTICIPANTS_PER_ROOM {
+            anyhow::bail!("participant cap reached for room ({MAX_PARTICIPANTS_PER_ROOM})");
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let before: Vec<(String, i64)> = {
+            let mut stmt =
+                tx.prepare("SELECT member_uri, ts FROM room_participants WHERE room_uri = ?1")?;
+            let found = stmt
+                .query_map(params![room_uri], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            found
+        };
+        if before.is_empty() && !rows.is_empty() {
+            let rooms: i64 = tx.query_row(
+                "SELECT COUNT(DISTINCT room_uri) FROM room_participants",
+                [],
+                |r| r.get(0),
+            )?;
+            if rooms >= MAX_ROOMS {
+                anyhow::bail!("room cap reached ({MAX_ROOMS})");
+            }
+        }
+        for (member_uri, _) in &before {
+            if !rows.iter().any(|row| &row.member_uri == member_uri) {
+                tx.execute(
+                    "DELETE FROM member_role WHERE room_uri = ?1 AND member_uri = ?2",
+                    params![room_uri, member_uri],
+                )?;
+            }
+        }
+        tx.execute(
+            "DELETE FROM room_participants WHERE room_uri = ?1",
+            params![room_uri],
+        )?;
+        for (position, row) in rows.iter().enumerate() {
+            let ts = before
+                .iter()
+                .find(|(member_uri, _)| member_uri == &row.member_uri)
+                .map_or(now_unix as i64, |(_, ts)| *ts);
+            tx.execute(
+                "INSERT INTO room_participants (room_uri, member_uri, authority, ts, seq) VALUES (?1,?2,?3,?4,?5)",
+                params![room_uri, row.member_uri, row.authority, ts, position as i64 + 1],
+            )?;
+            if let Some(role_index) = row.role_index {
+                Self::set_member_role_on(&tx, room_uri, &row.member_uri, role_index)?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// TTL sweep: drop welcomes/messages older than `older_than_unix`. Returns rows removed. Called

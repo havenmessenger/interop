@@ -46,7 +46,7 @@ use mimi_core::uri::{MimiKind, MimiUri};
 /// far shorter). Parsed URIs longer than this are rejected before any work.
 const MAX_URI_LEN: usize = 512;
 
-use crate::store::SqliteStore;
+use crate::store::{ParticipantRow, SqliteStore};
 
 /// Published KeyPackages live this long before K2 expiry prunes them from claims.
 const KEYPACKAGE_TTL_SECS: u64 = 30 * 24 * 3600; // 30 days
@@ -782,15 +782,14 @@ impl Provider {
         }
     }
 
-    /// Enact a `ParticipantListUpdate` against this room's `room_participants`/`member_role`
-    /// tables, as ONE atomic transition (`store::apply_participant_list_update` wraps it all in a
-    /// single SQLite transaction - a mid-sequence failure, e.g. hitting the room's participant cap
-    /// on the 2nd of 2 additions, now leaves the room's state UNCHANGED rather than partially
-    /// applied). Indices in `update` resolve against [`Self::list_participants`]'s own ordering
-    /// (alphabetical by URI) - the same canonical order this hub uses everywhere else it needs a
-    /// stable participant ordering. A peer whose index computation used a different ordering
-    /// convention will not apply correctly; this reference hub does not attempt to reconcile that
-    /// (see DIVERGENCES.md).
+    /// Enact a `ParticipantListUpdate` on this room's participants vector, as ONE atomic transition: a failure
+    /// (the participant cap, a refused update) leaves the room as it was.
+    ///
+    /// What an update does to a list is decided in one place, `mimi_core::participant_list::apply_update`, the
+    /// draft's own rules (§7.5): indices count the vector as it stood before the update, a removal does not shift
+    /// the other indices, added participants are appended, and a user who is already listed cannot be added (so a
+    /// user removed and added in the same update is refused too: the list an update is checked against is the one
+    /// before it). The room is then written from that result; there is no second resolver here.
     fn apply_participant_list_update(
         &self,
         room_uri: &str,
@@ -801,67 +800,67 @@ impl Provider {
             .map_err(|_| UpdateRefusal::NotAllowed)?;
         let rows = self
             .store
-            .list_participants(room_uri)
+            .list_participant_rows(room_uri)
             .map_err(|_| UpdateRefusal::Store)?;
-        // apply_update needs only a length + index-bounds check here (this method resolves the
-        // actual mutations from `update` directly against `rows`, not against apply_update's own
-        // returned list) - reusing it keeps the bounds-checking logic in one place rather than
-        // duplicating `validate_participant_list_update` plus a manual length check.
         let current = ParticipantListData {
             participants: rows
                 .iter()
-                .map(|(uri, _authority)| UserRolePair {
-                    user_uri: uri.clone(),
-                    role_index: 0, // placeholder: only positions are read below, never this value
+                .map(|row| UserRolePair {
+                    user_uri: row.member_uri.clone(),
+                    // A member the hub holds no role for reads as role 0 here; `role_index` of the stored row
+                    // stays `None` unless the update names the member.
+                    role_index: row.role_index.unwrap_or(0),
                 })
                 .collect(),
         };
-        apply_update(&current, update).map_err(|_| {
+        let next = apply_update(&current, update).map_err(|_| {
             UpdateRefusal::Invalid("the participant list update does not fit the room")
         })?;
 
-        let role_changes: Vec<(String, u32)> = update
-            .changed_role_participants
-            .iter()
-            .map(|c| {
-                (
-                    current.participants[c.user_index as usize].user_uri.clone(),
-                    c.role_index,
-                )
-            })
-            .collect();
-        let removed: Vec<String> = update
-            .removed_indices
-            .iter()
-            .map(|&idx| current.participants[idx as usize].user_uri.clone())
-            .collect();
-        // authority is DERIVED from each added member's own URI (parsed), never supplied
-        // separately - the same validation the single-item `add_participant` method performs,
-        // hoisted here so the WHOLE transition validates before any mutation starts (an
-        // improvement over the old per-item interleaved validate-then-mutate order).
-        let added: Vec<(String, String, u32)> = update
-            .added_participants
-            .iter()
-            .map(|a| {
-                const BAD_MEMBER: UpdateRefusal =
-                    UpdateRefusal::Invalid("an added participant is not a user URI");
-                if a.user_uri.len() > MAX_URI_LEN {
-                    return Err(BAD_MEMBER);
+        // authority is DERIVED from each added member's own URI (parsed), never supplied separately.
+        let mut written = Vec::with_capacity(next.participants.len());
+        for member in &next.participants {
+            let kept = rows.iter().find(|row| row.member_uri == member.user_uri);
+            let named = update
+                .changed_role_participants
+                .iter()
+                .any(|c| current.participants[c.user_index as usize].user_uri == member.user_uri);
+            written.push(match kept {
+                Some(row) => ParticipantRow {
+                    member_uri: row.member_uri.clone(),
+                    authority: row.authority.clone(),
+                    role_index: if named {
+                        Some(member.role_index)
+                    } else {
+                        row.role_index
+                    },
+                },
+                None => {
+                    const BAD_MEMBER: UpdateRefusal =
+                        UpdateRefusal::Invalid("an added participant is not a user URI");
+                    if member.user_uri.len() > MAX_URI_LEN {
+                        return Err(BAD_MEMBER);
+                    }
+                    let parsed = MimiUri::parse(&member.user_uri).map_err(|_| BAD_MEMBER)?;
+                    if parsed.kind != Some(MimiKind::User) {
+                        return Err(BAD_MEMBER);
+                    }
+                    ParticipantRow {
+                        member_uri: member.user_uri.clone(),
+                        authority: parsed.authority.to_ascii_lowercase(),
+                        role_index: Some(member.role_index),
+                    }
                 }
-                let m = MimiUri::parse(&a.user_uri).map_err(|_| BAD_MEMBER)?;
-                if m.kind != Some(MimiKind::User) {
-                    return Err(BAD_MEMBER);
-                }
-                let authority = m.authority.to_ascii_lowercase();
-                Ok((a.user_uri.clone(), authority, a.role_index))
-            })
-            .collect::<Result<Vec<_>, UpdateRefusal>>()?;
-
+            });
+        }
         self.store
-            .apply_participant_list_update(room_uri, &role_changes, &removed, &added, now_unix)
+            .replace_participants(room_uri, &written, now_unix)
             .map_err(|e| store_refusal(&e))
     }
 }
+
+#[cfg(test)]
+mod participant_order_tests;
 
 #[cfg(test)]
 mod tests {

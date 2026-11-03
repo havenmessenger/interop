@@ -145,11 +145,17 @@ hub's groups already travel as `PublicMessage`, so the proposal bytes are visibl
 without needing that machinery in the first place.
 
 - A `mimiParticipantList` proposal's payload is applied to this room's `room_participants`/
-  `member_role` tables. **Caveat**: indices in the payload resolve against this hub's own
-  canonical participant ordering (alphabetical by URI, the same order `list_participants` already
-  returns everywhere else this hub needs one) - a peer that computed those indices against a
-  different ordering convention will not apply correctly. This reference hub does not attempt to
-  reconcile a foreign ordering convention.
+  `member_role` tables. Indices in the payload count the room's participants vector in the order
+  participants joined, as protocol-07 §7.5 has it: they refer to the vector as it stood before the
+  update, removing one entry does not shift the others, and added participants are appended. The
+  update is applied by `mimi_core::participant_list::apply_update`, and the room is written from
+  its result. An update is refused as `invalidProposal` when an index is out of range, appears
+  twice in one list, or appears in both lists, and when a user in `addedParticipants` is already
+  listed. The list an update is checked against is the one before it, so removing a user and
+  adding the same user in one update is refused too; that is this hub's reading of §7.5, which
+  gives no example. §7.5 also has the indices hold across more than one `ParticipantListUpdate` in
+  a Commit; this hub accepts a single custom proposal per Commit (below), so that case is refused
+  rather than applied.
 - A `mimiRoomPolicy` proposal's payload is the JSON-serialized `RoomPolicy` this hub already stores
   for the JSON-compat `roomPolicy` route - a whole-object replace, validated the same way
   (`RoomPolicy::validate`) before it is stored.
