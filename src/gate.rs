@@ -121,9 +121,10 @@ pub enum GateError {
 }
 
 /// `KeyPackageIn::tls_deserialize` can PANIC (not just return `Err`) on certain malformed
-/// nested-length-prefix input -- an internal tls_codec 0.4.2 assertion, confirmed empirically
-/// against a different call site using the same underlying deserializer. Every gate here runs
-/// on peer-controlled bytes, so catch_unwind turns a hostile/malformed KeyPackage into a decode
+/// nested-length-prefix input -- an internal tls_codec assertion, confirmed empirically against a
+/// different call site using the same underlying deserializer. The pinned tls_codec 0.5 still
+/// debug-asserts when a length-prefixed byte string runs past the end of its input. Every gate
+/// here runs on peer-controlled bytes, so catch_unwind turns a hostile/malformed KeyPackage into a decode
 /// error instead of an unhandled panic in the request task, matching this crate's "hostile
 /// input must never panic" discipline (see content.rs's module doc).
 fn deserialize_keypackage_in_no_panic(
@@ -222,8 +223,9 @@ pub fn keypackage_ref(key_package_bytes: &[u8]) -> Result<Vec<u8>, GateError> {
 /// and drive OpenMlsRustCrypto's ChaCha implementation.
 ///
 /// Mechanism: deserialize the `MlsMessage`, extract the `Welcome`, and read its ciphersuite
-/// from the wire. `Welcome::ciphersuite()` is `pub(crate)` in openmls 0.8.1 (not callable from
-/// our crate), so we re-serialize the `Welcome` and read the leading `u16` - per RFC 9420 the
+/// from the wire. The gate re-serializes the `Welcome` and reads the leading `u16` rather than
+/// calling `Welcome::ciphersuite()`, so it rests on the RFC 9420 layout and not on a library
+/// accessor (the accessor was crate-private before openmls 0.9) - per RFC 9420 the
 /// `Welcome` struct is `{ CipherSuite cipher_suite; EncryptedGroupSecrets secrets<V>; opaque
 /// encrypted_group_info<V>; }`, so the first two bytes are the big-endian ciphersuite. The
 /// test below pins this layout (accept 0x0001 / reject 0x0003) so an openmls wire change can't

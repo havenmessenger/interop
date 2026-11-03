@@ -225,7 +225,7 @@ combination of user and client statuses is read and written back unchanged.
 ## DIV-14 - KeyPackages that carry a GREASE value are refused
 
 RFC 9420 §13.5 has clients include GREASE values to keep peers tolerant of unknown values. The
-openmls release this crate pins (0.8.1; the 0.8.2, 0.8.3 and 0.9.2 releases still behave the same way) rejects
+openmls release this crate pins (0.9.2; the 0.8.1, 0.8.2 and 0.8.3 releases behave the same way) rejects
 a KeyPackage that carries a GREASE extension value with `UnsupportedExtension`, because it
 classifies the same value as a GREASE extension type in the client's capabilities and as an
 unknown extension type in the KeyPackage's own extensions (openmls#2162, fixed on openmls
@@ -242,9 +242,9 @@ a source dependency, which this crate's manifest-purity guard does not allow.
 (mls-extensions-10 §4.7, proposal type `0x0008` as its §7.2.1 suggests) addressed to
 component `0x0022` (`participant_list`, protocol-06 §9 and §10.3), or the custom proposal of the
 private type `0xF7A0` (`mimiParticipantList`). Both carry the draft's `ParticipantListUpdate`
-encoding and are applied the same way. The openmls release this crate pins (0.8.1) is built
-without `extensions-draft-08` and cannot read an AppDataUpdate, so `commit_wire` reads the
-proposals window itself and rewrites an AppDataUpdate to the `0xF7A0` form for reading only; the
+encoding and are applied the same way. The openmls release this crate pins (0.9.2) is built
+without its `extensions-draft` feature and cannot read an AppDataUpdate, so `commit_wire` reads
+the proposals window itself and rewrites an AppDataUpdate to the `0xF7A0` form for reading only; the
 bytes of the Commit are never changed.
 
 A room-policy change is read only from the custom proposal of the private type `0xF7A1`

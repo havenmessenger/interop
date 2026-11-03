@@ -171,10 +171,10 @@ pub(crate) struct Normalized {
 }
 
 /// Rewrite the AppDataUpdate proposals of a member-sent `PublicMessage` Commit into custom proposals, so a decoder built
-/// without openmls's `extensions-draft-08` can read the message. Returns `None` when the message is not such a Commit or
-/// carries no AppDataUpdate, and the caller then reads it as it is.
+/// without openmls's `extensions-draft` feature can read the message. Returns `None` when the message is not such a Commit
+/// or carries no AppDataUpdate, and the caller then reads it as it is.
 ///
-/// This works around the openmls release this crate pins (0.8.1, built without `extensions-draft-08`): remove it when a
+/// This works around the openmls release this crate pins (0.9.2, built without `extensions-draft`): remove it when a
 /// pinned release reads an AppDataUpdate itself.
 ///
 /// openmls without that feature reads proposal type `0x0008` as a custom proposal whose body is `payload<V>`. An

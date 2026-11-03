@@ -681,8 +681,9 @@ pub fn decode_consent_entry(bytes: &[u8]) -> Result<ConsentEntry, WireError> {
             .map_err(|e| codec_err("clientKeyPackages", e))?;
         let window = window.as_slice();
         // `KeyPackageIn::tls_deserialize_bytes` can PANIC (not just Err) on certain malformed
-        // nested-length-prefix inputs -- an internal tls_codec 0.4.2 assertion, observed directly
-        // while testing this fix. `clientKeyPackages` is peer-controlled; catch_unwind turns a
+        // nested-length-prefix inputs -- an internal tls_codec assertion (the pinned 0.5 still
+        // debug-asserts on a byte string that runs past the end of its input).
+        // `clientKeyPackages` is peer-controlled; catch_unwind turns a
         // hostile/malformed KeyPackage into a decode error instead of an unhandled panic in the
         // request task, matching this crate's own "hostile input must never panic" rule
         // (content.rs's module doc states the same discipline for the content codec).

@@ -514,14 +514,15 @@ pub fn encode_participant_list_update(
     Ok(out)
 }
 
-/// Note: the pinned tls_codec 0.4.2's `Vec<T>: DeserializeBytes` does not require the
-/// consumed byte count to EXACTLY equal the vector's own declared length -- it stops once the
-/// cumulative count reaches or exceeds it, so a final element can overrun the declared boundary
-/// and still be accepted (confirmed empirically: a declared 1-byte `changedRoleParticipants<V>`
-/// still decoded a real 8-byte `UserindexRolePair` element). Re-encoding the parsed vector and
-/// comparing it byte-for-byte against exactly the bytes the declared length claims closes this:
-/// a vector that round-trips to different bytes than it was declared as was never valid TLS-PL
-/// to begin with, regardless of what the crate's own decoder tolerated.
+/// Note: tls_codec before 0.5 did not require a `Vec<T>`'s elements to consume EXACTLY the
+/// vector's declared length -- it stopped once the cumulative count reached or exceeded it, so a
+/// final element could overrun the declared boundary and still be accepted (a declared 1-byte
+/// `changedRoleParticipants<V>` decoded a real 8-byte `UserindexRolePair` element). The pinned
+/// 0.5 refuses that overrun itself, and with its `mls` feature (which openmls enables) a length
+/// written in a longer varint form than needed. Re-encoding the parsed vector and comparing it
+/// byte-for-byte against exactly the bytes the declared length claims keeps the rule independent
+/// of the decoder: a vector that round-trips to different bytes than it was declared as was never
+/// valid TLS-PL to begin with, whatever the decoder tolerates.
 fn verify_vec_roundtrip<T: TlsSize + TlsSerialize + std::fmt::Debug>(
     parsed: &[T],
     consumed_bytes: &[u8],
