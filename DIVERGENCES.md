@@ -298,6 +298,30 @@ the change was not applied and never that it was: `mls_operational_policy` (`0x0
 `chat_history_policy` (`0x002e`), `bot_policy` (`0x002f`) and `message_expiration_policy` (`0x0030`).
 They govern what clients and the operator do and are not state this hub enforces.
 
+Where room-policy-04 leaves a rule open, this is what the hub does. The issues are in
+`ietf-wg-mimi/mimi-room-policy`.
+
+- [#33](https://github.com/ietf-wg-mimi/mimi-room-policy/issues/33), rules for a valid role list: a repeated
+  `role_index`, a transition that names a role outside the list (0 and 1 are always defined), and a minimum
+  above its maximum are refused. A capability listed twice counts once. Two `authorized_role_changes`
+  entries with the same `from_role_index` are both honoured: a change is authorized when any entry permits it.
+- [#31](https://github.com/ietf-wg-mimi/mimi-room-policy/issues/31), when role constraints are checked: the four
+  participant-count constraints are read and not kept, so the hub enforces them at no point in a commit.
+- [#37](https://github.com/ietf-wg-mimi/mimi-room-policy/issues/37),
+  [#40](https://github.com/ietf-wg-mimi/mimi-room-policy/issues/40) and
+  [#41](https://github.com/ietf-wg-mimi/mimi-room-policy/issues/41), fixed-membership and parent-dependent
+  rooms: a fixed-membership room refuses a role that holds `canAddParticipant`, as §5 says, and accepts a role
+  that holds a removal capability. `parent_dependant` is kept as a flag; the parent is not followed, no subset
+  rule is checked, and the hub does not limit a participant set to one fixed-membership room.
+- [#28](https://github.com/ietf-wg-mimi/mimi-room-policy/issues/28),
+  [#29](https://github.com/ietf-wg-mimi/mimi-room-policy/issues/29),
+  [#32](https://github.com/ietf-wg-mimi/mimi-room-policy/issues/32),
+  [#35](https://github.com/ietf-wg-mimi/mimi-room-policy/issues/35),
+  [#36](https://github.com/ietf-wg-mimi/mimi-room-policy/issues/36),
+  [#38](https://github.com/ietf-wg-mimi/mimi-room-policy/issues/38) and
+  [#46](https://github.com/ietf-wg-mimi/mimi-room-policy/issues/46) concern `preauth_list`, the operational
+  policy and the logging policy, which the hub does not read.
+
 A roles update that drops a role some member still holds leaves that member with an index the policy
 does not define; the hub treats an undefined role as unable to do anything, so the member cannot send
 until a role list that defines the index is sent. The hub does not check the sender of an update against
