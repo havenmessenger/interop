@@ -61,7 +61,7 @@ sha2 = "0.10"
 # portable crate rather than the /dev/urandom-only shortcut mimi-content's CLI bin uses.
 getrandom = "0.2"
 hex = { version = "0.4", optional = true }
-# Wipes derived secret material on drop (virtual_clients::EpochSecrets) — same crate, same
+# Wipes derived secret material on drop (virtual_clients::EpochSecrets) - same crate, same
 # posture crypto-core's MlsSigner already uses for a held signing key.
 zeroize = "1"
 
