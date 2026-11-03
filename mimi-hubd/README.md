@@ -179,7 +179,7 @@ Output from the sequence above:
         "notify": "/mimi/pl/notify",
         "reportAbuse": "/mimi/pl/reportAbuse/{roomId}",
         "requestConsent": "/mimi/pl/requestConsent/{targetDomain}",
-        "submitMessage": "/mimi/pl/submitMessage/{recipient}",
+        "submitMessage": "/mimi/pl/submitMessage/{roomId}",
         "update": "/mimi/pl/update/{roomId}",
         "updateConsent": "/mimi/pl/updateConsent/{requesterDomain}"
     }

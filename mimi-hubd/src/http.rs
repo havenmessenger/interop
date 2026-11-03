@@ -18,7 +18,7 @@
 //!
 //! Wire lane (protocol-06 §5 TLS presentation language, alongside the JSON compat lane above; a
 //! foreign implementation speaking the draft's actual wire format hits these instead):
-//!   POST /mimi/pl/submitMessage/:recipient          (§5.4, SubmitMessageRequest/Response bodies)
+//!   POST /mimi/pl/submitMessage/:room_id            (§5.4, SubmitMessageRequest/Response bodies)
 //!   POST /mimi/pl/requestConsent/:target_domain     (§5.7 C1, ConsentEntry body, always 201)
 //!   POST /mimi/pl/updateConsent/:requester_domain   (§5.7 C2, ConsentEntry body, always 201)
 //!   POST /mimi/pl/keyMaterial/:target_user          (§5.2, KeyMaterialRequest/Response bodies)
@@ -72,10 +72,7 @@ pub fn build_router(provider: SharedProvider) -> Router {
         .route("/mimi/v1/memberRole", post(set_member_role)) // P1, assign a member's role in a room
         .route("/mimi/v1/addParticipant", post(add_participant)) // R1, register a room participant
         .route("/mimi/v1/authorizeSender", post(authorize_sender)) // M2/R3/P5, may this member send?
-        .route(
-            "/mimi/pl/submitMessage/:recipient",
-            post(submit_message_wire),
-        )
+        .route("/mimi/pl/submitMessage/:room_id", post(submit_message_wire))
         .route(
             "/mimi/pl/requestConsent/:target_domain",
             post(request_consent_wire),
@@ -302,7 +299,7 @@ async fn submit_message(
 /// `?recipient=` key can be any opaque string), this wire twin enforces sender authorization:
 /// `authorize_sender` (active participation, not removed, room-policy canSendMessage) must pass
 /// before anything is stored, and `NotAllowed` is
-/// returned otherwise (a `recipient` that doesn't even parse as a room this hub hosts also lands
+/// returned otherwise (a `room_id` that doesn't even parse as a room this hub hosts also lands
 /// here, via `authorize_sender`'s own `assert_hub_of_record`). On success, the message is queued
 /// under the literal path segment AS BEFORE (unchanged persistence key, for callers already relying
 /// on that shape) AND additionally fanned out to every other LOCAL participant of the room (M3),
@@ -311,7 +308,7 @@ async fn submit_message(
 /// in this reference hub) - see DIVERGENCES.md DIV-5 for that bounded residual.
 async fn submit_message_wire(
     State(p): State<SharedProvider>,
-    Path(recipient): Path<String>,
+    Path(room_id): Path<String>,
     body: Bytes,
 ) -> Response {
     let req = match SubmitMessageRequest::decode(&body) {
@@ -320,12 +317,12 @@ async fn submit_message_wire(
     };
     let sending_uri = &req.sending_uri.0;
     let g = lock(&p);
-    if g.authorize_sender(&recipient, sending_uri).is_err() {
+    if g.authorize_sender(&room_id, sending_uri).is_err() {
         return (StatusCode::OK, SubmitMessageResponse::NotAllowed.encode()).into_response();
     }
-    let outcome = match g.submit_message(&recipient, &req.app_message, now_unix()) {
+    let outcome = match g.submit_message(&room_id, &req.app_message, now_unix()) {
         Ok(()) => {
-            if let Ok(plan) = g.fanout_targets(&recipient, sending_uri) {
+            if let Ok(plan) = g.fanout_targets(&room_id, sending_uri) {
                 for member in plan.local {
                     let _ = g.submit_message(&member, &req.app_message, now_unix());
                 }
@@ -683,7 +680,7 @@ mod tests {
     }
 
     /// Minimal percent-encoding for embedding a `mimi://` URI (which contains reserved `:`/`/`
-    /// characters) as a SINGLE axum path segment (`:recipient` matches within one segment, not
+    /// characters) as a SINGLE axum path segment (`:room_id` matches within one segment, not
     /// across `/`). Only escapes the two characters a `mimi://domain/tag/path` URI actually
     /// contains outside its final path component - not a general-purpose encoder.
     fn urlencode_path(s: &str) -> String {

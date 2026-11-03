@@ -189,7 +189,7 @@ impl Provider {
             },
             "wireEndpoints": {
                 "keyMaterial": "/mimi/pl/keyMaterial/{targetUser}",
-                "submitMessage": "/mimi/pl/submitMessage/{recipient}",
+                "submitMessage": "/mimi/pl/submitMessage/{roomId}",
                 "notify": "/mimi/pl/notify",
                 "identifierQuery": "/mimi/pl/identifierQuery",
                 "requestConsent": "/mimi/pl/requestConsent/{targetDomain}",
@@ -208,7 +208,7 @@ impl Provider {
         let domain = &self.domain;
         for (key, path) in [
             ("keyMaterial", "/mimi/pl/keyMaterial/{targetUser}"),
-            ("submitMessage", "/mimi/pl/submitMessage/{recipient}"),
+            ("submitMessage", "/mimi/pl/submitMessage/{roomId}"),
             ("notify", "/mimi/pl/notify"),
             ("identifierQuery", "/mimi/pl/identifierQuery"),
             ("requestConsent", "/mimi/pl/requestConsent/{targetDomain}"),
@@ -1285,7 +1285,7 @@ mod tests {
         let p = Provider::in_memory("havenmessenger.com").unwrap();
         let dir = p.directory();
         let wire = &dir["wireEndpoints"];
-        assert_eq!(wire["submitMessage"], "/mimi/pl/submitMessage/{recipient}");
+        assert_eq!(wire["submitMessage"], "/mimi/pl/submitMessage/{roomId}");
         assert_eq!(wire["keyMaterial"], "/mimi/pl/keyMaterial/{targetUser}");
         assert_eq!(wire["notify"], "/mimi/pl/notify");
         assert_eq!(wire["identifierQuery"], "/mimi/pl/identifierQuery");
@@ -1320,7 +1320,7 @@ mod tests {
         );
         assert_eq!(
             dir["submitMessage"],
-            "https://havenmessenger.com/mimi/pl/submitMessage/{recipient}"
+            "https://havenmessenger.com/mimi/pl/submitMessage/{roomId}"
         );
         assert_eq!(dir["notify"], "https://havenmessenger.com/mimi/pl/notify");
         assert_eq!(
