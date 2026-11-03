@@ -27,8 +27,9 @@ protocol-directory`) advertises all eight under `wireEndpoints`, with concrete p
 case: a Commit whose proposal list holds a single proposal changing the room. A participant-list
 change is read from an AppDataUpdate for component `0x0022` or from the private type `0xF7A0`, and a
 room-policy change from an AppDataUpdate for `roles_list` (`0x0025`) or `base_room_policy`
-(`0x0027`). The hub reads that proposal without verifying the Commit's signature or holding live MLS group state (RFC 9420's own delivery-service trust model does
-not expect a DS to do either) and applies it to the room's stored participant list or policy.
+(`0x0027`). The hub reads that proposal without verifying the Commit's signature or holding live
+MLS group state (RFC 9420's own delivery-service trust model does not expect a DS to do either) and
+applies it to the room's stored participant list or policy.
 `success` means that change was applied. The hub does not store or relay the Commit, and it never
 answers `wrongEpoch`. A Commit mixing that proposal with a standard MLS proposal (Add/Remove/Update,
 ...) in the same proposal list is refused - full general Commit processing is out of scope for this

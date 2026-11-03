@@ -75,5 +75,6 @@ authorization) are local hub-administration RPCs without a spec wire equivalent.
 
 One known nuance: on the JSON lane, the consent endpoints (`requestConsent`/`updateConsent`)
 return HTTP 422 rather than the documented always-201 response when the request body fails to
-deserialize; the TLS-PL wire lane returns the spec-correct always-201. This is a JSON-transport
+deserialize. The TLS-PL wire lane answers 202, and 422 only for an entry whose `consentOperation`
+is not one the endpoint takes (protocol-07 §5.7). The JSON 422 is an
 artifact of the framework's body extractor, not a protocol divergence.
