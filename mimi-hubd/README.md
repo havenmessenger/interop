@@ -275,7 +275,7 @@ the file - see [`debian/mimi-hubd.toml.example`](debian/mimi-hubd.toml.example) 
 | `MIMI_PROVIDER_DOMAIN` | `provider_domain` | yes | none, hard error if unresolved | This hub's own domain, used in the directory response and in `From`-authority checks. |
 | `MIMI_SERVER_CERT` | `server_cert` | yes | none | PEM path, this hub's TLS server certificate (+ chain). |
 | `MIMI_SERVER_KEY` | `server_key` | yes | none | PEM path, this hub's TLS server private key. |
-| `MIMI_CLIENT_CA` | `client_ca` | yes | none | PEM path, the CA that signs client certificates for peers this hub trusts. This is the whole peer-trust model: any peer presenting a cert this CA signed is allowed to call the hub's endpoints. Which layer (env/file) supplied this is logged at startup, since it's a statement about the actual trust boundary, not just an ergonomic detail. |
+| `MIMI_CLIENT_CA` | `client_ca` | yes | none | PEM path, the CA that signs client certificates for peers this hub trusts. This is the whole peer-trust model: any peer presenting a cert this CA signed is allowed to call the hub's endpoints. The fingerprint (SHA-256) of each CA in the file is logged at startup, and so is which layer (env/file) supplied it, since it's a statement about the actual trust boundary, not just an ergonomic detail. |
 | `MIMI_BIND_ADDR` | `bind_addr` | no | `0.0.0.0:8443` | Listen address. |
 | `MIMI_DB_PATH` | `db_path` | no | `/var/lib/mimi/provider.db` | SQLite file path for durable state. This binary-level default is unchanged by packaging - the shipped `.toml.example` template recommends `/var/lib/mimi-hubd/hub.db` instead (matching the systemd unit's `StateDirectory=`), but that is the template's choice, not a change to this daemon's own default. |
 

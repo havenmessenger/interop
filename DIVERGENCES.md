@@ -298,6 +298,10 @@ read. The same question gates the JSON-lane `/mimi/v1/notify`, which takes a `ro
   request whose header names a domain the peer's certificate does not carry, is not of that form, or
   arrives on a connection that presented no certificate (403). The `Host` header, which names the
   target provider, is not compared with this hub's domain.
+- **The JSON lane's admin routes.** `roomPolicy`, `memberRole`, `addParticipant` and `authorizeSender` check that the
+  caller completed the handshake and that the room is one this hub hosts, and nothing about who the caller is. Any
+  certificate in the client CA bundle can use them, which is true of every peer today and is part of what trusting a CA
+  means. The hub prints the fingerprint of each CA in the bundle at startup, so the list can be read and compared.
 - **`submitMessage`, `update` and the rest.** Only `/notify` is bound to the room's hub. A peer that
   passes mTLS is not otherwise tied to the provider domain in its certificate on the other routes,
   as DIV-6 says for the identities inside a request body.

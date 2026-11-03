@@ -72,6 +72,11 @@ async fn main() -> anyhow::Result<()> {
     let server_cert = required_mtls_bytes("MIMI_SERVER_CERT", "server_cert", file.as_ref())?;
     let server_key = required_mtls_bytes("MIMI_SERVER_KEY", "server_key", file.as_ref())?;
     let client_ca = required_mtls_bytes("MIMI_CLIENT_CA", "client_ca", file.as_ref())?;
+    // Which CAs this hub trusts to name its peers, by fingerprint: any CA in this bundle can issue a certificate for any
+    // provider name (DIVERGENCES.md, DIV-16), so the list is part of what an operator reads at startup.
+    for fingerprint in tls::certificate_fingerprints(&client_ca)? {
+        eprintln!("[mimi-hubd] client CA in the bundle: sha256={fingerprint}");
+    }
     let tls_config = tls::build_mtls_server_config(&server_cert, &server_key, &client_ca)?;
 
     let provider = Provider::open(&domain, &db_path)?;

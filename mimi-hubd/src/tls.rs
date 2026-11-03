@@ -22,6 +22,22 @@ pub fn certs_from_pem(pem: &[u8]) -> anyhow::Result<Vec<CertificateDer<'static>>
     Ok(certs)
 }
 
+/// The SHA-256 fingerprint of every certificate in a PEM bundle, as lowercase hex in file order. The hub logs these at
+/// startup for the client CA bundle, so an operator can see which CAs the hub trusts to name its peers without opening
+/// the file, and compare one against a fingerprint a peer stated.
+pub fn certificate_fingerprints(pem: &[u8]) -> anyhow::Result<Vec<String>> {
+    use sha2::{Digest, Sha256};
+    Ok(certs_from_pem(pem)?
+        .iter()
+        .map(|cert| {
+            Sha256::digest(cert.as_ref())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+        })
+        .collect())
+}
+
 /// Parse a single PEM private key (PKCS#8 / PKCS#1 / SEC1).
 pub fn key_from_pem(pem: &[u8]) -> anyhow::Result<PrivateKeyDer<'static>> {
     let mut rd = std::io::BufReader::new(pem);
@@ -173,6 +189,31 @@ pub(crate) mod tests {
             "valid PEM must build an mTLS ServerConfig: {:?}",
             cfg.err()
         );
+    }
+
+    #[test]
+    fn a_bundle_is_listed_by_the_fingerprint_of_each_certificate_in_file_order() {
+        let (_a, a_pem) = make_ca();
+        let (_b, b_pem) = make_ca();
+        let bundle = format!("{a_pem}{b_pem}");
+        let listed = certificate_fingerprints(bundle.as_bytes()).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(
+            listed[0],
+            certificate_fingerprints(a_pem.as_bytes()).unwrap()[0]
+        );
+        assert_eq!(
+            listed[1],
+            certificate_fingerprints(b_pem.as_bytes()).unwrap()[0]
+        );
+        assert_ne!(listed[0], listed[1]);
+        for fingerprint in &listed {
+            assert_eq!(fingerprint.len(), 64);
+            assert!(fingerprint
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+        }
+        assert!(certificate_fingerprints(b"").is_err());
     }
 
     #[test]
