@@ -142,6 +142,25 @@ fn no_compatible_material_may_list_clients_or_none() {
 }
 
 #[test]
+fn an_exhausted_client_under_no_compatible_material_is_read_and_written_back_unchanged() {
+    // The reading in mimi-protocol issue 184: every client of a known user has `keyMaterialExhausted`, and the
+    // user code is `noCompatibleMaterial` with the clients listed.
+    let bytes = response(3, USER, &[exhausted(CLIENT_A), exhausted(CLIENT_B)]);
+    let KeyMaterialResponse::Clients {
+        user_status,
+        clients,
+        ..
+    } = round_trips(&bytes)
+    else {
+        panic!("expected the clients to be kept");
+    };
+    assert_eq!(user_status, KeyMaterialUserCode::NoCompatibleMaterial);
+    assert_eq!(clients.len(), 2);
+    // The single-client form that names the user as its own client, as that reading has it for one device.
+    round_trips(&response(3, USER, &[exhausted(USER)]));
+}
+
+#[test]
 fn a_user_code_that_must_not_carry_clients_refuses_them() {
     for code in [2u8, 4, 7] {
         let bytes = response(code, USER, &[exhausted(CLIENT_A)]);

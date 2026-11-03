@@ -233,6 +233,12 @@ as sent. It refuses the combinations §5.2 rules out: `success` with a client th
 status other than `success`, `partialSuccess` and `noCompatibleMaterial`. Every other
 combination of user and client statuses is read and written back unchanged.
 
+The point is open as mimi-protocol issue 184, which names this choice and the reading of another
+implementation, `noCompatibleMaterial` with the clients listed, and proposes either a user code of its
+own or a wider `noCompatibleMaterial`. This crate reads that other form: a test holds
+`noCompatibleMaterial` with every client `keyMaterialExhausted` (one client, or several) and checks it
+is read and written back unchanged. The hub still sends `partialSuccess`, until the issue is settled.
+
 ## DIV-14 - KeyPackages that carry a GREASE value are refused
 
 RFC 9420 §13.5 has clients include GREASE values to keep peers tolerant of unknown values. The
