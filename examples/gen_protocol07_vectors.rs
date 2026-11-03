@@ -1,12 +1,12 @@
-//! Writes `tests/vectors/protocol06-vectors.json`: byte-exact `KeyMaterialResponse` and `HandshakeBundle` messages of
-//! draft-ietf-mimi-protocol-06 §5.2 and §5.3, laid out field by field here and not through this crate's encoders, so a
+//! Writes `tests/vectors/protocol07-vectors.json`: byte-exact `KeyMaterialResponse` and `HandshakeBundle` messages of
+//! draft-ietf-mimi-protocol-07 §5.2 and §5.3, laid out field by field here and not through this crate's encoders, so a
 //! second implementation can decode them and a regression in the codec shows up as a diff.
 //!
-//! `cargo run --example gen_protocol06_vectors --features test-helpers > tests/vectors/protocol06-vectors.json`
+//! `cargo run --example gen_protocol07_vectors --features test-helpers > tests/vectors/protocol07-vectors.json`
 //!
 //! The KeyPackages, Welcome and GroupInfo inside are produced by openmls operations under the pinned ciphersuite. They
 //! are random, so regenerating changes every vector; the committed file is the reference, and the replay test
-//! (`tests/protocol06_vectors_replay.rs`) checks it without regenerating anything.
+//! (`tests/protocol07_vectors_replay.rs`) checks it without regenerating anything.
 //!
 //! `unwrap` is fine here: this is a generator, not the library.
 
@@ -17,6 +17,8 @@ use mimi_core::participant_list::{
 use mimi_core::protocol_wire::{
     GroupInfoOption, GroupInfoRepresentation, HandshakeBundle, UpdateRoomResponse,
 };
+use mimi_core::room_policy::{BaseRoomPolicy, Capability, Role};
+use mimi_core::room_policy_wire::{encode_base_room_policy, encode_role_data};
 use mimi_core::test_helpers::key_package;
 use openmls::ciphersuite::signature::SignaturePublicKey;
 use openmls::credentials::{BasicCredential, CredentialWithKey};
@@ -35,6 +37,9 @@ const ROOM: &str = "mimi://havenmessenger.com/r/x";
 const ALICE: &str = "mimi://havenmessenger.com/u/alice";
 const BOB: &str = "mimi://havenmessenger.com/u/bob";
 const CAROL: &str = "mimi://havenmessenger.com/u/carol";
+const ZOE: &str = "mimi://havenmessenger.com/u/zoe";
+const ROLES_LIST_COMPONENT: u16 = 0x0025;
+const BASE_ROOM_POLICY_COMPONENT: u16 = 0x0027;
 const PARTICIPANT_LIST_COMPONENT: u16 = 0x0022;
 const SUITE_PINNED: u16 = 0x0001;
 // The ChaCha20-Poly1305 suite, used only to build the foreign-suite refusals.
@@ -270,9 +275,34 @@ fn update_vector(
     outcome: &str,
     after: &[&str],
 ) -> serde_json::Value {
+    update_vector_from(
+        id,
+        description,
+        body,
+        decode,
+        variant,
+        outcome,
+        &[ALICE, BOB],
+        after,
+    )
+}
+
+/// An `UpdateRequest` vector for a room that lists `before`, in that order (protocol-07 §7.5: an index is a position in
+/// the list, and added participants are appended), and ends listing `after`, in order.
+#[allow(clippy::too_many_arguments)]
+fn update_vector_from(
+    id: &str,
+    description: &str,
+    body: &[u8],
+    decode: &str,
+    variant: Option<&str>,
+    outcome: &str,
+    before: &[&str],
+    after: &[&str],
+) -> serde_json::Value {
     let mut v = vector(id, "UpdateRequest", description, body, decode, variant);
     v["room"] = json!(ROOM);
-    v["participants_before"] = json!([ALICE, BOB]);
+    v["participants_before"] = json!(before);
     v["participants_after"] = json!(after);
     v["answer"] = json!(outcome);
     v
@@ -307,6 +337,48 @@ fn main() {
     let app_data_commit =
         as_app_data_update(&commit_message, &add_carol, PARTICIPANT_LIST_COMPONENT);
     let other_component_commit = as_app_data_update(&commit_message, &add_carol, 0x0023);
+    // protocol-07 section 7.5: an index is a position in the list as it stood before the update, and added participants are
+    // appended. A user already listed cannot be added.
+    let as_commit = |payload: &[u8]| {
+        custom_proposal_and_commit(MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE, payload.to_vec()).1
+    };
+    let remove_position_1 = encode_participant_list_update(&ParticipantListUpdate {
+        removed_indices: vec![1],
+        ..Default::default()
+    })
+    .unwrap();
+    let add_alice_again = encode_participant_list_update(&ParticipantListUpdate {
+        added_participants: vec![UserRolePair {
+            user_uri: ALICE.into(),
+            role_index: 2,
+        }],
+        ..Default::default()
+    })
+    .unwrap();
+    let remove_and_add_zoe = encode_participant_list_update(&ParticipantListUpdate {
+        removed_indices: vec![1],
+        added_participants: vec![UserRolePair {
+            user_uri: ZOE.into(),
+            role_index: 2,
+        }],
+        ..Default::default()
+    })
+    .unwrap();
+    let roles = encode_role_data(&[Role {
+        role_index: 2,
+        role_name: "member".into(),
+        capabilities: vec![Capability::SendMessage],
+        authorized_role_changes: Vec::new(),
+    }]);
+    let base = encode_base_room_policy(&BaseRoomPolicy::default(), None);
+    let remove_commit = as_commit(&remove_position_1);
+    let again_commit = as_commit(&add_alice_again);
+    let zoe_commit = as_commit(&remove_and_add_zoe);
+    let roles_commit = as_app_data_update(&as_commit(&roles), &roles, ROLES_LIST_COMPONENT);
+    let base_commit = as_app_data_update(&as_commit(&base), &base, BASE_ROOM_POLICY_COMPONENT);
+    let cut_roles = &roles[..roles.len() - 1];
+    let cut_roles_commit =
+        as_app_data_update(&as_commit(cut_roles), cut_roles, ROLES_LIST_COMPONENT);
     let proposals_bundle = HandshakeBundle::Proposal {
         proposal_or_commit: proposal_message,
         more_proposals: Vec::new(),
@@ -386,6 +458,20 @@ fn main() {
             &update_request(&commit_message), "ok", Some("Commit"), "success", &[ALICE, BOB, CAROL]),
         update_vector("up-02-participant-list-app-data-update", "the same update carried as an AppDataUpdate for component 0x0022 (mls-extensions-10 section 4.7)",
             &update_request(&app_data_commit), "ok", Some("Commit"), "success", &[ALICE, BOB, CAROL]),
+        update_vector_from("up-03-index-is-a-position", "removedIndices [1] on the list [alice, zoe, bob] removes the second entry, zoe, and the others keep their order (section 7.5)",
+            &update_request(&remove_commit), "ok", Some("Commit"), "success", &[ALICE, ZOE, BOB], &[ALICE, BOB]),
+        update_vector_from("up-04-added-participants-are-appended", "an added participant goes to the end of the list (section 7.5)",
+            &update_request(&app_data_commit), "ok", Some("Commit"), "success", &[BOB, ALICE], &[BOB, ALICE, CAROL]),
+        update_vector_from("up-05-roles-list-app-data-update", "an AppDataUpdate for roles_list (component 0x0025, room-policy-04 section 3) sets the room's roles and leaves the participants as they were",
+            &update_request(&roles_commit), "ok", Some("Commit"), "success", &[ALICE, BOB], &[ALICE, BOB]),
+        update_vector_from("up-x4-added-participant-already-listed", "an added participant who is already in the list is invalid (section 7.5)",
+            &update_request(&again_commit), "ok", Some("Commit"), "invalidProposal", &[ALICE, BOB], &[ALICE, BOB]),
+        update_vector_from("up-x5-removed-and-added-in-one-update", "a user removed and added back in one update is invalid: the update is checked against the list as it stood before it (this hub's reading of section 7.5)",
+            &update_request(&zoe_commit), "ok", Some("Commit"), "invalidProposal", &[ALICE, ZOE, BOB], &[ALICE, ZOE, BOB]),
+        update_vector_from("up-x6-base-room-policy-before-roles", "an AppDataUpdate for base_room_policy (component 0x0027) for a room that has no roles yet is invalid",
+            &update_request(&base_commit), "ok", Some("Commit"), "invalidProposal", &[ALICE, BOB], &[ALICE, BOB]),
+        update_vector_from("up-x7-roles-list-cut-short", "an AppDataUpdate for roles_list whose RoleData ends before its length says is invalid",
+            &update_request(&cut_roles_commit), "ok", Some("Commit"), "invalidProposal", &[ALICE, BOB], &[ALICE, BOB]),
         update_vector("up-x1-bare-commit", "the Commit alone, without the HandshakeBundle around it",
             &commit_message, "refused", None, "invalidProposal", &[ALICE, BOB]),
         update_vector("up-x2-bundle-of-proposals", "a HandshakeBundle of proposals instead of a Commit",
@@ -408,8 +494,8 @@ fn main() {
     let out = json!({
         "format_version": 1,
         "ciphersuite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-        "spec": "draft-ietf-mimi-protocol-06 section 5.2 and 5.3",
-        "generator": "examples/gen_protocol06_vectors.rs",
+        "spec": "draft-ietf-mimi-protocol-07 section 5.2 and 5.3",
+        "generator": "examples/gen_protocol07_vectors.rs",
         "vectors": vectors,
     });
     println!("{}", serde_json::to_string_pretty(&out).unwrap());

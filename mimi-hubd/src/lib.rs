@@ -146,7 +146,7 @@ impl Provider {
     }
 
     /// Serve the directory's endpoint URLs from `url` instead of `https://{domain}` - for a hub
-    /// behind a reverse proxy, on a port other than 443, or on a dedicated host (protocol-06 §5.1:
+    /// behind a reverse proxy, on a port other than 443, or on a dedicated host (protocol-07 §5.1:
     /// the directory conveys the endpoint URLs rather than hard-coding them). `url` must be an
     /// `https://` URL with a host and no query or fragment; one trailing `/` is dropped.
     pub fn with_public_base_url(mut self, url: &str) -> anyhow::Result<Self> {
@@ -190,7 +190,7 @@ impl Provider {
     /// supported MLS ciphersuite (0x0001, DIV-2) + the conformant draft revisions, AND discloses the
     /// unsupported set: it advertises only what v1 actually serves.
     ///
-    /// protocol-06 §5.1's own example is a FLAT object: top-level keys are the ten endpoint names,
+    /// protocol-07 §5.1's own example is a FLAT object: top-level keys are the ten endpoint names,
     /// values are absolute HTTPS URLs (e.g. `"keyMaterial": "https://mimi.example.com/v1/keyMaterial/
     /// {targetUser}"`). This document publishes those flat, draft-shaped keys for the eight
     /// endpoints this hub actually wire-routes (`keyMaterial`/`submitMessage`/`notify`/
@@ -205,7 +205,7 @@ impl Provider {
         let mut doc = serde_json::json!({
             "provider": self.domain,
             "mls_ciphersuites": [HAVEN_MLS_CIPHERSUITE_U16],   // 0x0001 only
-            "protocol_drafts": { "protocol": "06", "content": "09", "room-policy": "04" },
+            "protocol_drafts": { "protocol": "07", "content": "09", "room-policy": "04" },
             "endpoints": {
                 "keyMaterial": "/mimi/v1/keyMaterial",
                 "notify": "/mimi/v1/notify",
@@ -1385,8 +1385,17 @@ mod tests {
     }
 
     #[test]
+    fn the_directory_names_the_drafts_it_follows() {
+        let p = Provider::in_memory("havenmessenger.com").unwrap();
+        let drafts = &p.directory()["protocol_drafts"];
+        assert_eq!(drafts["protocol"], "07");
+        assert_eq!(drafts["content"], "09");
+        assert_eq!(drafts["room-policy"], "04");
+    }
+
+    #[test]
     fn directory_advertises_flat_draft_shaped_keys_for_wire_routed_endpoints() {
-        // protocol-06 §5.1's own example directory is a FLAT object - top-level keys are the
+        // protocol-07 §5.1's own example directory is a FLAT object - top-level keys are the
         // endpoint names, values are absolute HTTPS URLs. `endpoints`/`wireEndpoints` are Haven's
         // additive non-standard nesting; a strict §5.1 client looks at the top level directly.
         let p = Provider::in_memory("havenmessenger.com").unwrap();

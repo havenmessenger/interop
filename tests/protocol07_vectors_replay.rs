@@ -1,14 +1,14 @@
-//! Replays the committed protocol-06 wire vectors at `tests/vectors/protocol06-vectors.json` (§5.2 `KeyMaterialResponse`,
+//! Replays the committed protocol-07 wire vectors at `tests/vectors/protocol07-vectors.json` (§5.2 `KeyMaterialResponse`,
 //! §5.3 `HandshakeBundle`) through the public codec: every `ok` vector decodes, names the variant recorded for it and encodes
 //! back to the same bytes; every `refused` vector is refused. The vectors are laid out field by field by
-//! `examples/gen_protocol06_vectors.rs` and not by this crate's encoders, so they also serve as the input a second
+//! `examples/gen_protocol07_vectors.rs` and not by this crate's encoders, so they also serve as the input a second
 //! implementation decodes.
 
 use mimi_core::gate::mimi_gate_keypackage;
 use mimi_core::protocol_wire::{HandshakeBundle, KeyMaterialResponse, UpdateRoomResponse};
 use serde::Deserialize;
 
-const VECTORS_JSON: &str = include_str!("vectors/protocol06-vectors.json");
+const VECTORS_JSON: &str = include_str!("vectors/protocol07-vectors.json");
 
 #[derive(Deserialize)]
 struct Vectors {

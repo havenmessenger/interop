@@ -357,12 +357,12 @@ fn from_hex(h: &str) -> Vec<u8> {
         .collect()
 }
 
-/// Every `UpdateRequest` in the committed protocol-06 vectors is posted to a room that holds the participants the vector
+/// Every `UpdateRequest` in the committed protocol-07 vectors is posted to a room that holds the participants the vector
 /// names, and the hub answers as the vector records and leaves the room as the vector records.
 #[tokio::test]
 async fn every_update_request_vector_gets_its_recorded_answer() {
     let vectors: serde_json::Value =
-        serde_json::from_str(include_str!("../../tests/vectors/protocol06-vectors.json")).unwrap();
+        serde_json::from_str(include_str!("../../tests/vectors/protocol07-vectors.json")).unwrap();
     let mut checked = 0;
     for vector in vectors["vectors"].as_array().unwrap() {
         if vector["kind"] != "UpdateRequest" {
@@ -386,19 +386,18 @@ async fn every_update_request_vector_gets_its_recorded_answer() {
             UpdateRoomResponse::WrongEpoch { .. } => "wrongEpoch",
         };
         assert_eq!(kind, vector["answer"].as_str().unwrap(), "{id}: answer");
-        let mut after: Vec<String> = participants_of(&p, room);
-        let mut want: Vec<String> = vector["participants_after"]
+        // In list order: protocol-07 section 7.5 makes an index a position, and an added participant goes to the end.
+        let after: Vec<String> = participants_of(&p, room);
+        let want: Vec<String> = vector["participants_after"]
             .as_array()
             .unwrap()
             .iter()
             .map(|u| u.as_str().unwrap().to_string())
             .collect();
-        after.sort();
-        want.sort();
         assert_eq!(after, want, "{id}: participants after");
         checked += 1;
     }
-    assert!(checked >= 5, "the vector set carries update requests");
+    assert!(checked >= 12, "the vector set carries update requests");
 }
 
 fn participants_of(p: &SharedProvider, room: &str) -> Vec<String> {

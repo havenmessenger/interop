@@ -173,7 +173,7 @@ Output from the sequence above:
         "welcome": "/mimi/v1/welcome"
     },
     "mls_ciphersuites": [1],
-    "protocol_drafts": {"content": "09", "protocol": "06", "room-policy": "04"},
+    "protocol_drafts": {"content": "09", "protocol": "07", "room-policy": "04"},
     "provider": "example.com",
     "unsupported": {
         "assets_ohttp": "DIV-3: v1 is messaging-only",

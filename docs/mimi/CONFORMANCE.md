@@ -5,7 +5,7 @@
 # Haven - MIMI Conformance Statement
 
 - **Implementation version:** `0.0.1-pre`
-- **Generated:** 2026-07-15
+- **Generated:** 2026-11-03
 - **v1 scope:** add-driven, text/message-only cross-provider chat on MLS ciphersuite 0x0001
 
 > We do **not** claim 100% MIMI conformance. This document states, per draft and per
@@ -18,7 +18,7 @@ BUILT today (suite 0x0001, add-driven, text/message): a conformant MIMI provider
 
 | Draft | Revision | Date | Normative |
 |-------|----------|------|-----------|
-| `draft-ietf-mimi-protocol` | -06 | 2026-04-25 | yes |
+| `draft-ietf-mimi-protocol` | -07 | 2026-11-02 | yes |
 | `draft-ietf-mimi-content` | -09 | 2026-07-04 | yes |
 | `draft-ietf-mimi-room-policy` | -04 | 2026-07-06 | yes |
 | `draft-ietf-mimi-arch` | -03 | 2026-07-06 | no (informational) |
@@ -141,7 +141,7 @@ These are conscious design decisions, each disclosed with its reason. A function
 | P5 | 8.3 | Hub can enforce canSendMessage; other message caps client-enforced only | both | ✅ Supported | The hub enforces exactly canSendMessage, matching §8.3; every other capability is client-enforced by the spec's own design. Verified live end-to-end (a member sends, a banned member is rejected). |
 | P6 | 9 | Policy authorization authoritative across all verification points | all | ✅ Supported | One stored RoomPolicy is the single authority at every hub verification point (message sends and role changes both consult it). Haven permanently disallows external joins (INV-MLS-001a), so the spec's external-join verification point doesn't apply. |
 
-### Wire framing - protocol-06 §5 TLS presentation language (DISPATCH-119 W2)
+### Wire framing - protocol-07 §5 TLS presentation language (DISPATCH-119 W2)
 
 | ID | § | Requirement | Actor | Status | Notes |
 |----|---|-------------|-------|--------|-------|
@@ -152,7 +152,11 @@ These are conscious design decisions, each disclosed with its reason. A function
 | W5 | 5.5 | notify inbound-receive over the real TLS-PL wire framing | hub | ✅ Supported | notify's inbound-receive shape runs over the real TLS-PL wire framing, verified against the draft's literal byte layout with an independently hand-computed test vector. The outbound side, this hub proactively pushing fanout to foreign followers, is a separate feature and isn't built. |
 | W6 | 5.8 | identifierQuery over the real TLS-PL wire framing, DIV-4 preserved | hub | ✅ Supported | identifierQuery runs over the real TLS-PL wire framing while preserving DIV-4: the route returns a bare status with no body on both found and not-found, so response shape itself never leaks whether a request was well-formed or evaluable. (see DIV-4) |
 | W7 | 5 | Directory advertises the wire lane with real path templates | hub | ✅ Supported | The directory advertises the wire lane's real path templates alongside the existing JSON-compat lane, in both the spec's nested and flat top-level shapes. A test asserts the claimed routes always match what's actually mounted, so it can't silently claim a route that doesn't exist. |
-| W8 | 2 | TLS-PL is a mandatory wire encoding, not a placeholder notation (open spec question, not a Haven divergence) | hub | ✅ Supported | protocol-06 §2 literally describes TLS Presentation Language as placeholder notation for the examples, not necessarily a mandated wire encoding. This hub implements literal TLS-PL bytes anyway, as the only concrete encoding the draft actually shows; flagging the ambiguity for the working group rather than resolving it unilaterally. |
+| W8 | 2 | TLS-PL is a mandatory wire encoding, not a placeholder notation (open spec question, not a Haven divergence) | hub | ✅ Supported | The drafts describe TLS Presentation Language as notation for the examples. Protocol-07 registers the media type application/mimi-protocol for these bodies (§10.6), and this hub speaks literal TLS-PL bytes under it, as the only concrete encoding the draft shows. |
+| W9 | 5.5 | A provider receiving /notify/{roomId} verifies that the source provider is the room's hub (the room URI authority); otherwise it rejects and does not process, store or forward | hub | ✅ Supported | A notify is accepted only when the connection's certificate is valid for the room's hub; a different provider's certificate is refused and nothing is stored. The From header must name a domain the certificate carries. Disclosed: any CA in the client bundle can issue any name, so the bundle is part of the trust boundary. |
+| W10 | 7.5 | Participant-list indices are positions in the list; added participants are appended; a user already in the list cannot be added | hub | ✅ Supported | An index is a position in the room's participant list, adds go to the end, and an add of a user who is already listed is invalid. The room is written from the draft's own update result in one transaction, so a failure leaves it as it was. |
+| W11 | 5.3 | A room-policy change is an AppDataUpdate for a room policy component | hub | 🟦 Implemented (not yet cross-impl-verified) | roles_list and base_room_policy updates are read and enforced for the six capabilities the hub uses. The other eleven room-policy components are refused with an invalid-proposal answer, so a sender is never told an unread change was applied. Unit-tested; no other implementation has exchanged one yet. |
+| W12 | 5.7 and 10.6 | Consent requests are answered 202 Accepted (422 for an operation not valid on that route); wire bodies carry the media type application/mimi-protocol | hub | ✅ Supported | Consent requests answer 202 (422 for an operation that route does not take), and wire response bodies are labeled application/mimi-protocol. A malformed entry after a valid operation byte still answers 202, so the answer reveals nothing about the user. |
 
 ### Virtual clients (mls-virtual-clients-01, §5-§6 - DISPATCH-114 A1)
 
@@ -166,10 +170,10 @@ These are conscious design decisions, each disclosed with its reason. A function
 
 ## Summary
 
-55 normative requirements tracked. Status breakdown:
+59 normative requirements tracked. Status breakdown:
 
-- ✅ Supported: 47
-- 🟦 Implemented (not yet cross-impl-verified): 1
+- ✅ Supported: 50
+- 🟦 Implemented (not yet cross-impl-verified): 2
 - 🟦 Implemented (decision logic; durable layer pending): 1
 - ⬜ Out of scope (v1): 5
 - 🔴 Diverged (by design): 1

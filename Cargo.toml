@@ -98,8 +98,8 @@ nursery = { level = "warn", priority = -1 }
 # risks subtly misstating spec semantics on a conformance reference impl. The rest of nursery is enforced.
 too_long_first_doc_paragraph = "allow"
 
-# Regenerates tests/vectors/protocol06-vectors.json; the replay test in tests/protocol06_vectors_replay.rs reads the
+# Regenerates tests/vectors/protocol07-vectors.json; the replay test in tests/protocol07_vectors_replay.rs reads the
 # committed file and does not need this.
 [[example]]
-name = "gen_protocol06_vectors"
+name = "gen_protocol07_vectors"
 required-features = ["test-helpers"]

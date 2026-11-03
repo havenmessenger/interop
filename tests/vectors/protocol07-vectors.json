@@ -1,8 +1,8 @@
 {
   "ciphersuite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
   "format_version": 1,
-  "generator": "examples/gen_protocol06_vectors.rs",
-  "spec": "draft-ietf-mimi-protocol-06 section 5.2 and 5.3",
+  "generator": "examples/gen_protocol07_vectors.rs",
+  "spec": "draft-ietf-mimi-protocol-07 section 5.2 and 5.3",
   "vectors": [
     {
       "decode": "ok",
@@ -178,6 +178,136 @@
         "mimi://havenmessenger.com/u/alice",
         "mimi://havenmessenger.com/u/bob",
         "mimi://havenmessenger.com/u/carol"
+      ],
+      "participants_before": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "room": "mimi://havenmessenger.com/r/x",
+      "variant": "Commit"
+    },
+    {
+      "answer": "success",
+      "decode": "ok",
+      "description": "removedIndices [1] on the list [alice, zoe, bob] removes the second entry, zoe, and the others keep their order (section 7.5)",
+      "hex": "00010001105dc417dd38b4ee1561bfb01680ef1a630000000000000000010000000000030b01f7a00700040000000100004040e5dba4d4db265cb13af2523d87924303cabf3ec7d5e948e1079649c5c6379b53060e8799651481c270151a7df59181e547513c2d43c79913c53c3e7700a3ef05203b85ae640bf46aa011630641a97db8e9713dc29730fd83dc615c96565d192a6420eef02404bfad977a33d4d750b355416ccd08b34fed155879e578db9afb262bdf000200",
+      "id": "up-03-index-is-a-position",
+      "kind": "UpdateRequest",
+      "participants_after": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "participants_before": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/zoe",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "room": "mimi://havenmessenger.com/r/x",
+      "variant": "Commit"
+    },
+    {
+      "answer": "success",
+      "decode": "ok",
+      "description": "an added participant goes to the end of the list (section 7.5)",
+      "hex": "00010001103588a2b9946ad1f3966f9101682811a20000000000000000010000000000033001000800220129000026216d696d693a2f2f686176656e6d657373656e6765722e636f6d2f752f6361726f6c00000002004040c7b4fd771bdbc0f49a236ca48cfae2a7745a86418f29ab6d3d41a9060c6b0595f120b0a68309ba2d96a396f5bff79ebd0291631b807ea25d321143fa1842d00320b58e2d73f0f8a430024739ac49d5b60d339a0508c94ffa8d74aea9d99ce5053220576666649c6682d563c2f8941a82e2d320f9ef97d0b7acd3f81df0b0bd807da0000200",
+      "id": "up-04-added-participants-are-appended",
+      "kind": "UpdateRequest",
+      "participants_after": [
+        "mimi://havenmessenger.com/u/bob",
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/carol"
+      ],
+      "participants_before": [
+        "mimi://havenmessenger.com/u/bob",
+        "mimi://havenmessenger.com/u/alice"
+      ],
+      "room": "mimi://havenmessenger.com/r/x",
+      "variant": "Commit"
+    },
+    {
+      "answer": "success",
+      "decode": "ok",
+      "description": "an AppDataUpdate for roles_list (component 0x0025, room-policy-04 section 3) sets the room's roles and leaves the participants as they were",
+      "hex": "0001000110b5ae1131e45a33f7c04cd4c35378fec7000000000000000001000000000003220100080025011b1a00000002066d656d62657200020100000000000000000000000000404070951b203f16e70c59536f1f8b503a20d6cd5e618fc32e78e0ea506c8626b1cac5dd5c7342fb6a4ea8dd9c854ebd6d5f9a576fa7350156c38252f7e22688180b2085c5b57b1205ed33d561d2741c520e59e8f3c702e5335b0d073c0750958b10d920cca16e6c88a57d26e83decc2194ff5016d3904aeacd1f3dc8aff6d459221777d000200",
+      "id": "up-05-roles-list-app-data-update",
+      "kind": "UpdateRequest",
+      "participants_after": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "participants_before": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "room": "mimi://havenmessenger.com/r/x",
+      "variant": "Commit"
+    },
+    {
+      "answer": "invalidProposal",
+      "decode": "ok",
+      "description": "an added participant who is already in the list is invalid (section 7.5)",
+      "hex": "000100011041c994b13fe84163f3d7b7ef2ad8e9e50000000000000000010000000000032d01f7a029000026216d696d693a2f2f686176656e6d657373656e6765722e636f6d2f752f616c69636500000002004040ea9978256a221d2ae087a8c338301e38baa20e29a91a5316dfa76f15b03225b0aad364fe5e2d01fc181eca555e8f97a87517cbb9e496348838ac6701e268310320deae94960b99b8c71048322d7ba3b8ce703ae601c8d901c9b8076c9d71ac415920759c7bbbb22a20fcf38c87667fcddaab95fc86189bcf80ab7d2ec31fa95ebb5f000200",
+      "id": "up-x4-added-participant-already-listed",
+      "kind": "UpdateRequest",
+      "participants_after": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "participants_before": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "room": "mimi://havenmessenger.com/r/x",
+      "variant": "Commit"
+    },
+    {
+      "answer": "invalidProposal",
+      "decode": "ok",
+      "description": "a user removed and added back in one update is invalid: the update is checked against the list as it stood before it (this hub's reading of section 7.5)",
+      "hex": "00010001105b14dbe81ef8dc23855a90d37ed412350000000000000000010000000000032f01f7a02b000400000001241f6d696d693a2f2f686176656e6d657373656e6765722e636f6d2f752f7a6f650000000200404039c62e4126029e6541863f3fce07397f3e8f8d08f63d3bac14372f4ada3505432cacce9ef1fed50fe6a5031c74415519afe391439dd8e91ae71eaa1b24a2c50c2031c6bc50b8b27febccf52b50e30cf4aa86a5cfdb8cfb0362d7b919c2a892a9fd208d6a27079392fab64a86e9e3f1b015b2ba648bb45d54829ee2b179d6e274016d000200",
+      "id": "up-x5-removed-and-added-in-one-update",
+      "kind": "UpdateRequest",
+      "participants_after": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/zoe",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "participants_before": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/zoe",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "room": "mimi://havenmessenger.com/r/x",
+      "variant": "Commit"
+    },
+    {
+      "answer": "invalidProposal",
+      "decode": "ok",
+      "description": "an AppDataUpdate for base_room_policy (component 0x0027) for a room that has no roles yet is invalid",
+      "hex": "0001000110d17c658c5edba250338b969f3cc64754000000000000000001000000000003110100080027010a00000001000000010000004040bccab08b295a6f6859b3df39d4c9da28399622ad4423a31ea274a42026e84d3a8941ccfe5e0598333418bd1db60baadc6b1efaf4761ec3d4dd868342831cdf002031daef1db9b688f25ded919e4cd0af41d88f8fa6090c28e497f6594929572b4020f73400d6b0dfbde5a326fa62e317845692c97b8b5539c090cb508e1702ca61b4000200",
+      "id": "up-x6-base-room-policy-before-roles",
+      "kind": "UpdateRequest",
+      "participants_after": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "participants_before": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
+      ],
+      "room": "mimi://havenmessenger.com/r/x",
+      "variant": "Commit"
+    },
+    {
+      "answer": "invalidProposal",
+      "decode": "ok",
+      "description": "an AppDataUpdate for roles_list whose RoleData ends before its length says is invalid",
+      "hex": "00010001104a6110b50ed4b19c03b78805bfc93998000000000000000001000000000003210100080025011a1a00000002066d656d6265720002010000000000000000000000004040c2e110008fa795247c200467c61084cabf5198a33073bd81309050b2579a73f98c2136f3aa161e769591325b40a7326076ae6593fc81c42799600a0affd9390d20f191dea98b4c4511bea2af4dc50e09ad7dfe73db3bc60953e271ad33cc9c934020737a480506f989a53ccb4a208fa4c517dc89fdea711b5f0c8c753462f1721ce5000200",
+      "id": "up-x7-roles-list-cut-short",
+      "kind": "UpdateRequest",
+      "participants_after": [
+        "mimi://havenmessenger.com/u/alice",
+        "mimi://havenmessenger.com/u/bob"
       ],
       "participants_before": [
         "mimi://havenmessenger.com/u/alice",
