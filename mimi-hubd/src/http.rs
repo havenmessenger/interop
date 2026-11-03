@@ -44,7 +44,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use mimi_core::consent::ConsentEntry;
+use mimi_core::consent::{ConsentEntry, ConsentOperation};
 use mimi_core::gate::IdentifierQueryResult;
 use mimi_core::protocol_wire::{AbuseReport, SubmitMessageRequest, SubmitMessageResponse};
 use serde::Deserialize;
@@ -72,6 +72,15 @@ pub fn build_router(provider: SharedProvider) -> Router {
         .route("/mimi/v1/memberRole", post(set_member_role)) // P1, assign a member's role in a room
         .route("/mimi/v1/addParticipant", post(add_participant)) // R1, register a room participant
         .route("/mimi/v1/authorizeSender", post(authorize_sender)) // M2/R3/P5, may this member send?
+        .merge(wire_router())
+        .with_state(provider)
+}
+
+/// The `/mimi/pl/*` routes: the draft's TLS presentation-language wire framing. Every body they answer with is
+/// labeled `application/mimi-protocol` (§10.6) in one place, [`label_wire_body`], so a route added here cannot be
+/// answered under another type.
+fn wire_router() -> Router<SharedProvider> {
+    Router::new()
         .route(
             "/mimi/pl/submitMessage/:recipient",
             post(submit_message_wire),
@@ -87,9 +96,32 @@ pub fn build_router(provider: SharedProvider) -> Router {
         .route("/mimi/pl/keyMaterial/:target_user", post(key_material_wire))
         .route("/mimi/pl/notify", post(notify_wire))
         .route("/mimi/pl/identifierQuery", post(identifier_query_wire))
+        .route(
+            "/mimi/pl/identifierQuery/:domain",
+            post(identifier_query_wire),
+        )
         .route("/mimi/pl/reportAbuse/:room_id", post(report_abuse_wire))
         .route("/mimi/pl/update/:room_id", post(update_wire))
-        .with_state(provider)
+        .layer(axum::middleware::map_response(label_wire_body))
+}
+
+/// The media type of a protocol request or response body (protocol-07 §10.6). The directory (`application/json`) and
+/// `proxyDownload` are the draft's only exceptions, and neither is a wire route here.
+pub const WIRE_MEDIA_TYPE: &str = "application/mimi-protocol";
+
+/// Labels a successful wire answer that carries a body. An answer with no body (a bare status) carries no type, and an
+/// error keeps the plain description its handler gave it, which is text for a person reading a log, not a protocol
+/// structure.
+async fn label_wire_body(mut response: Response) -> Response {
+    use axum::body::HttpBody as _;
+    let has_body = response.body().size_hint().exact() != Some(0);
+    if response.status().is_success() && has_body {
+        response.headers_mut().insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static(WIRE_MEDIA_TYPE),
+        );
+    }
+    response
 }
 
 fn lock(p: &SharedProvider) -> std::sync::MutexGuard<'_, Provider> {
@@ -507,34 +539,55 @@ async fn update_consent(
 }
 
 /// §5.7 C1 wire twin of [`request_consent`]: TLS-PL `ConsentEntry` body instead of JSON, same
-/// privacy discipline (always 201, per the draft's own "the response merely indicates receipt"
-/// text). An undecodable body is dropped the same way a malformed JSON entry is, still 201: the
-/// privacy property this endpoint exists for (no existence oracle) applies the same way to
-/// malformed wire bytes as it does to malformed JSON.
+/// privacy discipline. The answer is 202 whatever the request names: the draft's "the response merely indicates
+/// receipt" text, so it is not an existence oracle. An undecodable body is dropped the same way a malformed JSON
+/// entry is, still 202.
+///
+/// The one other answer is 422, for an entry whose `consentOperation` is not `request` or `cancel`
+/// (protocol-07 §5.7). It reads the operation byte alone, so it depends on nothing about the users named.
+///
+/// 202 and not 201: protocol-07 §5.7 says both, because the new 202 paragraph was pasted into the middle of the old
+/// 201 one, and "201 Accepted" is not a status. The paragraph the editor meant to leave is the 202 one ("202 Accepted
+/// (indicating the requestConsent was received)"), and a client that checks only for a 2xx answer takes either.
 async fn request_consent_wire(
     State(p): State<SharedProvider>,
     Path(_target_domain): Path<String>,
     body: Bytes,
 ) -> StatusCode {
-    let Ok(entry) = mimi_core::protocol_wire::decode_consent_entry(&body) else {
-        return StatusCode::CREATED;
-    };
-    let _ = lock(&p).process_request_consent(&entry, now_unix());
-    StatusCode::CREATED
+    if !operation_is_one_of(
+        &body,
+        &[ConsentOperation::Request, ConsentOperation::Cancel],
+    ) {
+        return StatusCode::UNPROCESSABLE_ENTITY;
+    }
+    if let Ok(entry) = mimi_core::protocol_wire::decode_consent_entry(&body) {
+        let _ = lock(&p).process_request_consent(&entry, now_unix());
+    }
+    StatusCode::ACCEPTED
 }
 
 /// §5.7 C2 wire twin of [`update_consent`]. Same shape and privacy rule as
-/// [`request_consent_wire`].
+/// [`request_consent_wire`]; the 422 is for an operation that is not `grant` or `revoke`, and the 202 is the one
+/// that function's comment explains.
 async fn update_consent_wire(
     State(p): State<SharedProvider>,
     Path(_requester_domain): Path<String>,
     body: Bytes,
 ) -> StatusCode {
-    let Ok(entry) = mimi_core::protocol_wire::decode_consent_entry(&body) else {
-        return StatusCode::CREATED;
-    };
-    let _ = lock(&p).process_update_consent(&entry, now_unix());
-    StatusCode::CREATED
+    if !operation_is_one_of(&body, &[ConsentOperation::Grant, ConsentOperation::Revoke]) {
+        return StatusCode::UNPROCESSABLE_ENTITY;
+    }
+    if let Ok(entry) = mimi_core::protocol_wire::decode_consent_entry(&body) {
+        let _ = lock(&p).process_update_consent(&entry, now_unix());
+    }
+    StatusCode::ACCEPTED
+}
+
+/// False only when the entry's first byte, its `consentOperation`, is present and not one of `allowed`. An empty body
+/// names no operation, so it is not refused here: it is an undecodable entry, answered like any other.
+fn operation_is_one_of(body: &[u8], allowed: &[ConsentOperation]) -> bool {
+    body.first()
+        .is_none_or(|byte| allowed.iter().any(|op| u8::from(*op) == *byte))
 }
 
 // 🔴 SECURITY SCOPE (reference hub) - the mutating policy/membership endpoints below
@@ -650,6 +703,10 @@ fn now_unix_millis() -> u64 {
 #[cfg(test)]
 #[path = "http_update_tests.rs"]
 mod update_tests;
+
+#[cfg(test)]
+#[path = "http_wire_tests.rs"]
+mod wire_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1347,7 +1404,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED, "always 201 (privacy)");
+        assert_eq!(resp.status(), StatusCode::ACCEPTED, "always 202 (privacy)");
 
         // The same gate state a JSON updateConsent grant would have produced: proves the wire
         // handler drove the identical Provider code path, not a shadow implementation.
@@ -1362,21 +1419,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_consent_wire_stays_201_on_undecodable_body_no_oracle() {
+    async fn request_consent_wire_stays_202_on_undecodable_body_no_oracle() {
         let (router, _p) = app();
         let resp = router
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/mimi/pl/requestConsent/a.example")
-                    .body(Body::from(&b"garbage, not a ConsentEntry"[..]))
+                    // A valid operation byte (request) followed by a body that is not a ConsentEntry.
+                    .body(Body::from(&b"\x01garbage, not a ConsentEntry"[..]))
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(
             resp.status(),
-            StatusCode::CREATED,
+            StatusCode::ACCEPTED,
             "malformed wire bytes must not distinguish from a valid-but-dropped entry"
         );
     }
@@ -1891,7 +1949,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    fn real_mls_envelope_bytes() -> Vec<u8> {
+    pub(super) fn real_mls_envelope_bytes() -> Vec<u8> {
         use openmls::ciphersuite::signature::SignaturePublicKey;
         use openmls::credentials::{BasicCredential, CredentialWithKey};
         use openmls::group::{MlsGroup, MlsGroupCreateConfig};

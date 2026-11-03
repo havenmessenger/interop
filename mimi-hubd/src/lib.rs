@@ -191,7 +191,7 @@ impl Provider {
                 "keyMaterial": "/mimi/pl/keyMaterial/{targetUser}",
                 "submitMessage": "/mimi/pl/submitMessage/{recipient}",
                 "notify": "/mimi/pl/notify",
-                "identifierQuery": "/mimi/pl/identifierQuery",
+                "identifierQuery": "/mimi/pl/identifierQuery/{domain}",
                 "requestConsent": "/mimi/pl/requestConsent/{targetDomain}",
                 "updateConsent": "/mimi/pl/updateConsent/{requesterDomain}",
                 "reportAbuse": "/mimi/pl/reportAbuse/{roomId}",
@@ -210,7 +210,7 @@ impl Provider {
             ("keyMaterial", "/mimi/pl/keyMaterial/{targetUser}"),
             ("submitMessage", "/mimi/pl/submitMessage/{recipient}"),
             ("notify", "/mimi/pl/notify"),
-            ("identifierQuery", "/mimi/pl/identifierQuery"),
+            ("identifierQuery", "/mimi/pl/identifierQuery/{domain}"),
             ("requestConsent", "/mimi/pl/requestConsent/{targetDomain}"),
             ("updateConsent", "/mimi/pl/updateConsent/{requesterDomain}"),
             ("reportAbuse", "/mimi/pl/reportAbuse/{roomId}"),
@@ -1288,7 +1288,7 @@ mod tests {
         assert_eq!(wire["submitMessage"], "/mimi/pl/submitMessage/{recipient}");
         assert_eq!(wire["keyMaterial"], "/mimi/pl/keyMaterial/{targetUser}");
         assert_eq!(wire["notify"], "/mimi/pl/notify");
-        assert_eq!(wire["identifierQuery"], "/mimi/pl/identifierQuery");
+        assert_eq!(wire["identifierQuery"], "/mimi/pl/identifierQuery/{domain}");
         assert_eq!(
             wire["requestConsent"],
             "/mimi/pl/requestConsent/{targetDomain}"
@@ -1325,7 +1325,7 @@ mod tests {
         assert_eq!(dir["notify"], "https://havenmessenger.com/mimi/pl/notify");
         assert_eq!(
             dir["identifierQuery"],
-            "https://havenmessenger.com/mimi/pl/identifierQuery"
+            "https://havenmessenger.com/mimi/pl/identifierQuery/{domain}"
         );
         assert_eq!(
             dir["requestConsent"],
