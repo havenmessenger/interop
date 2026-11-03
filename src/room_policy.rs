@@ -10,10 +10,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The sibling custom proposal type to mimiParticipantList (0xF7A0): a room-policy (Role-definition)
-/// change rides as `mimiRoomPolicy`. Haven-chosen pending WG guidance. P2 forbids it from
-/// sharing a commit with a participant-list change.
-pub const MIMI_ROOM_POLICY_PROPOSAL_TYPE: u16 = 0xF7A1;
+/// The private proposal types an AppDataUpdate for a room-policy component is read as, while a message is being read
+/// (see `commit_wire`): `roles_list` (component 0x0025) and `base_room_policy` (component 0x0027), each carrying the
+/// component's update bytes unchanged. P2 forbids either from sharing a commit with a participant-list change.
+pub const MIMI_ROLES_LIST_PROPOSAL_TYPE: u16 = 0xF7A3;
+pub const MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE: u16 = 0xF7A4;
 
 /// Reserved role indices (room-policy-04 §3). 0 = non-participant, 1 = banned. Ordinary roles are >= 2.
 pub const ROLE_NON_PARTICIPANT: u32 = 0;
@@ -42,6 +43,9 @@ pub enum RoomPolicyError {
         "P2: a room-policy change MUST NOT share a commit with a participant-list change (§8.6)"
     )]
     PolicyRosterCoCommit,
+    /// A room-policy component value from a peer did not decode, or broke a rule of the draft a decoder can check.
+    #[error("room policy: {0}")]
+    Wire(String),
 }
 
 /// Room-policy-03 capabilities (the subset we model). A `Role` holds a set of these.
@@ -259,7 +263,8 @@ impl RoomPolicy {
 pub fn validate_commit_component_exclusivity(
     custom_proposal_types: &[u16],
 ) -> Result<(), RoomPolicyError> {
-    let has_policy = custom_proposal_types.contains(&MIMI_ROOM_POLICY_PROPOSAL_TYPE);
+    let has_policy = custom_proposal_types.contains(&MIMI_ROLES_LIST_PROPOSAL_TYPE)
+        || custom_proposal_types.contains(&MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE);
     let has_roster = custom_proposal_types
         .contains(&crate::participant_list::MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE);
     if has_policy && has_roster {
@@ -530,13 +535,18 @@ mod tests {
     fn p2_policy_and_roster_cannot_share_a_commit() {
         use crate::participant_list::MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE;
         // both present → rejected
-        assert!(validate_commit_component_exclusivity(&[
-            MIMI_ROOM_POLICY_PROPOSAL_TYPE,
-            MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE
-        ])
-        .is_err());
-        // either alone → fine
-        assert!(validate_commit_component_exclusivity(&[MIMI_ROOM_POLICY_PROPOSAL_TYPE]).is_ok());
+        for policy_type in [
+            MIMI_ROLES_LIST_PROPOSAL_TYPE,
+            MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE,
+        ] {
+            assert!(validate_commit_component_exclusivity(&[
+                policy_type,
+                MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE
+            ])
+            .is_err());
+            // either alone → fine
+            assert!(validate_commit_component_exclusivity(&[policy_type]).is_ok());
+        }
         assert!(
             validate_commit_component_exclusivity(&[MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE]).is_ok()
         );

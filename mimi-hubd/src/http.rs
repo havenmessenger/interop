@@ -548,7 +548,7 @@ async fn report_abuse_wire(
 
 /// `update` (§5.3, DIV-10). `room_id` is the path segment (the room the request updates), an opaque routing key like
 /// every other wire route except `submitMessage`. The body is an `UpdateRequest`: a `HandshakeBundle` whose Commit carries
-/// exactly one `mimiParticipantList`/`mimiRoomPolicy` custom proposal (see `mimi_core::commit_wire` for the bounded scope
+/// exactly one participant-list, `roles_list` or `base_room_policy` change (see `mimi_core::commit_wire` for the bounded scope
 /// this decodes - no signature or group-state verification, matching RFC 9420's own delivery-service trust model). The
 /// answer is an `UpdateRoomResponse` in a 200: `success` with the hub's acceptance time, `notAllowed` for a room this hub
 /// does not host, a bundle under another ciphersuite or a store limit (one answer for all, so a refusal does not say
@@ -778,6 +778,10 @@ fn now_unix_millis() -> u64 {
 #[cfg(test)]
 #[path = "http_update_tests.rs"]
 mod update_tests;
+
+#[cfg(test)]
+#[path = "http_room_policy_tests.rs"]
+mod room_policy_tests;
 
 #[cfg(test)]
 #[path = "http_wire_tests.rs"]
@@ -1627,7 +1631,9 @@ mod tests {
         payload: Vec<u8>,
     ) -> (Vec<u8>, Vec<u8>) {
         use mimi_core::participant_list::MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE;
-        use mimi_core::room_policy::MIMI_ROOM_POLICY_PROPOSAL_TYPE;
+        use mimi_core::room_policy::{
+            MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE, MIMI_ROLES_LIST_PROPOSAL_TYPE,
+        };
         use openmls::ciphersuite::signature::SignaturePublicKey;
         use openmls::credentials::{BasicCredential, CredentialWithKey};
         use openmls::group::MIXED_PLAINTEXT_WIRE_FORMAT_POLICY;
@@ -1673,7 +1679,8 @@ mod tests {
             None,
             Some(&[
                 ProposalType::Custom(MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE),
-                ProposalType::Custom(MIMI_ROOM_POLICY_PROPOSAL_TYPE),
+                ProposalType::Custom(MIMI_ROLES_LIST_PROPOSAL_TYPE),
+                ProposalType::Custom(MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE),
                 // 0xF7FF: an arbitrary type NEITHER of Haven's registered ones, negotiated here
                 // only so `update_wire_rejects_an_unrecognized_proposal_type` can exercise this
                 // hub's OWN rejection of it, rather than openmls's group-level capability check
@@ -1778,50 +1785,6 @@ mod tests {
                 .any(|(uri, _)| uri == "mimi://havenmessenger.com/u/carol"),
             "carol must now be a participant"
         );
-    }
-
-    #[tokio::test]
-    async fn update_wire_applies_a_room_policy_commit() {
-        use mimi_core::room_policy::{
-            BaseRoomPolicy, Role, RoomPolicy, MIMI_ROOM_POLICY_PROPOSAL_TYPE,
-        };
-
-        let (router, p) = app();
-        let room = "mimi://havenmessenger.com/r/x";
-        p.lock()
-            .unwrap()
-            .add_participant(room, "mimi://havenmessenger.com/u/alice", 1)
-            .unwrap();
-
-        let policy = RoomPolicy {
-            base: BaseRoomPolicy::default(),
-            roles: vec![Role {
-                role_index: 2,
-                role_name: "member".into(),
-                capabilities: vec![],
-                authorized_role_changes: vec![],
-            }],
-        };
-        let payload = serde_json::to_vec(&policy).unwrap();
-        let commit_bytes =
-            real_single_custom_proposal_commit(MIMI_ROOM_POLICY_PROPOSAL_TYPE, payload);
-
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/mimi/pl/update/mimi%3A%2F%2Fhavenmessenger.com%2Fr%2Fx")
-                    .body(Body::from(bundle_of(commit_bytes)))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(matches!(
-            update_answer(resp).await,
-            mimi_core::protocol_wire::UpdateRoomResponse::Success { .. }
-        ));
-        let stored = p.lock().unwrap().room_policy(room).unwrap();
-        assert_eq!(stored, Some(policy));
     }
 
     #[tokio::test]

@@ -80,6 +80,44 @@ fn an_update_to_the_participant_list_component_is_the_participant_list_proposal(
     assert_eq!(decoded.payload, update);
 }
 
+/// room-policy-04 §10.1: an update to `roles_list` (0x0025) or `base_room_policy` (0x0027) is read as the private proposal
+/// type that carries that component's bytes, and no other component takes either type.
+#[test]
+fn an_update_to_a_room_policy_component_is_that_components_proposal() {
+    use crate::room_policy::{MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE, MIMI_ROLES_LIST_PROPOSAL_TYPE};
+    let update = update_of(40);
+    for (component, expected) in [
+        (0x0025u16, MIMI_ROLES_LIST_PROPOSAL_TYPE),
+        (0x0027u16, MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE),
+    ] {
+        let decoded = decode_single_custom_proposal_commit(&commit_with(&[app_data_update(
+            component,
+            APP_DATA_UPDATE_OP_UPDATE,
+            Some(&update),
+        )]))
+        .unwrap();
+        assert_eq!(decoded.proposal_type, expected, "{component:#06x}");
+        assert_eq!(decoded.payload, update, "{component:#06x}");
+    }
+    // Their neighbours in the component numbering are not read.
+    for component in [0x0024u16, 0x0026, 0x0028, 0x0029] {
+        let sent = commit_with(&[app_data_update(
+            component,
+            APP_DATA_UPDATE_OP_UPDATE,
+            Some(&update),
+        )]);
+        assert!(
+            decode_single_custom_proposal_commit(&sent).is_err(),
+            "{component:#06x}"
+        );
+    }
+    // Removing either component is not read.
+    for component in [0x0025u16, 0x0027] {
+        let sent = commit_with(&[app_data_update(component, APP_DATA_UPDATE_OP_REMOVE, None)]);
+        assert!(decode_single_custom_proposal_commit(&sent).is_err());
+    }
+}
+
 #[test]
 fn the_private_form_is_still_read_beside_it() {
     let update = update_of(40);

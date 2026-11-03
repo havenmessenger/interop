@@ -34,6 +34,7 @@ pub mod message_id;
 pub mod participant_list;
 pub mod protocol_wire;
 pub mod room_policy;
+pub mod room_policy_wire;
 #[cfg(all(feature = "external-ops", test))]
 mod spec_capability_proof;
 #[cfg(test)]

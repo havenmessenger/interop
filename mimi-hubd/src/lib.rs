@@ -41,7 +41,10 @@ use mimi_core::participant_list::{
     UserRolePair, MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE,
 };
 use mimi_core::protocol_wire::{HandshakeBundle, WireError};
-use mimi_core::room_policy::{RoomPolicy, MIMI_ROOM_POLICY_PROPOSAL_TYPE};
+use mimi_core::room_policy::{
+    RoomPolicy, MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE, MIMI_ROLES_LIST_PROPOSAL_TYPE,
+};
+use mimi_core::room_policy_wire::{decode_base_room_policy, decode_role_data};
 use mimi_core::uri::{MimiKind, MimiUri};
 
 /// Upper bound on a member/room URI we will store (anti-DoS on the routing key; a real mimi:// URI is
@@ -754,7 +757,7 @@ impl Provider {
         Ok(policy.authorize_role_change(actor_role, from_role, to_role)?)
     }
 
-    // ---- DIV-10: applying a mimiParticipantList/mimiRoomPolicy custom proposal from a real Commit ----
+    // ---- DIV-10: applying a participant-list or room-policy change from a Commit ----
 
     /// Decode a `PublicMessage`-wrapped Commit (`mimi_core::commit_wire`) and apply its single
     /// custom proposal to this room's stored state. Dispatches on `proposal_type`; a value that
@@ -776,21 +779,59 @@ impl Provider {
                 })?;
                 self.apply_participant_list_update(room_uri, &update, now_unix)
             }
-            MIMI_ROOM_POLICY_PROPOSAL_TYPE => {
-                let policy: RoomPolicy = serde_json::from_slice(&decoded.payload)
-                    .map_err(|_| UpdateRefusal::Invalid("the room policy is malformed"))?;
+            MIMI_ROLES_LIST_PROPOSAL_TYPE => {
+                let roles = decode_role_data(&decoded.payload)
+                    .map_err(|_| UpdateRefusal::Invalid("the role list is malformed"))?;
                 self.assert_hub_of_record(room_uri)
                     .map_err(|_| UpdateRefusal::NotAllowed)?;
-                policy
-                    .validate()
-                    .map_err(|_| UpdateRefusal::Invalid("the room policy is not valid"))?;
-                self.set_room_policy(room_uri, &policy, now_unix)
-                    .map_err(|e| store_refusal(&e))
+                // The roles replace the room's roles; the base policy stays as it was, or is the draft's default
+                // while the room has none.
+                let base = self
+                    .room_policy(room_uri)
+                    .map_err(|_| UpdateRefusal::Store)?
+                    .map(|policy| policy.base)
+                    .unwrap_or_default();
+                self.store_room_policy(room_uri, RoomPolicy { base, roles }, now_unix)
+            }
+            MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE => {
+                let base = decode_base_room_policy(&decoded.payload)
+                    .map_err(|_| UpdateRefusal::Invalid("the base room policy is malformed"))?;
+                self.assert_hub_of_record(room_uri)
+                    .map_err(|_| UpdateRefusal::NotAllowed)?;
+                // A base policy applies to roles, so a room with none stored takes the roles first.
+                let stored = self
+                    .room_policy(room_uri)
+                    .map_err(|_| UpdateRefusal::Store)?
+                    .ok_or(UpdateRefusal::Invalid(
+                        "the room has no roles yet; send the role list first",
+                    ))?;
+                self.store_room_policy(
+                    room_uri,
+                    RoomPolicy {
+                        base,
+                        roles: stored.roles,
+                    },
+                    now_unix,
+                )
             }
             _ => Err(UpdateRefusal::Invalid(
                 "the proposal type is not recognized",
             )),
         }
+    }
+
+    /// Validate and store a room policy that arrived in an update.
+    fn store_room_policy(
+        &self,
+        room_uri: &str,
+        policy: RoomPolicy,
+        now_unix: u64,
+    ) -> Result<(), UpdateRefusal> {
+        policy
+            .validate()
+            .map_err(|_| UpdateRefusal::Invalid("the room policy is not valid"))?;
+        self.set_room_policy(room_uri, &policy, now_unix)
+            .map_err(|e| store_refusal(&e))
     }
 
     /// `update` (§5.3): the request body is an `UpdateRequest`, which for MLS is a `HandshakeBundle`. A Commit bundle's

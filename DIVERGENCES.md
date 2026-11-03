@@ -161,9 +161,9 @@ without needing that machinery in the first place.
   gives no example. §7.5 also has the indices hold across more than one `ParticipantListUpdate` in
   a Commit; this hub accepts a single custom proposal per Commit (below), so that case is refused
   rather than applied.
-- A `mimiRoomPolicy` proposal's payload is the JSON-serialized `RoomPolicy` this hub already stores
-  for the JSON-compat `roomPolicy` route - a whole-object replace, validated the same way
-  (`RoomPolicy::validate`) before it is stored.
+- A room-policy change is an AppDataUpdate for `roles_list` or `base_room_policy` (DIV-15); the policy it
+  produces is validated (`RoomPolicy::validate`) before it is stored, the same as one set through the
+  JSON-compat `roomPolicy` route.
 - A Commit that mixes the custom proposal with a standard MLS proposal (Add, Remove, ...) in the
   same list is refused, not decoded: skipping past a standard proposal's own body (an `Add`, for
   instance, embeds a full KeyPackage) needs that proposal's own decoder, which is out of scope. A
@@ -253,7 +253,7 @@ A test pins the refusal (`gate::grease_tests`) and fails when the pinned release
 refusing it; it is then inverted and this entry removed. The fix needs an openmls release, or
 a source dependency, which this crate's manifest-purity guard does not allow.
 
-## DIV-15 - room-policy changes are read from a private proposal type; room-policy components are not read
+## DIV-15 - two room-policy components are read; the other eleven are refused
 
 `update` reads a participant-list change from either of two carriers: an AppDataUpdate
 (mls-extensions-10 §4.7, proposal type `0x0008` as its §7.2.1 suggests) addressed to
@@ -265,13 +265,43 @@ the proposals window itself and rewrites an AppDataUpdate to the `0xF7A0` form f
 bytes of the Commit are never changed.
 
 Protocol-07 §5.3 sends a room-policy change as an AppDataUpdate for the room policy components of
-room-policy-04 (`mls_operational_policy`, `roles_list`, `base_room_policy` and ten more, with
-values `0x0024` to `0x0030` suggested and not yet registered). This hub reads none of them. It
-reads a room-policy change only from the custom proposal of the private type `0xF7A1`
-(`mimiRoomPolicy`), whose payload is the JSON form of this crate's `RoomPolicy`. An AppDataUpdate
-for any other component, including `room_metadata` (`0x0023`, protocol-07 §10.4), a removal, and an
-AppSync proposal are refused as an unrecognized proposal type, so a sender is told the change was not
-applied and never that it was.
+room-policy-04, with values `0x0024` to `0x0030` suggested and not yet registered. This hub reads two:
+
+- `roles_list` (`0x0025`, §3): the `update` is a `RoleData`, and it replaces the room's roles.
+- `base_room_policy` (`0x0027`, §5): the `update` is a `BaseRoomPolicy`, and it replaces the room's base policy.
+
+They are read the way the participant-list update is, as the private types `0xF7A3` and `0xF7A4`
+while the message is being read. The private JSON carrier `0xF7A1` that earlier versions read is
+gone. A base policy applies to roles, so a base update for a room that has no roles is refused until a
+role list has been sent. A role list sent first sets the roles and leaves the base policy at the
+draft's defaults.
+
+What the hub keeps of them is what it enforces. Of a role: its index, its name, its
+`authorized_role_changes`, and the capabilities `canAddParticipant` (`0x0000`),
+`canRemoveParticipant` (`0x0001`), `canBan` (`0x000a`), `canKick` (`0x000c`), `canChangeUserRole`
+(`0x000f`) and `canSendMessage` (`0x0100`). The other capability values (uploads, calls, room attributes
+and the rest of the registry, which is open to additions) are read for their shape and not carried, so a
+role that lists them is accepted. The description and the four participant-count constraints are
+read and not kept. Of a base policy: `fixed_membership`, `parent_dependant`, `max_clients`,
+`max_users` and `discoverable`; the rest is read and not kept. A value is refused when it does not end
+where its length says, when a length or a count passes a bound (256 roles, 512 capabilities, 1 KiB of
+text), when a flag is neither 0 nor 1, when a role index repeats, when a minimum participant count is
+above its maximum, when a parent-dependent room names no parent or any other names one, or when the
+resulting policy does not validate (the reserved roles 0 and 1, a transition that names an undefined
+role, a fixed-membership room whose role may add participants).
+
+The other eleven components are refused as an unrecognized proposal type, as are `room_metadata`
+(`0x0023`, protocol-07 §10.4), a removal of any component, and an AppSync proposal, so a sender is told
+the change was not applied and never that it was: `mls_operational_policy` (`0x0024`), `preauth_list`
+(`0x0026`), `status_notification_policy` (`0x0028`), `join_link_policy` (`0x0029`), `join_links`
+(`0x002a`), `link_preview_policy` (`0x002b`), `asset_policy` (`0x002c`), `logging_policy` (`0x002d`),
+`chat_history_policy` (`0x002e`), `bot_policy` (`0x002f`) and `message_expiration_policy` (`0x0030`).
+They govern what clients and the operator do and are not state this hub enforces.
+
+A roles update that drops a role some member still holds leaves that member with an index the policy
+does not define; the hub treats an undefined role as unable to do anything, so the member cannot send
+until a role list that defines the index is sent. The hub does not check the sender of an update against
+the room's roles (see the room-admin principal in the README), as for the participant list.
 
 Protocol-06 described the carrier two ways (AppSync in §2 to §5.3 and AppDataUpdate in §9 and
 §10.3); protocol-07 says AppDataUpdate throughout and no longer mentions AppSync.

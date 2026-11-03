@@ -24,7 +24,7 @@ this reference hub does not implement for message delivery. The directory (`/.we
 protocol-directory`) advertises all eight under `wireEndpoints`, with concrete path templates.
 
 `update` (§5.3) is wired for exactly one bounded case: a Commit whose proposal list holds a single
-custom proposal (`mimiParticipantList` or `mimiRoomPolicy`, protocol §5.3/§7.5) is decoded (without
+custom proposal or an AppDataUpdate (participant list, `roles_list` or `base_room_policy`, protocol §5.3/§7.5) is decoded (without
 verifying its signature or holding live MLS group state - RFC 9420's own delivery-service trust
 model does not expect a DS to do either) and applied to the room's stored participant list or
 policy. A Commit mixing a custom proposal with a standard MLS proposal (Add/Remove/Update, ...) in
@@ -313,7 +313,7 @@ diagnostic instead of a silent no-op.
 - **Non-0x0001 ciphersuites.** Rejected at the gate before they reach any MLS processing.
 - **Assets / OHTTP (§5.10).** v1 is messaging-only.
 - **General `update` (§5.3) Commit processing.** Only a Commit whose proposal list holds exactly
-  one custom proposal (`mimiParticipantList` or `mimiRoomPolicy`) is applied - a Commit mixing a
+  one custom proposal or AppDataUpdate (participant list, `roles_list` or `base_room_policy`) is applied - a Commit mixing a
   custom proposal with a standard MLS proposal in the same list is refused. This hub does not hold
   live MLS group state or verify a Commit's signature (matching RFC 9420's own delivery-service
   trust model).

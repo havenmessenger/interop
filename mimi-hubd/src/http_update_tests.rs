@@ -24,7 +24,7 @@ use super::tests::{
 };
 use crate::http::SharedProvider;
 
-const ROOM: &str = "mimi://havenmessenger.com/r/x";
+pub(super) const ROOM: &str = "mimi://havenmessenger.com/r/x";
 
 fn path_of(room: &str) -> String {
     format!(
@@ -33,7 +33,7 @@ fn path_of(room: &str) -> String {
     )
 }
 
-async fn post(router: Router, room: &str, body: Vec<u8>) -> Response {
+pub(super) async fn post(router: Router, room: &str, body: Vec<u8>) -> Response {
     router
         .oneshot(
             Request::builder()
@@ -277,7 +277,7 @@ fn length_prefix(len: usize) -> Vec<u8> {
 
 /// The Commit with its one custom proposal rewritten as an AppDataUpdate (mls-extensions-10 §4.7: type 0x0008, a two-byte
 /// component id, the operation, `update<V>`), with the proposals window's length prefix adjusted to match.
-fn as_app_data_update(commit: &[u8], payload: &[u8], component: u16) -> Vec<u8> {
+pub(super) fn as_app_data_update(commit: &[u8], payload: &[u8], component: u16) -> Vec<u8> {
     let entry = [vec![0x01, 0xF7, 0xA0], vl(payload)].concat();
     let found = [length_prefix(entry.len()), entry].concat();
     let at = commit

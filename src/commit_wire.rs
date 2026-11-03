@@ -43,6 +43,9 @@ const MLS_PROPOSAL_OR_REF_INLINE: u8 = 1;
 const APP_DATA_UPDATE_PROPOSAL_TYPE: u16 = 0x0008;
 /// protocol-06 §10.3 `participant_list`: the component an AppDataUpdate addresses to change the participant list.
 const PARTICIPANT_LIST_COMPONENT_ID: u16 = 0x0022;
+/// room-policy-04 §10.1: the components an AppDataUpdate addresses to change the roles and the base room policy.
+const ROLES_LIST_COMPONENT_ID: u16 = crate::room_policy_wire::ROLES_LIST_COMPONENT_ID;
+const BASE_ROOM_POLICY_COMPONENT_ID: u16 = crate::room_policy_wire::BASE_ROOM_POLICY_COMPONENT_ID;
 /// `AppDataUpdateOperation` values: `update(1)` carries `opaque update<V>`, `remove(2)` carries nothing.
 const APP_DATA_UPDATE_OP_UPDATE: u8 = 1;
 const APP_DATA_UPDATE_OP_REMOVE: u8 = 2;
@@ -54,7 +57,7 @@ const MLS_PROPOSAL_OR_REF_REFERENCE: u8 = 2;
 /// A custom proposal's `proposal_type` and opaque payload, read out of a Commit. The caller
 /// checks `proposal_type` against the constant it expects
 /// (`participant_list::MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE` /
-/// `room_policy::MIMI_ROOM_POLICY_PROPOSAL_TYPE`) before decoding `payload`.
+/// `room_policy::MIMI_ROLES_LIST_PROPOSAL_TYPE`) before decoding `payload`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedCustomProposal {
     pub proposal_type: u16,
@@ -181,7 +184,8 @@ pub(crate) struct Normalized {
 /// AppDataUpdate body begins with a two-byte component id, so the first byte reads as an empty payload and the next byte
 /// as the next `ProposalOrRef` tag, which fails (`UnknownValue(34)` for component `0x0022`). Each AppDataUpdate entry is
 /// therefore rewritten: an update to the participant-list component becomes the `0xF7A0` custom proposal carrying the same
-/// update bytes, which is the form this crate already reads, and any other AppDataUpdate becomes a custom proposal of a
+/// update bytes, which is the form this crate already reads, an update to `roles_list` or `base_room_policy` becomes
+/// `0xF7A3` or `0xF7A4` the same way, and any other AppDataUpdate becomes a custom proposal of a
 /// private type that no caller recognizes. Every other entry is copied as it is, sized by openmls's own decoder. The
 /// rewrite is for reading only: the original bytes are what is stored or forwarded, and no signature is verified here
 /// (see the module doc).
@@ -251,6 +255,14 @@ pub(crate) fn normalize_app_data_updates(bytes: &[u8]) -> Result<Option<Normaliz
                     let (new_type, new_payload) = match (&update, component) {
                         (Some(update), PARTICIPANT_LIST_COMPONENT_ID) => (
                             crate::participant_list::MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE,
+                            update.clone(),
+                        ),
+                        (Some(update), ROLES_LIST_COMPONENT_ID) => (
+                            crate::room_policy::MIMI_ROLES_LIST_PROPOSAL_TYPE,
+                            update.clone(),
+                        ),
+                        (Some(update), BASE_ROOM_POLICY_COMPONENT_ID) => (
+                            crate::room_policy::MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE,
                             update.clone(),
                         ),
                         _ => {
@@ -442,7 +454,7 @@ mod tests {
         encode_participant_list_update, ParticipantListUpdate, UserRolePair,
         MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE,
     };
-    use crate::room_policy::MIMI_ROOM_POLICY_PROPOSAL_TYPE;
+    use crate::room_policy::MIMI_ROLES_LIST_PROPOSAL_TYPE;
 
     fn from_hex(h: &str) -> Vec<u8> {
         (0..h.len())
@@ -540,7 +552,7 @@ mod tests {
         let bytes = from_hex(CAPTURED_PARTICIPANT_LIST_COMMIT);
         let decoded = decode_single_custom_proposal_commit(&bytes).unwrap();
         assert_ne!(
-            decoded.proposal_type, MIMI_ROOM_POLICY_PROPOSAL_TYPE,
+            decoded.proposal_type, MIMI_ROLES_LIST_PROPOSAL_TYPE,
             "this fixture is a participant-list proposal, not a room-policy one"
         );
     }
