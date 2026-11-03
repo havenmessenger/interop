@@ -197,13 +197,34 @@ async fn the_422_depends_on_the_operation_byte_alone() {
 
 #[tokio::test]
 async fn identifier_query_answers_on_the_domain_path_and_on_the_older_one() {
+    use mimi_core::protocol_wire::{IdentifierRequest, QueryElement, SearchIdentifierType};
+    let query = |value: &str| {
+        IdentifierRequest {
+            query_elements: vec![QueryElement {
+                search_type: SearchIdentifierType::Handle,
+                qualifier: Vec::new(),
+                search_value: value.as_bytes().to_vec(),
+            }],
+        }
+        .encode()
+        .unwrap()
+    };
     for uri in [
         "/mimi/pl/identifierQuery/havenmessenger.com",
         "/mimi/pl/identifierQuery",
     ] {
-        let (router, _p) = app();
-        // An undecodable request is the bare 404 on either path.
-        let response = post(router, uri, vec![0xff]).await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+        let (router, p) = app();
+        p.lock().unwrap().enroll("alice").unwrap();
+        // An enrolled handle is found (200) and anything else is the bare 404: a missing route would be 404 for both.
+        assert_eq!(
+            post(router.clone(), uri, query("alice")).await.status(),
+            StatusCode::OK,
+            "{uri}"
+        );
+        assert_eq!(
+            post(router, uri, query("nobody")).await.status(),
+            StatusCode::NOT_FOUND,
+            "{uri}"
+        );
     }
 }
