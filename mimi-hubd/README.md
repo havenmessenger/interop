@@ -15,7 +15,7 @@ are not the TLS presentation-language framing `draft-ietf-mimi-protocol` defines
 **`/mimi/pl/*`** is the draft's actual wire framing (TLS presentation language, RFC 8446 §3), routed
 for eight endpoints: `submitMessage` (§5.4), `requestConsent`/`updateConsent` (§5.7), `keyMaterial`
 (§5.2), `notify` inbound-receive (§5.5), `identifierQuery` (§5.8), `reportAbuse` (§5.9), and
-`update` (§5.3, bounded - see below). Every wire route decodes the same bytes a strict protocol-06
+`update` (§5.3, bounded - see below). Every wire route decodes the same bytes a strict protocol-07
 client would send and calls the identical business logic the JSON lane calls, so state written
 through one lane is readable through the other (proven below for `keyMaterial`). The path segment
 on the request/consent/keyMaterial/update/reportAbuse routes plays the same opaque routing-key role
@@ -26,8 +26,8 @@ protocol-directory`) advertises all eight under `wireEndpoints`, with concrete p
 `update` (§5.3) takes an `UpdateRequest` and answers an `UpdateRoomResponse`. It handles one bounded
 case: a Commit whose proposal list holds a single proposal changing the room. A participant-list
 change is read from an AppDataUpdate for component `0x0022` or from the private type `0xF7A0`, and a
-room-policy change from an AppDataUpdate for `roles_list` (`0x0025`) or `base_room_policy` (`0x0027`). The hub reads that proposal without verifying the
-Commit's signature or holding live MLS group state (RFC 9420's own delivery-service trust model does
+room-policy change from an AppDataUpdate for `roles_list` (`0x0025`) or `base_room_policy`
+(`0x0027`). The hub reads that proposal without verifying the Commit's signature or holding live MLS group state (RFC 9420's own delivery-service trust model does
 not expect a DS to do either) and applies it to the room's stored participant list or policy.
 `success` means that change was applied. The hub does not store or relay the Commit, and it never
 answers `wrongEpoch`. A Commit mixing that proposal with a standard MLS proposal (Add/Remove/Update,
@@ -36,7 +36,7 @@ reference hub. `groupInfo` (§5.6) is out of scope for a different reason: it is
 join endpoint DIV-1 disallows in Haven's own product build, and framing it without the accept-path
 behind it would wire-format half of a security-relevant endpoint. Asset download (§5.10) has no v1
 handler of any kind to frame. The four v1 room-admin JSON endpoints
-(`roomPolicy`/`memberRole`/`addParticipant`/`authorizeSender`) are not protocol-06 endpoints at all -
+(`roomPolicy`/`memberRole`/`addParticipant`/`authorizeSender`) are not protocol-07 endpoints at all -
 they are this hub's own RBAC surface, not part of the draft's wire vocabulary - so there is nothing
 to frame them against.
 

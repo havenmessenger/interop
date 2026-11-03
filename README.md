@@ -14,15 +14,16 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 
 > **Status:** a reference implementation of the MIMI content codec and room-policy roles, with
 > content-09 test vectors byte-verified against the official IETF examples, and a hub
-> demonstrating the core mechanisms (directory, key material, message relay, consent). Main
-> implements protocol-06, and protocol-07 is in progress on a branch. Known gaps against the
-> full protocol-06 surface are listed in [`DIVERGENCES.md`](DIVERGENCES.md).
+> demonstrating the core mechanisms (directory, key material, message relay, consent). It
+> implements protocol-07. KeyPackages that carry a GREASE value are still refused (DIV-14). Known
+> gaps against the full protocol-07 surface are listed in [`DIVERGENCES.md`](DIVERGENCES.md).
 > Feedback welcome.
 
 ## Why use this
-- **Protocol code against the IETF drafts.** MIMI protocol-06 (the JSON lane and the
+- **Protocol code against the IETF drafts.** MIMI protocol-07 (the JSON lane and the
   TLS presentation-language wire lane), mimi-content-09, and room-policy-04, over MLS (RFC 9420)
-  via openmls. Protocol-07 and content-10 are published; work on protocol-07 is in progress.
+  via openmls. `update` reads two of room-policy-04's components and refuses the other eleven
+  (DIV-15). Content-10 is published and not done yet.
 - **A runnable, installable hub.** `mimi-hubd` is an mTLS daemon you can stand up from its
   quickstart and point an implementation at; its README shows the output of the commands
   it lists. It also installs like a normal system service - a systemd unit, a `.deb`, prebuilt
@@ -42,8 +43,8 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 - **Standalone.** Apache-2.0, no submodules, no services needed to build and run the tests.
 
 ## See it run
-- [mimi.havenmessenger.com](https://mimi.havenmessenger.com) - Haven's running hub, built from the
-  protocol-07 branch. The directory is public; the protocol endpoints need a client certificate. No
+- [mimi.havenmessenger.com](https://mimi.havenmessenger.com) - Haven's running hub, built from
+  this repository. The directory is public; the protocol endpoints need a client certificate. No
   other provider has connected to it yet. To test against it, open an issue.
 - [`mimi-hubd/README.md`](mimi-hubd/README.md) - quickstart for the reference hub daemon: mTLS
   server, a live directory endpoint, and both the JSON and TLS-PL wire lanes.
