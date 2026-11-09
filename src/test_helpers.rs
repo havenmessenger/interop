@@ -154,7 +154,9 @@ pub fn public_self_remove_proposal() -> String {
         .wire_format_policy(PURE_PLAINTEXT_WIRE_FORMAT_POLICY)
         .capabilities(
             Capabilities::builder()
+                .ciphersuites(vec![suite])
                 .proposals(vec![ProposalType::SelfRemove])
+                .credentials(vec![CredentialType::Basic])
                 .build(),
         )
         .build();

@@ -60,7 +60,7 @@ pub(crate) fn capabilities() -> Vec<u8> {
         Some(&[Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519]),
         None,
         None,
-        None,
+        Some(&[CredentialType::Basic]),
     )
     .tls_serialize_detached()
     .unwrap()
@@ -129,7 +129,7 @@ pub(crate) fn grease_key_package() -> Vec<u8> {
         Some(&[Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519]),
         Some(&[ExtensionType::Grease(0x0A0A)]),
         None,
-        None,
+        Some(&[CredentialType::Basic]),
     );
     KeyPackage::builder()
         .leaf_node_capabilities(capabilities)

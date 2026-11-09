@@ -76,7 +76,11 @@ fn every_vector_is_decoded_or_refused_as_recorded() {
                 ),
                 Err(_) => (false, None, None),
             },
-            "KeyPackage" => (mimi_gate_keypackage(&bytes).is_ok(), None, None),
+            // The gate reads a KeyPackage and writes nothing back, so there is no re-encoding to compare.
+            "KeyPackage" => {
+                let passed = mimi_gate_keypackage(&bytes).is_ok();
+                (passed, None, passed.then(|| bytes.clone()))
+            }
             other => panic!("{id}: unknown vector kind {other}"),
         };
         match vector.decode.as_str() {

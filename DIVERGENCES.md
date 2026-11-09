@@ -239,20 +239,6 @@ own or a wider `noCompatibleMaterial`. This crate reads that other form: a test 
 `noCompatibleMaterial` with every client `keyMaterialExhausted` (one client, or several) and checks it
 is read and written back unchanged. The hub still sends `partialSuccess`, until the issue is settled.
 
-## DIV-14 - KeyPackages that carry a GREASE value are refused
-
-RFC 9420 §13.5 has clients include GREASE values to keep peers tolerant of unknown values. The
-openmls release this crate pins (0.9.2; the 0.8.1, 0.8.2 and 0.8.3 releases behave the same way) rejects
-a KeyPackage that carries a GREASE extension value with `UnsupportedExtension`, because it
-classifies the same value as a GREASE extension type in the client's capabilities and as an
-unknown extension type in the KeyPackage's own extensions (openmls#2162, fixed on openmls
-`main` and not yet in a release). The gate therefore refuses such a KeyPackage, and the
-`keyMaterial` and consent exchanges cannot take key material from a client that sends one.
-
-A test pins the refusal (`gate::grease_tests`) and fails when the pinned release stops
-refusing it; it is then inverted and this entry removed. The fix needs an openmls release, or
-a source dependency, which this crate's manifest-purity guard does not allow.
-
 ## DIV-15 - two room-policy components are read; the other eleven are refused
 
 `update` reads a participant-list change from either of two carriers: an AppDataUpdate
@@ -365,4 +351,4 @@ read. The same question gates the JSON-lane `/mimi/v1/notify`, which takes a `ro
 Divergences are revisited as the drafts move and as the accept-path work (DIV-6, DIV-9, DIV-10)
 lands. DIV-1 through DIV-4 do not block interoperating with another provider on the supported
 surface. DIV-5, DIV-7, and DIV-11 are closed or mostly closed (see above); DIV-6, DIV-8, DIV-9,
-DIV-10, DIV-12, DIV-13, DIV-14, DIV-15, and DIV-16 still do, for the endpoints they touch, until closed.
+DIV-10, DIV-12, DIV-13, DIV-15, and DIV-16 still do, for the endpoints they touch, until closed.

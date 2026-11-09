@@ -610,7 +610,7 @@ mod tests {
                 Some(&[AES]),
                 None,
                 Some(&[ProposalType::Custom(MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE)]),
-                None,
+                Some(&[CredentialType::Basic]),
             );
             let cfg = MlsGroupCreateConfig::builder()
                 .capabilities(caps)

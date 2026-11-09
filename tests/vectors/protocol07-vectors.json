@@ -141,8 +141,8 @@
       "variant": null
     },
     {
-      "decode": "refused",
-      "description": "a pinned-suite KeyPackage that lists a GREASE value in its capabilities and carries it in its extensions; refused by the pinned openmls release (DIVERGENCES.md DIV-14)",
+      "decode": "ok",
+      "description": "a pinned-suite KeyPackage that lists a GREASE value in its capabilities and carries it in its extensions",
       "hex": "000100012040ff15f5857cead7303de84ba0995e323dc3c053a7a3b827950003ccd72df65b2058a23df5ac95664a298285ffd402dcbb891d079e6e23943d8b29c463535c5a612094bc761507c580c010d7846fe3dfa588518c266b3f0bf05f8fb59bf3e6d034fa000106677265617365020001020001020a0a00020001010000000000000000ffffffffffffffff004040762cd4750ee83665f87bb859b26b23228f45ebe8b62a15044e753ba8e1ae0d697d31255f2df15e77ac87b3e43e22e19b99d6a0225925de7c8a36a29412633301030a0a004040364b7cfe3deaa1ab670c291b66e824352a56bbc22bcf915a1c63b05615df6412c6fb2e0aafff89ed38603ae917f51be394ac1a8cd809bf8de5229aa873923f00",
       "id": "kp-x1-grease-key-package",
       "kind": "KeyPackage",

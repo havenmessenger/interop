@@ -45,6 +45,9 @@ jobs:
       - name: audit
         # `cargo audit` auto-reads .cargo/audit.toml, so the documented advisory dispositions apply.
         run: cargo install cargo-audit --locked && cargo audit
+      - name: git-pin advisories
+        # cargo audit does not match advisories against a crate pinned to a git revision.
+        run: python3 scripts/check_git_pin_advisories.py --selftest && python3 scripts/check_git_pin_advisories.py --db ~/.cargo/advisory-db
 
   spec-profile:
     # CI leg 1/3: proves the full-fidelity ("SpecProfile") posture is real and tested,

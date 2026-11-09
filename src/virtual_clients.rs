@@ -1147,6 +1147,8 @@ mod tests {
             group
                 .export_secret(crypto, EMULATOR_EPOCH_SECRET_LABEL, &[], 32)
                 .unwrap()
+                .as_slice()
+                .to_vec()
         }
 
         #[test]

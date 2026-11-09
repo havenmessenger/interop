@@ -15,7 +15,7 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 > **Status:** a reference implementation of the MIMI content codec and room-policy roles, with
 > content-09 test vectors byte-verified against the official IETF examples, and a hub
 > demonstrating the core mechanisms (directory, key material, message relay, consent). It
-> implements protocol-07. KeyPackages that carry a GREASE value are still refused (DIV-14). Known
+> implements protocol-07. Known
 > gaps against the full protocol-07 surface are listed in [`DIVERGENCES.md`](DIVERGENCES.md).
 > Feedback welcome.
 

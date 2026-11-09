@@ -1687,7 +1687,7 @@ mod tests {
                 // refusing to build the commit at all.
                 ProposalType::Custom(0xF7FF),
             ]),
-            None,
+            Some(&[CredentialType::Basic]),
         );
         let cfg = MlsGroupCreateConfig::builder()
             .capabilities(caps)

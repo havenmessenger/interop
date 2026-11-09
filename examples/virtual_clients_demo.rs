@@ -113,6 +113,8 @@ fn emulator_epoch_secret(group: &MlsGroup, crypto: &impl OpenMlsCrypto) -> Vec<u
     group
         .export_secret(crypto, EMULATOR_EPOCH_SECRET_LABEL, &[], 32)
         .unwrap()
+        .as_slice()
+        .to_vec()
 }
 
 fn section(title: &str) {
