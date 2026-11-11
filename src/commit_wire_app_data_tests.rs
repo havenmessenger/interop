@@ -265,11 +265,11 @@ fn an_update_cut_short_inside_the_window_is_refused() {
     assert!(decode_single_custom_proposal_commit(&commit_with(&[entry])).is_err());
 }
 
-/// A Commit a peer that proposes the participant-list change beside the standard proposals the same Commit needs, in either
-/// order: `GroupContextExtensions` (proposal type 7, an empty extension list) or `Remove` (type 3, a leaf index). This hub
-/// reads a Commit with exactly one proposal (DIV-10), so each is refused: never read as the update, never partly applied.
-/// openmls is not involved in the refusal: the hub reads a Commit with its own decoder and holds no group state, so the
-/// ordering of AppDataUpdate against GroupContextExtensions that openmls's own processing has to settle is never reached here.
+/// The single-proposal reader (`decode_single_custom_proposal_commit`) refuses the participant-list change beside any standard
+/// proposal, in either order: `GroupContextExtensions` (proposal type 7, an empty extension list) or `Remove` (type 3, a
+/// leaf index). The hub's `update` route reads a Commit with `decode_commit_proposals` instead, which takes `Add` and `Remove`
+/// beside the change. openmls is not involved in either: the hub reads a Commit with its own decoder and holds no group state,
+/// so the ordering of AppDataUpdate against GroupContextExtensions that openmls's own processing settles is never reached.
 #[test]
 fn an_update_beside_a_standard_proposal_is_refused_in_either_order() {
     let update = app_data_update(
@@ -301,4 +301,61 @@ fn an_update_beside_a_standard_proposal_is_refused_in_either_order() {
             );
         }
     }
+}
+
+fn remove_entry(leaf: u32) -> Vec<u8> {
+    [
+        vec![1],
+        3u16.to_be_bytes().to_vec(),
+        leaf.to_be_bytes().to_vec(),
+    ]
+    .concat()
+}
+
+/// The reader of a Commit with a change beside standard proposals: a Remove is a leaf index, in either order.
+#[test]
+fn removes_beside_the_participant_list_change_are_read_as_leaf_indices() {
+    let update = app_data_update(
+        PARTICIPANT_LIST,
+        APP_DATA_UPDATE_OP_UPDATE,
+        Some(&update_of(8)),
+    );
+    for entries in [
+        vec![update.clone(), remove_entry(1), remove_entry(3)],
+        vec![remove_entry(1), update.clone(), remove_entry(3)],
+        vec![remove_entry(1), remove_entry(3), update.clone()],
+    ] {
+        let decoded = decode_commit_proposals(&commit_with(&entries)).unwrap();
+        assert_eq!(decoded.removes, vec![1, 3]);
+        assert!(decoded.adds.is_empty());
+        assert_eq!(
+            decoded.update.proposal_type,
+            MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE
+        );
+        assert_eq!(decoded.update.payload, update_of(8));
+    }
+}
+
+#[test]
+fn a_commit_the_reader_has_no_rule_for_is_refused() {
+    let update = app_data_update(
+        PARTICIPANT_LIST,
+        APP_DATA_UPDATE_OP_UPDATE,
+        Some(&update_of(8)),
+    );
+    let group_context_extensions = [vec![1], 7u16.to_be_bytes().to_vec(), vec![0]].concat();
+    let reference = [vec![MLS_PROPOSAL_OR_REF_REFERENCE], vl(&[7; 32])].concat();
+    // No change at all, only a Remove.
+    assert!(decode_commit_proposals(&commit_with(&[remove_entry(1)])).is_err());
+    // Another standard proposal, or one by reference, beside the change.
+    for other in [group_context_extensions, reference] {
+        assert!(decode_commit_proposals(&commit_with(&[update.clone(), other.clone()])).is_err());
+        assert!(decode_commit_proposals(&commit_with(&[other, update.clone()])).is_err());
+    }
+    // A second change.
+    assert!(decode_commit_proposals(&commit_with(&[update.clone(), update.clone()])).is_err());
+    // A Remove cut short.
+    let mut cut = remove_entry(1);
+    cut.truncate(cut.len() - 1);
+    assert!(decode_commit_proposals(&commit_with(&[update, cut])).is_err());
 }

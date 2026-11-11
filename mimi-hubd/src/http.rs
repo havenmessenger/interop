@@ -776,6 +776,9 @@ fn now_unix_millis() -> u64 {
 }
 
 #[cfg(test)]
+#[path = "http_update_add_tests.rs"]
+mod update_add_tests;
+#[cfg(test)]
 #[path = "http_update_tests.rs"]
 mod update_tests;
 
@@ -1564,6 +1567,11 @@ mod tests {
     /// `real_keypackage` test helper, which is private to that module's test scope) so this
     /// module's tests can round-trip a KeyMaterialResponse against bytes that actually decode.
     fn real_keypackage() -> Vec<u8> {
+        real_keypackage_for(b"bob")
+    }
+
+    /// [`real_keypackage`] whose BasicCredential carries `identity`.
+    pub(super) fn real_keypackage_for(identity: &[u8]) -> Vec<u8> {
         use openmls::ciphersuite::signature::SignaturePublicKey;
         use openmls::credentials::{BasicCredential, CredentialWithKey};
         use openmls::prelude::*;
@@ -1594,7 +1602,7 @@ mod tests {
         let (priv_b, pub_b) = provider.crypto().signature_key_gen(scheme).unwrap();
         let pk = SignaturePublicKey::try_from(pub_b).unwrap();
         let cwk = CredentialWithKey {
-            credential: BasicCredential::new(b"bob".to_vec()).into(),
+            credential: BasicCredential::new(identity.to_vec()).into(),
             signature_key: pk,
         };
         let signer = S {

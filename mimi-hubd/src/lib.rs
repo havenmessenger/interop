@@ -29,7 +29,7 @@ pub mod peer;
 pub mod store;
 pub mod tls;
 
-use mimi_core::commit_wire::decode_single_custom_proposal_commit;
+use mimi_core::commit_wire::{decode_commit_proposals, DecodedCommit};
 use mimi_core::consent::{
     validate_consent_entry, ConsentEntry, ConsentOperation, KeyPackageAccess,
 };
@@ -771,13 +771,20 @@ impl Provider {
         commit_bytes: &[u8],
         now_unix: u64,
     ) -> Result<(), UpdateRefusal> {
-        let decoded = decode_single_custom_proposal_commit(commit_bytes)
+        let commit = decode_commit_proposals(commit_bytes)
             .map_err(|_| UpdateRefusal::Invalid("the commit is not one this hub can read"))?;
+        // A KeyPackage the gate refuses (a foreign suite, a bad signature) refuses the whole Commit before anything changes.
+        for added in &commit.adds {
+            mimi_core::gate::mimi_gate_keypackage(&added.key_package)
+                .map_err(|_| UpdateRefusal::NotAllowed)?;
+        }
+        let decoded = &commit.update;
         match decoded.proposal_type {
             MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE => {
                 let update = decode_participant_list_update(&decoded.payload).map_err(|_| {
                     UpdateRefusal::Invalid("the participant list update is malformed")
                 })?;
+                self.check_commit_against_list(room_uri, &commit, &update)?;
                 self.apply_participant_list_update(room_uri, &update, now_unix)
             }
             MIMI_ROLES_LIST_PROPOSAL_TYPE => {
@@ -785,6 +792,11 @@ impl Provider {
                     .map_err(|_| UpdateRefusal::Invalid("the role list is malformed"))?;
                 self.assert_hub_of_record(room_uri)
                     .map_err(|_| UpdateRefusal::NotAllowed)?;
+                self.check_commit_against_list(
+                    room_uri,
+                    &commit,
+                    &ParticipantListUpdate::default(),
+                )?;
                 // The roles replace the room's roles; the base policy stays as it was, or is the draft's default
                 // while the room has none.
                 let base = self
@@ -799,6 +811,11 @@ impl Provider {
                     .map_err(|_| UpdateRefusal::Invalid("the base room policy is malformed"))?;
                 self.assert_hub_of_record(room_uri)
                     .map_err(|_| UpdateRefusal::NotAllowed)?;
+                self.check_commit_against_list(
+                    room_uri,
+                    &commit,
+                    &ParticipantListUpdate::default(),
+                )?;
                 // A base policy applies to roles, so a room with none stored takes the roles first.
                 let stored = self
                     .room_policy(room_uri)
@@ -819,6 +836,56 @@ impl Provider {
                 "the proposal type is not recognized",
             )),
         }
+    }
+
+    /// What a Commit's `Add` and `Remove` proposals must say beside its change (when it has any), checked against the list the room holds now
+    /// and the update (§7.5): every user the update adds has an `Add` for one of its clients, no `Add` is for a user who is
+    /// neither listed nor added by the update, and an update that removes users has a `Remove` to go with them. A `Remove`
+    /// is a leaf index and the hub holds no ratchet tree, so which user it is cannot be checked; a `Remove` without a
+    /// removed user (one device of a listed user) is allowed, and an `Add` for a listed user (a second device) too.
+    fn check_commit_against_list(
+        &self,
+        room_uri: &str,
+        commit: &DecodedCommit,
+        update: &ParticipantListUpdate,
+    ) -> Result<(), UpdateRefusal> {
+        const MISMATCH: UpdateRefusal =
+            UpdateRefusal::Invalid("the Commit's Add and Remove proposals do not match its change");
+        self.assert_hub_of_record(room_uri)
+            .map_err(|_| UpdateRefusal::NotAllowed)?;
+        // A Commit with the change alone is read as it always was: a participant can be listed before any client is added.
+        if commit.adds.is_empty() && commit.removes.is_empty() {
+            return Ok(());
+        }
+        let rows = self
+            .store
+            .list_participant_rows(room_uri)
+            .map_err(|_| UpdateRefusal::Store)?;
+        let named = |identity: &[u8]| -> bool {
+            std::str::from_utf8(identity).is_ok_and(|uri| {
+                rows.iter().any(|row| row.member_uri == uri)
+                    || update
+                        .added_participants
+                        .iter()
+                        .any(|added| added.user_uri == uri)
+            })
+        };
+        if commit.adds.iter().any(|added| !named(&added.identity)) {
+            return Err(MISMATCH);
+        }
+        for added in &update.added_participants {
+            if !commit
+                .adds
+                .iter()
+                .any(|add| add.identity == added.user_uri.as_bytes())
+            {
+                return Err(MISMATCH);
+            }
+        }
+        if !update.removed_indices.is_empty() && commit.removes.is_empty() {
+            return Err(MISMATCH);
+        }
+        Ok(())
     }
 
     /// Validate and store a room policy that arrived in an update.

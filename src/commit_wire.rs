@@ -432,6 +432,178 @@ pub fn decode_single_custom_proposal_commit(
     })
 }
 
+/// The proposal type of an `Add` and of a `Remove` (RFC 9420 §12.1.1 and §12.1.3).
+const MLS_PROPOSAL_TYPE_ADD: u16 = 0x0001;
+const MLS_PROPOSAL_TYPE_REMOVE: u16 = 0x0003;
+
+/// A client a Commit adds: the identity bytes of the credential in its KeyPackage, and the KeyPackage as sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddedClient {
+    /// `Credential::identity`, which for a `BasicCredential` is read as the user URI of the client's user (DIV-10).
+    pub identity: Vec<u8>,
+    pub key_package: Vec<u8>,
+}
+
+/// What a `PublicMessage`-wrapped Commit proposes: one participant-list or room-policy change, the clients it adds and the
+/// leaves it removes. The hub holds no ratchet tree, so a removed leaf is a number and never a user.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedCommit {
+    pub update: DecodedCustomProposal,
+    pub adds: Vec<AddedClient>,
+    pub removes: Vec<u32>,
+}
+
+/// The `Commit.proposals` window of a member-sent `PublicMessage` Commit, read through the rewrite of its AppDataUpdates and
+/// checked whole by openmls's own decoder.
+fn proposals_window(bytes: &[u8]) -> Result<Vec<u8>, WireError> {
+    let normalized = normalize_app_data_updates(bytes)?;
+    let bytes = normalized.as_ref().map_or(bytes, |n| n.bytes.as_slice());
+    require_complete_public_message_commit(bytes)?;
+    let (version, rest) = read_u16(bytes, "MLSMessage.version")?;
+    if version != MLS_PROTOCOL_VERSION_MLS10 {
+        return Err(WireError::Codec {
+            what: "MLSMessage.version",
+            detail: format!("unsupported MLS protocol version {version}"),
+        });
+    }
+    let (wire_format, rest) = read_u16(rest, "MLSMessage.wire_format")?;
+    if wire_format != MLS_WIRE_FORMAT_PUBLIC_MESSAGE {
+        return Err(WireError::Codec {
+            what: "MLSMessage.wire_format",
+            detail: format!("expected a PublicMessage (1), got {wire_format}"),
+        });
+    }
+    let (_group_id, rest) = read_opaque_vec(rest, "FramedContent.group_id")?;
+    let (_epoch, rest) = read_u64(rest, "FramedContent.epoch")?;
+    let (sender_type, rest) = read_u8(rest, "Sender.sender_type")?;
+    if sender_type != MLS_SENDER_TYPE_MEMBER {
+        return Err(WireError::Codec {
+            what: "Sender.sender_type",
+            detail: format!(
+                "unsupported sender type {sender_type} (only member-sent Commits are read)"
+            ),
+        });
+    }
+    let (_leaf_index, rest) = read_u32(rest, "Sender.leaf_index")?;
+    let (_authenticated_data, rest) = read_opaque_vec(rest, "FramedContent.authenticated_data")?;
+    let (content_type, rest) = read_u8(rest, "FramedContent.content_type")?;
+    if content_type != MLS_CONTENT_TYPE_COMMIT {
+        return Err(WireError::Codec {
+            what: "FramedContent.content_type",
+            detail: format!("expected commit (3), got {content_type}"),
+        });
+    }
+    let (window, _rest) = read_opaque_vec(rest, "Commit.proposals")?;
+    Ok(window)
+}
+
+/// Read a Commit that proposes ONE participant-list or room-policy change beside any number of `Add` and `Remove`
+/// proposals, in any order. Each `Add` is read by openmls's own KeyPackage decoder, which says where it ends; a `Remove` is a
+/// leaf index. Anything else in the list (a `GroupContextExtensions`, `Update`, `PreSharedKey`, `ReInit`,
+/// `ExternalInit`, `SelfRemove`, a proposal by reference, a second change, or a Commit with no change) is refused, so the
+/// hub never reads a proposal it has no rule for. No signature or membership is verified here, and no group state is held.
+pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError> {
+    let window = proposals_window(bytes)?;
+    let budget = crate::protocol_wire::MAX_RUN_ELEMENTS;
+    let mut update: Option<DecodedCustomProposal> = None;
+    let mut adds = Vec::new();
+    let mut removes = Vec::new();
+    let mut at: &[u8] = &window;
+    let mut entries = 0usize;
+    while !at.is_empty() {
+        entries += 1;
+        if entries > budget {
+            return Err(WireError::RunBudgetExceeded {
+                what: "Commit.proposals",
+                detail: format!("run exceeds the {budget}-element budget"),
+            });
+        }
+        let (tag, body) = read_u8(at, "ProposalOrRef.tag")?;
+        if tag != MLS_PROPOSAL_OR_REF_INLINE {
+            return Err(WireError::Codec {
+                what: "ProposalOrRef.tag",
+                detail: "by-reference (proposal_ref) proposals are not supported - send by value"
+                    .into(),
+            });
+        }
+        let (proposal_type, body) = read_u16(body, "Proposal.proposal_type")?;
+        match proposal_type {
+            MLS_PROPOSAL_TYPE_ADD => {
+                let (key_package, tail) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        openmls::prelude::KeyPackageIn::tls_deserialize_bytes(body)
+                    }))
+                    .map_err(|_| WireError::Codec {
+                        what: "Add.key_package",
+                        detail: "malformed KeyPackage (decoder panicked)".into(),
+                    })?
+                    .map_err(|e| WireError::Codec {
+                        what: "Add.key_package",
+                        detail: e.to_string(),
+                    })?;
+                // Only a BasicCredential names a client here; its identity bytes are read as the user URI (DIV-10).
+                let identity = openmls::credentials::BasicCredential::try_from(
+                    key_package.unverified_credential().credential,
+                )
+                .map_err(|_| WireError::Codec {
+                    what: "Add.key_package",
+                    detail: "the KeyPackage's credential is not a BasicCredential".into(),
+                })?
+                .identity()
+                .to_vec();
+                adds.push(AddedClient {
+                    identity,
+                    key_package: body[..body.len() - tail.len()].to_vec(),
+                });
+                at = tail;
+            }
+            MLS_PROPOSAL_TYPE_REMOVE => {
+                let (leaf, tail) = read_u32(body, "Remove.removed")?;
+                removes.push(leaf);
+                at = tail;
+            }
+            _ => {
+                let (payload, tail) = read_opaque_vec(body, "Proposal.custom_payload")?;
+                if !is_a_change_this_crate_reads(proposal_type) {
+                    return Err(WireError::Codec {
+                        what: "Proposal.proposal_type",
+                        detail: format!(
+                            "proposal type {proposal_type:#06x} is not read here (only Add, Remove and one participant-list or room-policy change)"
+                        ),
+                    });
+                }
+                if update.is_some() {
+                    return Err(WireError::Codec {
+                        what: "Commit.proposals",
+                        detail: "a second participant-list or room-policy change in one Commit"
+                            .into(),
+                    });
+                }
+                update = Some(DecodedCustomProposal {
+                    proposal_type,
+                    payload,
+                });
+                at = tail;
+            }
+        }
+    }
+    let update = update.ok_or_else(|| WireError::Codec {
+        what: "Commit.proposals",
+        detail: "the Commit carries no participant-list or room-policy change".into(),
+    })?;
+    Ok(DecodedCommit {
+        update,
+        adds,
+        removes,
+    })
+}
+
+const fn is_a_change_this_crate_reads(proposal_type: u16) -> bool {
+    proposal_type == crate::participant_list::MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE
+        || proposal_type == crate::room_policy::MIMI_ROLES_LIST_PROPOSAL_TYPE
+        || proposal_type == crate::room_policy::MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE
+}
+
 fn read_u32<'a>(bytes: &'a [u8], what: &'static str) -> Result<(u32, &'a [u8]), WireError> {
     let arr: [u8; 4] = bytes
         .get(..4)

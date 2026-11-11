@@ -132,7 +132,7 @@ design), plus the receiver-side verification the draft describes. The implementa
 compute or verify `server_frank`; `SubmitMessageResponse` therefore omits `frank`, and `reportAbuse`
 rejects attached `AbusiveMessage` values rather than accepting them unverified.
 
-## DIV-10 - CLOSED for a Commit carrying a single custom proposal; `roomPolicy`/`memberRole`/`addParticipant`/`authorizeSender` still have no wire route of their own
+## DIV-10 - CLOSED for a Commit carrying one change, with or without `Add` and `Remove`; `roomPolicy`/`memberRole`/`addParticipant`/`authorizeSender` still have no wire route of their own
 
 **This entry has been rewritten twice already this session as the real picture came into focus -
 each rewrite is kept below rather than silently replaced, per this file's own discipline of
@@ -141,8 +141,9 @@ here called blocked on group-state machinery was not blocked on that at all; it 
 now wired end to end for both Haven custom proposal types.
 
 `POST /mimi/pl/update/{roomId}` (§5.3) takes an `UpdateRequest`, a `HandshakeBundle` whose
-`PublicMessage`-wrapped MLS Commit carries exactly one custom proposal. `mimi_core::commit_wire::decode_single_custom_proposal_commit` reads
-the proposal's type and payload - independent of openmls's own (crate-private) `Commit` type,
+`PublicMessage`-wrapped MLS Commit carries exactly one change (and, since the rewrite below, any `Add` and `Remove`
+proposals beside it). `mimi_core::commit_wire::decode_commit_proposals` reads
+the change's type and payload and the Adds and Removes - independent of openmls's own (crate-private) `Commit` type,
 hand-coded the same way every other MIMI-specific structure in this codebase is - without verifying
 the Commit's signature or holding any group state, matching RFC 9420's own delivery-service trust
 model (the DS is not expected to do either; that is the receiving member's job). Commits on this
@@ -159,21 +160,29 @@ without needing that machinery in the first place.
   listed. The list an update is checked against is the one before it, so removing a user and
   adding the same user in one update is refused too; that is this hub's reading of §7.5, which
   gives no example. §7.5 also has the indices hold across more than one `ParticipantListUpdate` in
-  a Commit; this hub accepts a single custom proposal per Commit (below), so that case is refused
+  a Commit; this hub accepts one change per Commit (below), so that case is refused
   rather than applied.
 - A room-policy change is an AppDataUpdate for `roles_list` or `base_room_policy` (DIV-15); the policy it
   produces is validated (`RoomPolicy::validate`) before it is stored, the same as one set through the
   JSON-compat `roomPolicy` route.
-- A Commit that mixes the custom proposal with a standard MLS proposal (Add, Remove, ...) in the
-  same list is refused, not decoded: skipping past a standard proposal's own body (an `Add`, for
-  instance, embeds a full KeyPackage) needs that proposal's own decoder, which is out of scope. A
-  sender that wants this hub to read the change sends it as its own Commit.
+- **A Commit with `Add` and `Remove` beside the change is read.** A Commit may carry one participant-list or room-policy
+  change in any order with any number of `Add` and `Remove` proposals (-07 §3.2: "Alice adds Bob to the Room"). Each `Add`
+  is read by openmls's own KeyPackage decoder, which says where it ends, and its KeyPackage goes through the same gate as
+  any other (the suite, the signature); one the gate refuses refuses the whole Commit, answered `notAllowed`. A `Remove` is
+  a leaf index. When the Commit has either, §7.5 is checked against what it says, against the list the room holds now:
+  every user the change adds has an `Add` for one of its clients; no `Add` is for a user who is neither listed nor added
+  by the change; and a change that removes users has a `Remove` beside it. Otherwise the Commit is `invalidProposal` and
+  nothing changes. Two limits stay: the hub holds no ratchet tree, so a `Remove` is a number and never a user (a `Remove`
+  with no user removed from the list is read as one device leaving, and an `Add` for a listed user as a second device), and
+  the credential-to-user binding is open, so for a `BasicCredential` the identity bytes are read as the user URI (an
+  X.509 credential is refused). A Commit with the change alone is read as it always was, so a participant can be listed
+  before any client is added. A Commit that carries a `GroupContextExtensions`, `Update`, `PreSharedKey`, `ReInit`,
+  `ExternalInit`, `SelfRemove`, a proposal by reference, a second change, or no change is still refused, whichever order
+  it is in.
 - **openmls and this path.** The hub reads a Commit with its own decoder and holds no group state, so none of the
   group-processing fixes in other openmls revisions (external AppDataUpdate proposals, the order of AppDataUpdate before
   GroupContextExtensions, an `app_data_dictionary` kept in place on update, a KeyPackage consumed only on a Welcome join) is
-  reached by `mimi-core` or `mimi-hubd`: they build and process MLS groups only in their tests. A Commit that carries an
-  AppDataUpdate beside a `GroupContextExtensions`, `Remove` or any other proposal is refused in either order, by this hub's
-  one-proposal rule, whichever openmls revision is linked (`an_update_beside_a_standard_proposal_is_refused_in_either_order`).
+  reached by `mimi-core` or `mimi-hubd`: they build and process MLS groups only in their tests.
 - **Framing.** The request body is the draft's `UpdateRequest { HandshakeBundle }` and the answer
   is an `UpdateRoomResponse` in a 200: `success` with the hub's acceptance time in milliseconds;
   `notAllowed` for a room this hub does not host, a bundle whose Welcome or GroupInfo is under
