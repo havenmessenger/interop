@@ -1,4 +1,4 @@
-//! MIMI content codec (content-09 §4-6).
+//! MIMI content codec (content-09 §4-6, read and written as content-10; see DIVERGENCES DIV-17).
 //!
 //! Encodes/decodes the MIMI **content container** (the message body that travels INSIDE the
 //! MLS-encrypted application message). This is a client concern: a MIMI *provider* only routes
@@ -214,6 +214,15 @@ pub enum ContentError {
     /// A mimiExtensions constraint (§4.4 unique keys / §6.2 key type+length) was violated.
     #[error("{0}")]
     Extension(String),
+    /// content-10 §6.1: the document uses an indefinite-length string, array or map, which a receiver MUST reject.
+    #[error("content-10 §6.1: indefinite-length CBOR is not allowed ({0})")]
+    IndefiniteLength(&'static str),
+    /// content-10 §4.1: a `senderUri` or `roomUri` extension does not match the URI the enclosing protocol gave.
+    #[error("{0}")]
+    ExtensionUri(String),
+    /// content-10 §4.5: an external part's `contentHash` is not the hash of the content as stored.
+    #[error("{0}")]
+    ContentHash(String),
     /// content-09 §7.1.1: GFM-MIMI content carried a raw HTML tag (nohtml is MANDATORY).
     #[error("GFM-MIMI content contains a raw HTML tag; content-09 §7.1.1 nohtml is MANDATORY")]
     RawHtmlInGfm,
@@ -438,7 +447,7 @@ fn value_to_nested_part(v: &Value, depth: usize) -> Result<NestedPart, ContentEr
                     .as_text()
                     .ok_or_else(|| wrong("contentType"))?
                     .to_string(),
-                url: a[4].as_text().ok_or_else(|| wrong("url"))?.to_string(),
+                url: url_text(&a[4]).ok_or_else(|| wrong("url"))?,
                 // Note: the CDDL bounds these to `.size 4`/`.size 2`/`.size 1`
                 // respectively (u32/u16/u8 range); `as` truncated silently on an out-of-range
                 // CBOR integer instead of rejecting it (e.g. expires=4294967296 became 0).
@@ -515,6 +524,7 @@ pub fn from_content08_cbor(bytes: &[u8]) -> Result<MimiContent, ContentError> {
     // the reader has bytes left -- a `Cursor` lets us check the position afterward, so a second
     // (trailing) CBOR item appended to an otherwise-valid vector is rejected rather than silently
     // ignored.
+    reject_indefinite_length(bytes)?;
     let mut cursor = std::io::Cursor::new(bytes);
     let v: Value =
         ciborium::de::from_reader_with_recursion_limit(&mut cursor, MAX_CBOR_RECURSION_DEPTH)
@@ -773,6 +783,178 @@ pub fn validate_extensions(entries: &[(Vec<u8>, Vec<u8>)]) -> Result<(), Content
         }
     }
     Ok(())
+}
+
+/// content-10 §4.5 `url: tstr`: an untagged text string. A content-09 peer's CDDL said `uri`, which the CBOR prelude types
+/// as text under tag 32; a receiver reads both and this codec emits the untagged form (DIVERGENCES DIV-17).
+fn url_text(v: &Value) -> Option<String> {
+    match v {
+        Value::Text(s) => Some(s.clone()),
+        Value::Tag(32, inner) => inner.as_text().map(str::to_owned),
+        _ => None,
+    }
+}
+
+/// content-10 §6.1: "Receivers MUST reject a MIMI content document that uses indefinite length encoding". Walks the CBOR
+/// items of `bytes` by their heads (never trusting a length it has not bounded), and refuses the first indefinite-length
+/// string, array or map, or break byte. Run before the document is materialized, so the refusal does not depend on what a
+/// general decoder would accept.
+///
+/// # Errors
+/// [`ContentError::IndefiniteLength`] for an indefinite-length item or a break; [`ContentError::Decode`] for a head or
+/// length that does not fit the bytes.
+pub fn reject_indefinite_length(bytes: &[u8]) -> Result<(), ContentError> {
+    let cut = || ContentError::Decode("CBOR item cut short".into());
+    let mut at = 0usize;
+    // Items still to read: each array/map adds its own elements, so the walk is a loop and never recurses.
+    let mut owed: Vec<u64> = vec![1];
+    while let Some(top) = owed.last_mut() {
+        if *top == 0 {
+            owed.pop();
+            continue;
+        }
+        *top -= 1;
+        let head = *bytes.get(at).ok_or_else(cut)?;
+        at += 1;
+        let (major, info) = (head >> 5, head & 0x1f);
+        let extra = match info {
+            0..=23 => 0,
+            24 => 1,
+            25 => 2,
+            26 => 4,
+            27 => 8,
+            31 => {
+                return Err(ContentError::IndefiniteLength(match major {
+                    2 => "byte string",
+                    3 => "text string",
+                    4 => "array",
+                    5 => "map",
+                    _ => "break",
+                }))
+            }
+            _ => {
+                return Err(ContentError::Decode(
+                    "CBOR head uses a reserved length".into(),
+                ))
+            }
+        };
+        let arg_bytes = bytes.get(at..at + extra).ok_or_else(cut)?;
+        at += extra;
+        let arg = if info < 24 {
+            u64::from(info)
+        } else {
+            arg_bytes.iter().fold(0u64, |n, b| (n << 8) | u64::from(*b))
+        };
+        match major {
+            2 | 3 => {
+                let n = usize::try_from(arg).map_err(|_| cut())?;
+                at = at
+                    .checked_add(n)
+                    .filter(|end| *end <= bytes.len())
+                    .ok_or_else(cut)?;
+            }
+            4 => {
+                if owed.len() > MAX_CBOR_RECURSION_DEPTH {
+                    return Err(ContentError::Decode("CBOR nests too deeply".into()));
+                }
+                owed.push(arg);
+            }
+            5 => {
+                if owed.len() > MAX_CBOR_RECURSION_DEPTH {
+                    return Err(ContentError::Decode("CBOR nests too deeply".into()));
+                }
+                owed.push(arg.checked_mul(2).ok_or_else(cut)?);
+            }
+            6 => {
+                // A tag wraps one item.
+                if let Some(top) = owed.last_mut() {
+                    *top += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// content-10 §4.1: if a `senderUri` (key 1) or a `roomUri` (key 2) is present in the MIMI content extensions, its value MUST
+/// match the URI the enclosing protocol gave, and the receiver MUST reject the message when it does not. `enclosing_*` is the
+/// URI as the protocol made it available (for MLS, from the credential and the group's room).
+///
+/// # Errors
+/// [`ContentError::ExtensionUri`] for a present value that is not a text string or does not match.
+pub fn validate_extension_uris(
+    entries: &[(Vec<u8>, Vec<u8>)],
+    enclosing_sender_uri: &str,
+    enclosing_room_uri: &str,
+) -> Result<(), ContentError> {
+    for (key, value) in entries {
+        let (name, enclosing) = match key.as_slice() {
+            [0x01] => ("senderUri", enclosing_sender_uri),
+            [0x02] => ("roomUri", enclosing_room_uri),
+            _ => continue,
+        };
+        let v: Value = ciborium::de::from_reader(value.as_slice()).map_err(|e| {
+            ContentError::ExtensionUri(format!("the {name} extension is not CBOR: {e}"))
+        })?;
+        match v.as_text() {
+            Some(text) if text == enclosing => {}
+            Some(_) => {
+                return Err(ContentError::ExtensionUri(format!(
+                "content-10 §4.1: the {name} extension does not match the enclosing protocol's URI"
+            )))
+            }
+            None => {
+                return Err(ContentError::ExtensionUri(format!(
+                    "content-10 §4.1: the {name} extension is not a text string"
+                )))
+            }
+        }
+    }
+    Ok(())
+}
+
+/// content-10 §4.5: the `contentHash` of an external part is computed over the content as stored at the URL, which is the
+/// ciphertext when `encAlg` is not zero. True when `stored` hashes to the part's `contentHash` under its `hashAlg`.
+///
+/// # Errors
+/// [`ContentError::ContentHash`] when the part is not an external part, or its `hashAlg` is one this build cannot compute.
+pub fn external_content_hash_matches(part: &PartBody, stored: &[u8]) -> Result<bool, ContentError> {
+    let PartBody::External {
+        hash_alg,
+        content_hash,
+        ..
+    } = part
+    else {
+        return Err(ContentError::ContentHash(
+            "only an external part carries a contentHash".into(),
+        ));
+    };
+    let algorithm = crate::message_id::HashAlgorithm::from_id(*hash_alg).map_err(|_| {
+        ContentError::ContentHash(format!("hashAlg {hash_alg} is not one this build computes"))
+    })?;
+    Ok(algorithm.digest(stored).as_slice() == content_hash.as_slice())
+}
+
+/// One message of a topic, for ordering.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThreadEntry {
+    pub message_id: MessageId,
+    /// The sender's own estimate of when it sent the message, in milliseconds since the epoch.
+    pub sender_timestamp_ms: u64,
+    /// When the hub accepted it, when the receiver knows.
+    pub hub_accepted_ms: Option<u64>,
+}
+
+/// content-10 §4.2: messages of a topic sort by the sender's timestamp estimate, and by the hub accepted timestamp when it is
+/// available. Of two with the same timestamp, the lexically lowest message ID sorts earlier.
+pub fn sort_thread(entries: &mut [ThreadEntry]) {
+    entries.sort_by(|a, b| {
+        let key = |e: &ThreadEntry| e.hub_accepted_ms.unwrap_or(e.sender_timestamp_ms);
+        key(a)
+            .cmp(&key(b))
+            .then_with(|| a.message_id.cmp(&b.message_id))
+    });
 }
 
 /// content-09 §7.1 (F5): the set of content types a receiver MUST be able to receive.
@@ -1611,5 +1793,287 @@ mod tests {
             authorize_replacement("mimi://h/u/a", "mimi://h/u/a", &empty, false).unwrap(),
             ReplacementKind::Retraction
         );
+    }
+
+    // ── content-10 ──────────────────────────────────────────────────────────────────────────────────
+
+    fn external_part(hash: Vec<u8>) -> NestedPart {
+        NestedPart {
+            disposition: Disposition::Attachment,
+            language: "en".to_string(),
+            body: PartBody::External {
+                content_type: "image/png".to_string(),
+                url: "https://assets.example/x".to_string(),
+                expires: 1_000,
+                size: 4096,
+                enc_alg: 1,
+                key: vec![1; 16],
+                nonce: vec![2; 12],
+                aad: vec![],
+                hash_alg: 1,
+                content_hash: hash,
+                description: "a picture".to_string(),
+                filename: "x.png".to_string(),
+            },
+        }
+    }
+
+    /// The encoded document with `change` applied to its decoded CBOR value, then written out again.
+    fn with_value(c: &MimiContent, change: impl FnOnce(&mut Vec<Value>)) -> Vec<u8> {
+        let mut v: Value =
+            ciborium::de::from_reader(to_content08_cbor(c).unwrap().as_slice()).unwrap();
+        change(v.as_array_mut().unwrap());
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&v, &mut bytes).unwrap();
+        bytes
+    }
+
+    /// content-10 §4.5: `url` is an untagged text string. A content-09 peer's `uri` is tag 32 over text: both are read, and
+    /// what is written is the untagged form.
+    #[test]
+    fn a_url_is_written_untagged_and_read_tagged_or_not() {
+        let mut c = sample();
+        c.nested_part = external_part(vec![3; 32]);
+        let untagged = to_content08_cbor(&c).unwrap();
+        let tagged = with_value(&c, |top| {
+            let np = top[6].as_array_mut().unwrap();
+            let url = np[4].as_text().unwrap().to_owned();
+            np[4] = Value::Tag(32, Box::new(Value::Text(url)));
+        });
+        assert_ne!(tagged, untagged, "sanity: the tag is on the wire");
+        assert!(tagged.windows(2).any(|w| w == [0xd8, 0x20]));
+        let read =
+            from_content08_cbor(&tagged).expect("a tagged url from a content-09 peer is read");
+        assert_eq!(read, c);
+        assert_eq!(
+            to_content08_cbor(&read).unwrap(),
+            untagged,
+            "and written untagged"
+        );
+        assert!(!untagged.windows(2).any(|w| w == [0xd8, 0x20]));
+        // Any other tag, or a tag over a non-text value, is not a url.
+        for bad in [
+            Value::Tag(33, Box::new(Value::Text("https://assets.example/x".into()))),
+            Value::Tag(32, Box::new(Value::Bytes(vec![1]))),
+        ] {
+            let bytes = with_value(&c, |top| top[6].as_array_mut().unwrap()[4] = bad.clone());
+            assert!(from_content08_cbor(&bytes).is_err());
+        }
+    }
+
+    /// content-10 §4.4: an extension value has no 4095-byte limit.
+    #[test]
+    fn an_extension_value_over_4095_bytes_is_read() {
+        let mut c = sample();
+        let long = Value::Text("x".repeat(5000));
+        let mut value = Vec::new();
+        ciborium::ser::into_writer(&long, &mut value).unwrap();
+        c.mimi_extensions = vec![(vec![0x18, 0x63], value.clone())];
+        let bytes = to_content08_cbor(&c).unwrap();
+        assert_eq!(
+            from_content08_cbor(&bytes).unwrap().mimi_extensions[0].1,
+            value
+        );
+    }
+
+    /// content-10 §6.1: indefinite-length CBOR is rejected on receive, wherever it sits and of whichever kind.
+    #[test]
+    fn indefinite_length_cbor_is_rejected_wherever_it_sits() {
+        let good = to_content08_cbor(&sample()).unwrap();
+        assert!(
+            from_content08_cbor(&good).is_ok(),
+            "sanity: definite length reads"
+        );
+        // The outer array as an indefinite array: 0x9f ... 0xff.
+        let mut outer = vec![0x9f];
+        outer.extend_from_slice(&good[1..]);
+        outer.push(0xff);
+        assert!(matches!(
+            from_content08_cbor(&outer),
+            Err(ContentError::IndefiniteLength("array"))
+        ));
+        // An indefinite byte string for the topic id, and an indefinite text string for the language, each one chunk.
+        let topic = with_value(&sample(), |_| {});
+        let at = topic
+            .windows(6)
+            .position(|w| w == [0x45, b't', b'o', b'p', b'i', b'c'])
+            .expect("the topic id is on the wire");
+        let mut bstr = topic[..at].to_vec();
+        bstr.extend_from_slice(&[0x5f, 0x45, b't', b'o', b'p', b'i', b'c', 0xff]);
+        bstr.extend_from_slice(&topic[at + 6..]);
+        assert!(matches!(
+            from_content08_cbor(&bstr),
+            Err(ContentError::IndefiniteLength("byte string"))
+        ));
+        // An indefinite map for the extensions.
+        let mut c = sample();
+        c.mimi_extensions = vec![(vec![0x01], vec![0x61, b'a'])];
+        let with_ext = to_content08_cbor(&c).unwrap();
+        let at = with_ext
+            .windows(4)
+            .position(|w| w == [0xa1, 0x01, 0x61, b'a'])
+            .expect("the extension map is on the wire");
+        let mut map = with_ext[..at].to_vec();
+        map.extend_from_slice(&[0xbf, 0x01, 0x61, b'a', 0xff]);
+        map.extend_from_slice(&with_ext[at + 4..]);
+        assert!(matches!(
+            from_content08_cbor(&map),
+            Err(ContentError::IndefiniteLength("map"))
+        ));
+        // A string's own bytes that look like an indefinite marker are not one.
+        let mut quoted = sample();
+        quoted.topic_id = vec![0x9f, 0xbf, 0x5f, 0x7f, 0xff];
+        assert_eq!(
+            from_content08_cbor(&to_content08_cbor(&quoted).unwrap()).unwrap(),
+            quoted
+        );
+    }
+
+    #[test]
+    fn the_walk_refuses_a_cut_head_and_a_reserved_length() {
+        assert!(matches!(
+            reject_indefinite_length(&[0x87]),
+            Err(ContentError::Decode(_))
+        ));
+        assert!(matches!(
+            reject_indefinite_length(&[0x1c]),
+            Err(ContentError::Decode(_))
+        ));
+        assert!(matches!(
+            reject_indefinite_length(&[0x58]),
+            Err(ContentError::Decode(_))
+        ));
+        assert!(reject_indefinite_length(&[0x82, 0x01, 0x02]).is_ok());
+        assert!(reject_indefinite_length(&[0xd8, 0x20, 0x61, b'a']).is_ok());
+    }
+
+    /// content-10 §4.1: a senderUri or roomUri extension must match the enclosing protocol's URI.
+    #[test]
+    fn a_sender_or_room_uri_extension_must_match_the_enclosing_protocol() {
+        let text = |s: &str| {
+            let mut out = Vec::new();
+            ciborium::ser::into_writer(&Value::Text(s.into()), &mut out).unwrap();
+            out
+        };
+        let sender = "mimi://example.com/u/alice-smith";
+        let room = "mimi://example.com/r/engineering_team";
+        let ok = vec![(vec![0x01], text(sender)), (vec![0x02], text(room))];
+        assert!(validate_extension_uris(&ok, sender, room).is_ok());
+        assert!(
+            validate_extension_uris(&[], sender, room).is_ok(),
+            "absent is allowed"
+        );
+        let other = vec![(vec![0x18, 0x63], text("anything"))];
+        assert!(
+            validate_extension_uris(&other, sender, room).is_ok(),
+            "other keys are not read"
+        );
+        let wrong_sender = vec![(vec![0x01], text("mimi://example.com/u/mallory"))];
+        let wrong_room = vec![(vec![0x02], text("mimi://example.com/r/other"))];
+        for bad in [wrong_sender, wrong_room] {
+            assert!(matches!(
+                validate_extension_uris(&bad, sender, room),
+                Err(ContentError::ExtensionUri(_))
+            ));
+        }
+        // The swap: each URI under the other's key does not match.
+        let swapped = vec![(vec![0x01], text(room))];
+        assert!(validate_extension_uris(&swapped, sender, room).is_err());
+        // A value that is not text is refused, not skipped.
+        let not_text = vec![(vec![0x01], vec![0x01])];
+        assert!(validate_extension_uris(&not_text, sender, room).is_err());
+    }
+
+    /// content-10 §4.5: the contentHash is over the content as stored: the ciphertext when encAlg is not zero.
+    #[test]
+    fn the_content_hash_is_over_the_stored_bytes() {
+        use sha2::{Digest as _, Sha256};
+        let ciphertext = b"the stored bytes, as the url serves them".to_vec();
+        let plaintext = b"what the ciphertext opens to".to_vec();
+        let part = external_part(Sha256::digest(&ciphertext).to_vec()).body;
+        assert!(external_content_hash_matches(&part, &ciphertext).unwrap());
+        assert!(
+            !external_content_hash_matches(&part, &plaintext).unwrap(),
+            "the hash of the plaintext is not the hash of what is stored"
+        );
+        // An algorithm this build does not compute is an error and never a mismatch read as a match.
+        let PartBody::External { .. } = &part else {
+            unreachable!()
+        };
+        let mut other = part.clone();
+        if let PartBody::External { hash_alg, .. } = &mut other {
+            *hash_alg = 7;
+        }
+        assert!(matches!(
+            external_content_hash_matches(&other, &ciphertext),
+            Err(ContentError::ContentHash(_))
+        ));
+        let single = PartBody::Single {
+            content_type: "text/plain".into(),
+            content: vec![],
+        };
+        assert!(external_content_hash_matches(&single, &ciphertext).is_err());
+    }
+
+    /// content-10 §4.2: the hub accepted timestamp is preferred when it is available; a tie goes to the lowest message ID.
+    #[test]
+    fn a_thread_sorts_by_the_hub_timestamp_when_it_is_there() {
+        let entry = |id: u8, sender: u64, hub: Option<u64>| ThreadEntry {
+            message_id: vec![id; 32],
+            sender_timestamp_ms: sender,
+            hub_accepted_ms: hub,
+        };
+        // By sender timestamps alone: a (100), b (200), c (300). The hub says b came first.
+        let mut by_sender = vec![
+            entry(3, 300, None),
+            entry(1, 100, None),
+            entry(2, 200, None),
+        ];
+        sort_thread(&mut by_sender);
+        assert_eq!(
+            by_sender
+                .iter()
+                .map(|e| e.message_id[0])
+                .collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        let mut by_hub = vec![
+            entry(1, 100, Some(900)),
+            entry(2, 200, Some(500)),
+            entry(3, 300, Some(700)),
+        ];
+        sort_thread(&mut by_hub);
+        assert_eq!(
+            by_hub.iter().map(|e| e.message_id[0]).collect::<Vec<_>>(),
+            [2, 3, 1]
+        );
+        // The same timestamp: the lexically lowest ID first.
+        let mut tied = vec![
+            entry(9, 10, Some(5)),
+            entry(4, 99, Some(5)),
+            entry(6, 1, Some(5)),
+        ];
+        sort_thread(&mut tied);
+        assert_eq!(
+            tied.iter().map(|e| e.message_id[0]).collect::<Vec<_>>(),
+            [4, 6, 9]
+        );
+    }
+
+    /// The content-10 examples (the reaction's U+2764 heart and its in-reply-to ID) are the instance documents already in
+    /// the table: the draft's text caught up with them, and every one still reads and writes byte for byte.
+    #[test]
+    fn the_table_holds_the_content_10_reaction() {
+        let (_, hex) = OFFICIAL_VECTORS
+            .iter()
+            .find(|(name, _)| *name == "reaction")
+            .unwrap();
+        assert!(hex.contains("e29da4"), "U+2764 as UTF-8");
+        assert!(!hex.contains("e299a5"), "not U+2665");
+        assert!(hex.contains("017ce54837404c3696e0c747b985cb172716d0ed0a3d249ca63ace7d82a096f4"));
+        for (name, hex) in OFFICIAL_VECTORS {
+            let bytes = unhex(hex);
+            reject_indefinite_length(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
     }
 }

@@ -352,6 +352,29 @@ read. The same question gates the JSON-lane `/mimi/v1/notify`, which takes a `ro
   passes mTLS is not otherwise tied to the provider domain in its certificate on the other routes,
   as DIV-6 says for the identities inside a request body.
 
+## DIV-17 - content-10: what `mimi-core` reads and writes against content-09 peers
+
+The content codec follows draft-ietf-mimi-content-10. Its examples are the instance documents already held for -09: the
+draft's text caught up with them (the reaction's heart is U+2764 and its in-reply-to ID is the one in the table), so there
+is no new vector to add and every one still reads and writes byte for byte.
+
+- **URLs.** `url` in an external part is written as an untagged text string (-10 `url: tstr`). A -09 peer's CDDL said
+  `uri`, which is tag 32 over text; the reader takes both and writes the untagged form, so a -09 peer that re-reads our
+  document gets a text string where its own CDDL names a URI. Any other tag, or tag 32 over a non-text value, is refused.
+- **Extension values.** There is no 4095-byte limit on a `mimiExtensions` value (it is gone from the CDDL); the codec never
+  enforced one, and a test now reads a 5000-byte value.
+- **`senderUri` and `roomUri` extensions.** `validate_extension_uris` refuses a document whose extension 1 or 2 does not
+  match the URI the enclosing protocol gave. It takes both URIs as arguments: the caller (the MLS layer) owns them, so
+  the codec's `from_content08_cbor` does not call it.
+- **Indefinite-length CBOR.** `from_content08_cbor` first walks the document by its heads and refuses any indefinite-length
+  string, array or map, or break byte, before a general decoder sees it.
+- **`contentHash`.** `external_content_hash_matches` hashes the bytes as stored (the ciphertext when `encAlg` is not zero)
+  under the part's `hashAlg`; only SHA-256 (1) is computed here, and any other value is an error, never a match.
+- **Thread order.** `sort_thread` prefers the hub accepted timestamp where the receiver has it, else the sender's, and
+  breaks a tie by the lowest message ID.
+- **Not built.** The three `MsgUri` fields of `MessageDerivedValues` (`senderClientUrl`, `senderUserUrl`, `roomUrl`) have no
+  type in this crate, so there is nothing to change for them.
+
 ---
 
 Divergences are revisited as the drafts move and as the accept-path work (DIV-6, DIV-9, DIV-10)
