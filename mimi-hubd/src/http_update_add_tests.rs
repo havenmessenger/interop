@@ -197,7 +197,8 @@ async fn any_other_standard_proposal_beside_the_change_is_still_refused() {
 
 #[tokio::test]
 async fn a_second_change_in_one_commit_is_refused() {
-    let second = [vec![1, 0xF7, 0xA0], vl(&update(&[DAVE], &[]))].concat();
+    // The same change twice: read as the later one it would be applied, so it is refused for being two.
+    let second = [vec![1, 0xF7, 0xA0], vl(&update(&[CAROL], &[]))].concat();
     let commit = commit_around(&update(&[CAROL], &[]), &[add_of(CAROL)], &[second]);
     let (answer, p) = answer_of(commit).await;
     assert!(is_invalid(&answer), "{answer:?}");
