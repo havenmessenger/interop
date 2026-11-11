@@ -264,3 +264,41 @@ fn an_update_cut_short_inside_the_window_is_refused() {
     entry.truncate(entry.len() - 3);
     assert!(decode_single_custom_proposal_commit(&commit_with(&[entry])).is_err());
 }
+
+/// A Commit a peer that proposes the participant-list change beside the standard proposals the same Commit needs, in either
+/// order: `GroupContextExtensions` (proposal type 7, an empty extension list) or `Remove` (type 3, a leaf index). This hub
+/// reads a Commit with exactly one proposal (DIV-10), so each is refused: never read as the update, never partly applied.
+/// openmls is not involved in the refusal: the hub reads a Commit with its own decoder and holds no group state, so the
+/// ordering of AppDataUpdate against GroupContextExtensions that openmls's own processing has to settle is never reached here.
+#[test]
+fn an_update_beside_a_standard_proposal_is_refused_in_either_order() {
+    let update = app_data_update(
+        PARTICIPANT_LIST,
+        APP_DATA_UPDATE_OP_UPDATE,
+        Some(&update_of(8)),
+    );
+    let group_context_extensions = [vec![1], 7u16.to_be_bytes().to_vec(), vec![0]].concat();
+    let remove = [
+        vec![1],
+        3u16.to_be_bytes().to_vec(),
+        1u32.to_be_bytes().to_vec(),
+    ]
+    .concat();
+    for standard in [group_context_extensions, remove] {
+        for entries in [
+            [update.clone(), standard.clone()],
+            [standard.clone(), update.clone()],
+        ] {
+            let sent = commit_with(&entries);
+            assert!(
+                decode_single_custom_proposal_commit(&sent).is_err(),
+                "a Commit of two proposals is not read as one"
+            );
+            // The rewrite for reading does not change what is refused or stored: the bytes the hub forwards are the original.
+            assert!(
+                normalize_app_data_updates(&sent).is_ok(),
+                "the standard proposal is sized by openmls's own decoder, and is not mistaken for part of the update"
+            );
+        }
+    }
+}

@@ -168,6 +168,12 @@ without needing that machinery in the first place.
   same list is refused, not decoded: skipping past a standard proposal's own body (an `Add`, for
   instance, embeds a full KeyPackage) needs that proposal's own decoder, which is out of scope. A
   sender that wants this hub to read the change sends it as its own Commit.
+- **openmls and this path.** The hub reads a Commit with its own decoder and holds no group state, so none of the
+  group-processing fixes in other openmls revisions (external AppDataUpdate proposals, the order of AppDataUpdate before
+  GroupContextExtensions, an `app_data_dictionary` kept in place on update, a KeyPackage consumed only on a Welcome join) is
+  reached by `mimi-core` or `mimi-hubd`: they build and process MLS groups only in their tests. A Commit that carries an
+  AppDataUpdate beside a `GroupContextExtensions`, `Remove` or any other proposal is refused in either order, by this hub's
+  one-proposal rule, whichever openmls revision is linked (`an_update_beside_a_standard_proposal_is_refused_in_either_order`).
 - **Framing.** The request body is the draft's `UpdateRequest { HandshakeBundle }` and the answer
   is an `UpdateRoomResponse` in a 200: `success` with the hub's acceptance time in milliseconds;
   `notAllowed` for a room this hub does not host, a bundle whose Welcome or GroupInfo is under
