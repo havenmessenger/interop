@@ -180,23 +180,43 @@ without needing that machinery in the first place.
   `ExternalInit`, `SelfRemove`, a second change, or no change is still refused, whichever order it is in.
 - **A member leaving (-07 §3.5).** A leaving client cannot remove its own devices, so it sends its proposals to the hub:
   an `update` whose bundle is proposals (`proposalOrCommit` and `moreProposals`) is a leave. The hub takes one
-  participant-list change that only removes participants, with any number of `Remove`s, all member-sent `PublicMessage`s
-  of one epoch, and holds them, each named by its `ProposalRef` (RFC 9420 §5.2, SHA-256 under 0x0001) and kept as sent.
-  The change may arrive as the AppDataUpdate for `0x0022` or as `0xF7A0`. A bundle that adds a participant or changes a
-  role, carries a room-policy change, has two changes, mixes epochs, or has `Remove`s with no change is `invalidProposal`
-  and nothing is held: a Commit of `Remove`s alone is one this hub does not read, so holding those would hold the room.
-  The next Commit at that epoch must include every held proposal by reference (RFC 9420 §12.4: a proposal from another
-  member is included by reference). A reference to nothing held for the Commit's epoch, a reference named twice, or a
-  held proposal left out is `invalidProposal`, with those `ProposalRef`s in `invalidProposals`; nothing changes. A held
-  `Remove` joins the Commit's `Remove`s and the held change becomes its change, and §7.5 is checked as above, so a
-  committer's own change beside a held one is a second change and is refused. A Commit accepted at an epoch clears what
-  was held for it and for every earlier epoch; a bundle for a later epoch drops what was held for earlier ones. Limits:
-  the epoch is read from each message's `FramedContent`, unverified, since the hub holds no group state, and no
-  proposal's signature or membership tag is verified, as for a Commit, so a peer on the allowlist can hold a room's
-  Commits at an epoch with proposals its members cannot verify, as it can already send a Commit they cannot. Which user
-  a `Remove`'s leaf belongs to is not checked (no ratchet tree), nor that the change removes only the sender's own user.
-  Held proposals are not fanned out: the hub sends no `/notify` (see Framing), so the committer learns of them from its
-  own provider. At most a room's participant bound plus one are held per room.
+  participant-list change that only removes participants, with `Remove`s, all member-sent `PublicMessage`s, and holds
+  them, each named by its `ProposalRef` (RFC 9420 §5.2, SHA-256 under 0x0001) and kept as sent. The change may arrive as
+  the AppDataUpdate for `0x0022` or as `0xF7A0`. The next Commit at that epoch must include every held proposal by
+  reference (RFC 9420 §12.4: a proposal from another member is included by reference). A reference to nothing held for
+  the Commit's epoch, a reference named twice, or a held proposal left out is `invalidProposal`, with those
+  `ProposalRef`s in `invalidProposals`; nothing changes. A held `Remove` joins the Commit's `Remove`s and the held change
+  becomes its change, and §7.5 is checked as above, so a committer's own change beside a held one is a second change and
+  is refused.
+  - **Signatures are not verified, and what that costs is bounded by who may ask.** The hub holds no group state, so it
+    verifies neither a proposal's signature nor its membership tag, as for a Commit. A held proposal that the next
+    Commit must include would otherwise let any peer have the hub require someone's removal from the participant list.
+    So every user the change removes must be one whose provider the peer's mTLS certificate authenticates (no
+    certificate, or another provider's user, is `notAllowed`): a provider can have the hub require the removal of its own
+    users only. The hub does not check that the change removes the sender's own user rather than another user of the
+    same provider, which that provider vouches for in any case. A `Remove` is a leaf index, and the hub holds no ratchet
+    tree to tell whose leaf it is, so `Remove`s are not bound to a provider: -07 §3.5 has the leaving client propose the
+    removal of every device of its user, itself included, and the hub takes them as sent. The room's bounds on what it
+    holds and their expiry (below) bound what a leave can make the next Commit carry. Members verify each proposal
+    before committing it, so one they cannot verify, or will not commit, holds the room's Commits at that epoch until it
+    expires.
+  - **Epoch, expiry and bounds.** The hub learns a room's epoch from the Commits it accepts: one past the latest, kept in
+    the store with the room, so it survives a restart. A leave of another epoch is `wrongEpoch` naming the current one,
+    so proposals sent again after their Commit are refused. A room the hub has not yet seen a Commit for (one founded
+    before the hub learned its epoch) takes a leave at the leave's own epoch, which binds only a Commit at that epoch. A
+    held proposal expires after 15 minutes, and an expired one is neither required nor resolvable. One message is at most
+    4 KiB, and a room holds at most its participant bound plus one proposals and 64 KiB of them; past any of these the
+    leave is `notAllowed` saying which, and nothing is held. The checks run in the order above (what the messages are,
+    then who sent them, then the epoch, then the bounds), so only the provider of a participant a leave removes learns
+    the room's epoch or what it holds. A Commit's own epoch is not checked (the hub never answers a Commit
+    `wrongEpoch`); the epoch it is sent in is the one its references are read at.
+  - Refused as a leave (`invalidProposal`, nothing held): a change that adds a participant or changes a role, a
+    room-policy change, two changes, proposals of more than one epoch, or `Remove`s with no change (a Commit of
+    `Remove`s alone is one this hub does not read, so holding those would hold the room). Held proposals are not fanned
+    out: the hub sends no `/notify` (see Framing), so the committer learns of them from its own provider.
+  - **Open: the peer of a Commit is not bound.** `update` takes a Commit from any peer the transport trusts, whatever
+    room it names, as before, so a peer can send a Commit for a room it has no participant in; the leave is bound to the
+    removed users' provider, the Commit is not. Binding the peer to a provider of the room on every `update` is the fix.
 - **openmls and this path.** The hub reads a Commit with its own decoder and holds no group state, so none of the
   group-processing fixes in other openmls revisions (external AppDataUpdate proposals, the order of AppDataUpdate before
   GroupContextExtensions, an `app_data_dictionary` kept in place on update, a KeyPackage consumed only on a Welcome join) is
@@ -212,8 +232,10 @@ without needing that machinery in the first place.
   means they are held for the next Commit. The hub checks that the room URI is under its own
   domain, not that the room exists, and answers `invalidProposal` or `success` for a room it
   hosts, so a peer on the allowlist can learn a room's participant count from those answers.
-  `wrongEpoch` is never answered, because the hub
-  holds no group state and so no epoch. A SQLite failure is a 500 with no body. The Welcome,
+  `wrongEpoch` is answered only to a leave of another epoch than the one the hub learned from
+  the room's latest accepted Commit (above); a Commit is never answered `wrongEpoch`, because the
+  hub holds no group state. A leave past a bound is `notAllowed` saying which bound; it reaches
+  that answer only from the provider of a participant it removes. A SQLite failure is a 500 with no body. The Welcome,
   `GroupInfoOption` and `RatchetTreeOption` of a Commit bundle are read and suite-gated, and are
   neither stored nor relayed: `success` means the participant-list or room-policy change was
   applied, not that the Commit was distributed (§5.3's "will be distributed"). A body that is only
@@ -224,7 +246,11 @@ without needing that machinery in the first place.
 
 Verified against a captured real `openmls` Commit, freshly re-encoded ones each test run, an
 end-to-end participant-list apply, an end-to-end room-policy apply, and rejection cases for an
-unrecognized proposal type and an undecodable body.
+unrecognized proposal type and an undecodable body. The leave is verified end to end (held, then
+included by reference), against openmls's own `ProposalRef` for a proposal it committed by reference,
+one client leaving for two devices of its user, a room the hub saw no Commit for, the learned epoch
+across a reopened store, and against each bound: another provider's user, no certificate, a wrong
+epoch and a replay after the Commit, the count, size and byte bounds, and expiry.
 
 ## DIV-11 - CLOSED for `consent_extensions`; `update`'s fields stay opaque
 

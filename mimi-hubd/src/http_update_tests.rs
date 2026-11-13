@@ -143,7 +143,7 @@ async fn a_room_this_hub_does_not_host_and_a_refused_one_are_answered_with_the_s
 }
 
 #[tokio::test]
-async fn a_bundle_of_proposals_is_refused_with_no_state_change() {
+async fn a_bundle_of_proposals_that_is_not_a_leave_is_refused_with_no_state_change() {
     let (router, p) = app();
     hosted_room_with_alice_and_bob(&p);
     let before = participants(&p);

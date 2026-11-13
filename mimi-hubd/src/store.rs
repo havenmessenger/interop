@@ -141,7 +141,19 @@ CREATE TABLE IF NOT EXISTS pending_proposals (
     ts        INTEGER NOT NULL,
     PRIMARY KEY (room_uri, reference)
 );
+
+-- The epoch a room's next Commit is sent in, as the hub last learned it: one past the epoch of the latest Commit it
+-- accepted for the room. A held proposal must be of this epoch.
+CREATE TABLE IF NOT EXISTS room_epoch (
+    room_uri TEXT PRIMARY KEY,
+    epoch    INTEGER NOT NULL
+);
 ";
+
+/// The `ts` below which a held proposal has expired at `now_unix`.
+fn expired_before(now_unix: u64) -> i64 {
+    i64::try_from(now_unix.saturating_sub(PROPOSAL_TTL_SECS)).unwrap_or(i64::MAX)
+}
 
 // Store-and-forward bounds (anti-DoS; ephemeral relay state). A recipient cannot queue more than
 // these, and items expire - the provider is a delivery service, not durable storage.
@@ -161,8 +173,15 @@ pub const MAX_KEYPACKAGES_PER_USER: i64 = 64;
 // without bound). note<V> is bounded independently at decode time (MAX_RUN_AGGREGATE_BYTES).
 pub const MAX_ABUSE_REPORTS: i64 = 65536;
 // Proposals held for a room's next Commit (anti-flood). A leave takes one Remove per device of the leaving user plus one
-// participant-list change, so the bound is a room's participant bound with room to spare for the change.
+// participant-list change, so the count bound is a room's participant bound with room to spare for the change. A Remove
+// is a few dozen bytes beside its signature and a list change that only removes is a few indices, so one message past
+// 4 KiB is not a leave, and 64 KiB holds the room's count bound of such messages several times over.
 pub const MAX_PENDING_PROPOSALS_PER_ROOM: i64 = MAX_PARTICIPANTS_PER_ROOM + 1;
+pub const MAX_PROPOSAL_BYTES: usize = 4 * 1024;
+pub const MAX_HELD_PROPOSAL_BYTES_PER_ROOM: i64 = 64 * 1024;
+// How long a held proposal binds the room's next Commit. A leave is committed by the next member to commit; one not
+// committed within this is dropped, so a proposal no member can commit holds the room's Commits for at most this long.
+pub const PROPOSAL_TTL_SECS: u64 = 15 * 60;
 
 /// One entry of a room's participants vector as the hub stores it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -785,8 +804,9 @@ impl SqliteStore {
     }
 
     /// Hold `proposals` (each its `ProposalRef` and the message as sent) for the room's next Commit at `epoch`, as one
-    /// transaction. What the room held for an earlier epoch is dropped first, since a Commit can only include proposals
-    /// of its own epoch; a proposal already held is kept as it was. Past the per-room bound nothing is held.
+    /// transaction. What the room held for another epoch, or for longer than [`PROPOSAL_TTL_SECS`], is dropped first; a
+    /// proposal already held is kept as it was. Past the per-room count or byte bound nothing is held, and the error says
+    /// which bound.
     pub fn hold_proposals(
         &self,
         room_uri: &str,
@@ -796,8 +816,8 @@ impl SqliteStore {
     ) -> anyhow::Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
-            "DELETE FROM pending_proposals WHERE room_uri = ?1 AND epoch < ?2",
-            params![room_uri, epoch as i64],
+            "DELETE FROM pending_proposals WHERE room_uri = ?1 AND (epoch <> ?2 OR ts < ?3)",
+            params![room_uri, epoch as i64, expired_before(now_unix)],
         )?;
         for (reference, message) in proposals {
             tx.execute(
@@ -806,46 +826,76 @@ impl SqliteStore {
                 params![room_uri, epoch as i64, reference, message, now_unix as i64],
             )?;
         }
-        let held: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM pending_proposals WHERE room_uri = ?1",
+        let (held, bytes): (i64, i64) = tx.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(LENGTH(message)), 0) FROM pending_proposals WHERE room_uri = ?1",
             params![room_uri],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         if held > MAX_PENDING_PROPOSALS_PER_ROOM {
             anyhow::bail!(
                 "pending proposal cap reached for room ({MAX_PENDING_PROPOSALS_PER_ROOM})"
             );
         }
+        if bytes > MAX_HELD_PROPOSAL_BYTES_PER_ROOM {
+            anyhow::bail!(
+                "pending proposal byte cap reached for room ({MAX_HELD_PROPOSAL_BYTES_PER_ROOM})"
+            );
+        }
         tx.commit()?;
         Ok(())
     }
 
-    /// The proposals held for the room's next Commit at `epoch`, each its `ProposalRef` and the message as sent, in the
-    /// order they arrived.
+    /// The proposals held for the room's next Commit at `epoch` and not expired at `now_unix`, each its `ProposalRef` and
+    /// the message as sent, in the order they arrived.
     pub fn held_proposals(
         &self,
         room_uri: &str,
         epoch: u64,
+        now_unix: u64,
     ) -> anyhow::Result<Vec<(Vec<u8>, Vec<u8>)>> {
         let mut stmt = self.conn.prepare(
             "SELECT reference, message FROM pending_proposals \
-             WHERE room_uri = ?1 AND epoch = ?2 ORDER BY ts, rowid",
+             WHERE room_uri = ?1 AND epoch = ?2 AND ts >= ?3 ORDER BY ts, rowid",
         )?;
         let rows = stmt
-            .query_map(params![room_uri, epoch as i64], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })?
+            .query_map(
+                params![room_uri, epoch as i64, expired_before(now_unix)],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
 
-    /// Drop what the room holds for epoch `epoch` and every earlier one, once a Commit at `epoch` is accepted.
-    pub fn drop_held_proposals_through(&self, room_uri: &str, epoch: u64) -> anyhow::Result<()> {
-        self.conn.execute(
+    /// Once a Commit at `epoch` is accepted: drop what the room holds for that epoch and every earlier one, and record
+    /// that the room's next Commit is at `epoch + 1`, unless the hub already knows a later one.
+    pub fn commit_accepted_at(&self, room_uri: &str, epoch: u64) -> anyhow::Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "DELETE FROM pending_proposals WHERE room_uri = ?1 AND epoch <= ?2",
             params![room_uri, epoch as i64],
         )?;
+        let next = i64::try_from(epoch.saturating_add(1)).unwrap_or(i64::MAX);
+        tx.execute(
+            "INSERT INTO room_epoch (room_uri, epoch) VALUES (?1, ?2) \
+             ON CONFLICT(room_uri) DO UPDATE SET epoch = MAX(epoch, excluded.epoch)",
+            params![room_uri, next],
+        )?;
+        tx.commit()?;
         Ok(())
+    }
+
+    /// The epoch the room's next Commit is sent in, as the hub last learned it from a Commit it accepted; `None` before
+    /// the hub has accepted one for the room.
+    pub fn room_epoch(&self, room_uri: &str) -> anyhow::Result<Option<u64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT epoch FROM room_epoch WHERE room_uri = ?1",
+                params![room_uri],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(|epoch| epoch as u64))
     }
 
     /// Write a room's whole participants vector as ONE SQLite transaction: `rows` become the room's list, in
