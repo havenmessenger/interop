@@ -340,6 +340,26 @@ It refuses when no database is at the path it resolved, and creates none: run wi
 otherwise make a new, empty database at the default path and enroll the handle there, while the hub's own store
 stayed as it was.
 
+## Seeding a hub for a visiting implementation
+
+[`../examples/seed_table.sh`](../examples/seed_table.sh) puts on a running hub what another implementation needs to
+test against it, through the routes above: a user with KeyPackages, a user with none, a consent grant from each to the
+visiting user, and a room whose first participant is the visiting user. Its `check` mode then asks the wire lane what
+that visitor would ask.
+
+```bash
+HUB=https://localhost:8443 CACERT=/tmp/mimi-hubd-demo/ca-cert.pem \
+CERT=/tmp/mimi-hubd-demo/client-cert.pem KEY=/tmp/mimi-hubd-demo/client-key.pem \
+PEER_USER=mimi://other.example/u/alice ../examples/seed_table.sh seed
+```
+
+The KeyPackages are real ones under ciphersuite 0x0001, made by
+[`../examples/seed_fixtures.rs`](../examples/seed_fixtures.rs). Their private keys are never written anywhere, so a
+Welcome made for a seeded user cannot be opened: the users exist for the hub's answers, not to join a group.
+
+`identifierQuery` takes one more step, on the hub's host: `mimi-hubd enroll <handle>` (above). The script's `check`
+says whether the handle it was given is enrolled.
+
 ## What this hub does not do (v1 scope)
 
 - **§5.6 GroupInfo / external-commit join.** Membership is add-driven only.
