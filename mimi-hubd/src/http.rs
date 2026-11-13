@@ -555,17 +555,23 @@ async fn report_abuse_wire(
 /// which applied), or `invalidProposal` for anything this hub cannot read or apply (a `PrivateMessage`, a mixed commit,
 /// an unrecognized proposal type, a bundle of proposals that is not a leave), naming by `ProposalRef` a reference it
 /// holds nothing for or a held proposal the Commit leaves out. A bundle of proposals is a member leaving (protocol-07
-/// §3.5): they are held for the next Commit, which must include them by reference. `wrongEpoch` is never answered: the
-/// hub holds no group state and so no epoch. A store failure is a 500 with no body.
+/// §3.5): they are held for the next Commit, which must include them by reference, and the peer's certificate bounds
+/// what they may remove (see `Provider::hold_leave_proposals`). `wrongEpoch` is answered only to proposals of another
+/// epoch than the one the hub learned from the room's latest accepted Commit; a Commit's own epoch is not checked, as
+/// the hub holds no group state. A store failure is a 500 with no body.
 async fn update_wire(
     State(p): State<SharedProvider>,
     Path(room_id): Path<String>,
+    peer: Option<Extension<PeerCert>>,
     body: Bytes,
 ) -> Response {
     use mimi_core::protocol_wire::UpdateRoomResponse;
 
     let accepted_at = now_unix_millis();
-    let answer = match lock(&p).apply_update_request(&room_id, &body, now_unix()) {
+    let peer = peer
+        .as_ref()
+        .and_then(|Extension(PeerCert(identity))| identity.as_ref());
+    let answer = match lock(&p).apply_update_request(&room_id, &body, peer, now_unix()) {
         Ok(()) => UpdateRoomResponse::Success {
             error_description: String::new(),
             accepted_timestamp: accepted_at,
@@ -576,6 +582,13 @@ async fn update_wire(
         Err(crate::UpdateRefusal::Invalid(why)) => UpdateRoomResponse::InvalidProposal {
             error_description: why.to_string(),
             invalid_proposals: Vec::new(),
+        },
+        Err(crate::UpdateRefusal::WrongEpoch(current_epoch)) => UpdateRoomResponse::WrongEpoch {
+            error_description: crate::UpdateRefusal::WrongEpoch(current_epoch).to_string(),
+            current_epoch,
+        },
+        Err(refusal @ crate::UpdateRefusal::Limit(_)) => UpdateRoomResponse::NotAllowed {
+            error_description: refusal.to_string(),
         },
         Err(crate::UpdateRefusal::InvalidProposals(why, references)) => {
             UpdateRoomResponse::InvalidProposal {

@@ -474,7 +474,7 @@ fn main() {
             &update_request(&cut_roles_commit), "ok", Some("Commit"), "invalidProposal", &[ALICE, BOB], &[ALICE, BOB]),
         update_vector("up-x1-bare-commit", "the Commit alone, without the HandshakeBundle around it",
             &commit_message, "refused", None, "invalidProposal", &[ALICE, BOB]),
-        update_vector("up-x2-bundle-of-proposals", "a HandshakeBundle of proposals instead of a Commit",
+        update_vector("up-x2-bundle-of-proposals", "a HandshakeBundle of proposals that is not a leave: it adds a participant",
             &proposals_bundle, "ok", Some("Proposal"), "invalidProposal", &[ALICE, BOB]),
         update_vector("up-x3-app-data-update-other-component", "an AppDataUpdate for component 0x0023 (room_metadata), which the hub does not read",
             &update_request(&other_component_commit), "ok", Some("Commit"), "invalidProposal", &[ALICE, BOB]),

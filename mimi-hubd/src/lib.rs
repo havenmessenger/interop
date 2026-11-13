@@ -74,6 +74,12 @@ pub enum UpdateRefusal {
     /// As [`Self::Invalid`], naming the proposals at fault by their `ProposalRef`: a reference this hub holds nothing
     /// for, or a held proposal the Commit leaves out.
     InvalidProposals(&'static str, Vec<Vec<u8>>),
+    /// The proposals are not of the room's current epoch, which is this one.
+    WrongEpoch(u64),
+    /// A peer that may leave the room asked for more than the hub holds for one room's next Commit. Answered
+    /// `notAllowed` with these words; only a provider of the room's participants reaches it, so it says nothing about
+    /// whether a room exists.
+    Limit(&'static str),
     /// The store failed. This is the hub's own fault, not a verdict on the request.
     Store,
 }
@@ -82,7 +88,12 @@ impl std::fmt::Display for UpdateRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotAllowed => f.write_str("the hub did not accept this update"),
-            Self::Invalid(why) | Self::InvalidProposals(why, _) => f.write_str(why),
+            Self::Invalid(why) | Self::InvalidProposals(why, _) | Self::Limit(why) => {
+                f.write_str(why)
+            }
+            Self::WrongEpoch(_) => {
+                f.write_str("the proposals are not for the room's current epoch")
+            }
             Self::Store => f.write_str("the hub could not store this update"),
         }
     }
@@ -785,11 +796,11 @@ impl Provider {
         }
         self.assert_hub_of_record(room_uri)
             .map_err(|_| UpdateRefusal::NotAllowed)?;
-        self.include_held_proposals(room_uri, &mut commit)?;
+        self.include_held_proposals(room_uri, &mut commit, now_unix)?;
         let epoch = commit.epoch;
         self.apply_decoded_commit(room_uri, &commit, now_unix)?;
         self.store
-            .drop_held_proposals_through(room_uri, epoch)
+            .commit_accepted_at(room_uri, epoch)
             .map_err(|_| UpdateRefusal::Store)
     }
 
@@ -801,10 +812,11 @@ impl Provider {
         &self,
         room_uri: &str,
         commit: &mut DecodedCommit,
+        now_unix: u64,
     ) -> Result<(), UpdateRefusal> {
         let held = self
             .store
-            .held_proposals(room_uri, commit.epoch)
+            .held_proposals(room_uri, commit.epoch, now_unix)
             .map_err(|_| UpdateRefusal::Store)?;
         let unknown: Vec<Vec<u8>> = commit
             .references
@@ -998,6 +1010,7 @@ impl Provider {
         &self,
         room_uri: &str,
         body: &[u8],
+        peer: Option<&crate::peer::PeerIdentity>,
         now_unix: u64,
     ) -> Result<(), UpdateRefusal> {
         let bundle = HandshakeBundle::decode(body).map_err(|error| match error {
@@ -1013,21 +1026,37 @@ impl Provider {
                 more_proposals,
             } => self.hold_leave_proposals(
                 room_uri,
+                peer,
                 std::iter::once(&proposal_or_commit).chain(&more_proposals),
                 now_unix,
             ),
         }
     }
 
-    /// Hold a leaving member's proposals for the room's next Commit (protocol-07 §3.5): Removes for its user's devices and
-    /// one participant-list change that only removes participants, all of one epoch. They are held by `ProposalRef`, and
-    /// the next Commit at that epoch must include every one by reference. Anything else as a proposal is refused: a list
-    /// change that adds or changes a role, a room-policy change, two changes, proposals of different epochs, or Removes
-    /// with no list change (a Commit of Removes alone is not one this hub reads, so holding them would hold the room).
-    /// The proposals' signatures are not verified: the hub holds no group state, as for a Commit.
+    /// Hold a leaving member's proposals for the room's next Commit (protocol-07 §3.5): one participant-list change that
+    /// only removes participants, and `Remove`s for the devices of the user leaving, all of one epoch. They are held by
+    /// `ProposalRef`, and the next Commit at that epoch must include every one by reference.
+    ///
+    /// The hub verifies no proposal's signature (it holds no group state), so what it requires a Commit to include is
+    /// bounded by who asked: every user the change removes is one whose provider the peer's certificate authenticates. A
+    /// `Remove` is a leaf index the hub cannot map to a user (it holds no ratchet tree), so it is not bound to a provider;
+    /// the room's bounds on what it holds (`store::MAX_PENDING_PROPOSALS_PER_ROOM`, the byte bounds) and their expiry
+    /// (`store::PROPOSAL_TTL_SECS`) bound what a leave can make the next Commit carry. Members verify each proposal before
+    /// committing it, so one they cannot verify holds the room's Commits at that epoch until it expires.
+    ///
+    /// The epoch is the one the hub learned from the room's latest accepted Commit (persisted with the room); a room the
+    /// hub has not seen a Commit for takes a leave at the leave's own epoch.
+    ///
+    /// Refused, in this order: what is not a leave, read from the messages alone (`invalidProposal`: a change that adds
+    /// or changes a role, a room-policy change, two changes, proposals of more than one epoch, or `Remove`s with no
+    /// change, since a Commit of `Remove`s alone is not one this hub reads and holding them would hold the room); no peer
+    /// certificate, or a removed user of another provider (`notAllowed`, as a room this hub does not host); another epoch
+    /// than the room's (`wrongEpoch` naming it); a message or a room's held proposals past their bounds (`notAllowed`
+    /// saying so).
     pub fn hold_leave_proposals<'a>(
         &self,
         room_uri: &str,
+        peer: Option<&crate::peer::PeerIdentity>,
         messages: impl Iterator<Item = &'a Vec<u8>>,
         now_unix: u64,
     ) -> Result<(), UpdateRefusal> {
@@ -1036,10 +1065,14 @@ impl Provider {
         );
         self.assert_hub_of_record(room_uri)
             .map_err(|_| UpdateRefusal::NotAllowed)?;
+        // What the messages are is read first, from their bytes alone; who may ask for them is checked next, so only the
+        // provider of a participant they remove learns the room's epoch or what it holds.
         let mut epoch = None;
         let mut change = None;
+        let mut oversized = false;
         let mut held = Vec::new();
         for message in messages {
+            oversized |= message.len() > crate::store::MAX_PROPOSAL_BYTES;
             let proposal = decode_proposal_message(message)
                 .map_err(|_| UpdateRefusal::Invalid("a proposal is not one this hub can read"))?;
             if *epoch.get_or_insert(proposal.epoch) != proposal.epoch {
@@ -1047,30 +1080,70 @@ impl Provider {
                     "the proposals are not all of one epoch",
                 ));
             }
-            if let ReadProposal::Change(decoded) = &proposal.proposal {
-                if change.is_some() || decoded.proposal_type != MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE
-                {
-                    return Err(NOT_A_LEAVE);
+            match &proposal.proposal {
+                // -07 §3.5: the leaving client proposes the removal of every device of its user, itself included.
+                ReadProposal::Remove(_) => {}
+                ReadProposal::Change(decoded) => {
+                    if change.is_some()
+                        || decoded.proposal_type != MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE
+                    {
+                        return Err(NOT_A_LEAVE);
+                    }
+                    let update =
+                        decode_participant_list_update(&decoded.payload).map_err(|_| {
+                            UpdateRefusal::Invalid("the participant list update is malformed")
+                        })?;
+                    if update.removed_indices.is_empty()
+                        || !update.added_participants.is_empty()
+                        || !update.changed_role_participants.is_empty()
+                    {
+                        return Err(NOT_A_LEAVE);
+                    }
+                    change = Some(update);
                 }
-                let update = decode_participant_list_update(&decoded.payload).map_err(|_| {
-                    UpdateRefusal::Invalid("the participant list update is malformed")
-                })?;
-                if update.removed_indices.is_empty()
-                    || !update.added_participants.is_empty()
-                    || !update.changed_role_participants.is_empty()
-                {
-                    return Err(NOT_A_LEAVE);
-                }
-                change = Some(update);
             }
             held.push((proposal.reference, message.clone()));
         }
-        let (Some(epoch), Some(_)) = (epoch, change) else {
+        let (Some(epoch), Some(change)) = (epoch, change) else {
             return Err(NOT_A_LEAVE);
         };
+        let peer = peer.ok_or(UpdateRefusal::NotAllowed)?;
+        let rows = self
+            .store
+            .list_participant_rows(room_uri)
+            .map_err(|_| UpdateRefusal::Store)?;
+        for index in &change.removed_indices {
+            let row = rows.get(*index as usize).ok_or(UpdateRefusal::Invalid(
+                "the participant list update does not fit the room",
+            ))?;
+            if !peer.authenticates(&row.authority) {
+                return Err(UpdateRefusal::NotAllowed);
+            }
+        }
+        // A room the hub has not seen a Commit for has no epoch here to hold the leave to: it is held at its own epoch,
+        // and binds only a Commit at that epoch.
+        if let Some(room_epoch) = self
+            .store
+            .room_epoch(room_uri)
+            .map_err(|_| UpdateRefusal::Store)?
+        {
+            if epoch != room_epoch {
+                return Err(UpdateRefusal::WrongEpoch(room_epoch));
+            }
+        }
+        if oversized {
+            return Err(UpdateRefusal::Limit(
+                "a proposal is larger than a leave needs",
+            ));
+        }
         self.store
             .hold_proposals(room_uri, epoch, &held, now_unix)
-            .map_err(|e| store_refusal(&e))
+            .map_err(|e| match store_refusal(&e) {
+                UpdateRefusal::NotAllowed => UpdateRefusal::Limit(
+                    "the room holds as many proposals as it can for its next Commit",
+                ),
+                other => other,
+            })
     }
 
     /// Enact a `ParticipantListUpdate` on this room's participants vector, as ONE atomic transition: a failure

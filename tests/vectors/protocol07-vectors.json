@@ -337,7 +337,7 @@
     {
       "answer": "invalidProposal",
       "decode": "ok",
-      "description": "a HandshakeBundle of proposals instead of a Commit",
+      "description": "a HandshakeBundle of proposals that is not a leave: it adds a participant",
       "hex": "000100011062c7007cbc15b7752e6071907649c9c2000000000000000001000000000002f7a029000026216d696d693a2f2f686176656e6d657373656e6765722e636f6d2f752f6361726f6c000000024040b8a4eec8fe266aa4d2cc20e79eca9e29a129efaffdf906e151a815bfe0d789f8b41d920cebac737084014cf0212c504d6728dc9d5005e13540620089506db70f2062298391a4a9cba02f703c6ac99e94866795608c218f74948341023d5bd5852900",
       "id": "up-x2-bundle-of-proposals",
       "kind": "UpdateRequest",
