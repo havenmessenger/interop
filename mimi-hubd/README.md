@@ -306,7 +306,7 @@ diagnostic instead of a silent no-op.
 | POST | `/mimi/v1/submitMessage?recipient=` | Deposit an opaque application message for a recipient. |
 | GET | `/mimi/v1/message?user=` | Deliver-once pull of a queued message. |
 | POST | `/mimi/v1/identifierQuery` | Opt-in-only identifier lookup. |
-| POST | `/mimi/v1/requestConsent` | Consent request (§5.7 C1), always 201. The wire route answers 202, and 422 for an operation it does not take. |
+| POST | `/mimi/v1/requestConsent` | Consent request or cancel (§5.7 C1), always 201. A cancel withdraws only a pending request, and only from the requester's provider. The wire route answers 202, and 422 for an operation it does not take. |
 | POST | `/mimi/v1/updateConsent` | Consent grant/revoke (§5.7 C2), always 201. |
 | POST | `/mimi/v1/roomPolicy?room=` | Set a room's RBAC policy. |
 | POST | `/mimi/v1/memberRole?room=&member=&role=` | Assign a member's role in a room. |

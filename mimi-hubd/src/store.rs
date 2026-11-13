@@ -449,6 +449,21 @@ impl SqliteStore {
         Ok(n > 0)
     }
 
+    /// Withdraw a pending request for an EXACT scope, and nothing else: a grant, a revoke or a preemptive denial the
+    /// target made stays. True when a request was withdrawn.
+    pub fn withdraw_consent_request(
+        &self,
+        requester: &str,
+        target: &str,
+        room_key: &str,
+    ) -> anyhow::Result<bool> {
+        let n = self.conn.execute(
+            "DELETE FROM consent WHERE requester=?1 AND target=?2 AND room_key=?3 AND state='requested'",
+            params![requester, target, room_key],
+        )?;
+        Ok(n > 0)
+    }
+
     /// The raw consent state for an EXACT scope (requester, target, room_key). None if no record.
     pub fn consent_state(
         &self,

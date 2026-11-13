@@ -50,6 +50,20 @@ use mimi_core::room_policy::{
 use mimi_core::room_policy_wire::{decode_base_room_policy, decode_role_data};
 use mimi_core::uri::{MimiKind, MimiUri};
 
+/// The provider domain of a user URI: its authority, lowercased, with a port taken off. `None` for a URI that is not a
+/// user URI.
+fn user_domain(user_uri: &str) -> Option<String> {
+    let uri = MimiUri::parse(user_uri).ok()?;
+    if uri.kind != Some(MimiKind::User) {
+        return None;
+    }
+    let host = match uri.authority.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => host,
+        _ => uri.authority.as_str(),
+    };
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
 /// Upper bound on a member/room URI we will store (anti-DoS on the routing key; a real mimi:// URI is
 /// far shorter). Parsed URIs longer than this are rejected before any work.
 const MAX_URI_LEN: usize = 512;
@@ -502,45 +516,67 @@ impl Provider {
     //
     // A directional (requester -> target) authorization the TARGET's provider holds. Requests/updates
     // arrive from a peer provider; they are VALIDATED (mimi-core) then recorded. Privacy (§5.7): the
-    // caller (http) always returns 201 regardless of whether the user/requester exists: no oracle.
+    // caller (http) answers the same whether or not the user or requester exists (201 on the JSON lane, 202 on the
+    // wire lane): no oracle.
     // room_key '' = global scope; a room-specific record overrides global.
 
     fn room_key(room_uri: &Option<String>) -> &str {
         room_uri.as_deref().unwrap_or("")
     }
 
-    /// C1: accept + process a `requestConsent` from another provider. Records a pending request UNLESS a
-    /// terminal decision (grant/revoke) already exists for the scope (a request must not clobber a
-    /// decision). Validates well-formedness first (fail-closed).
+    /// C1: accept + process a `requestConsent` from another provider: a `request` or a `cancel` (§5.7).
+    ///
+    /// A `request` records a pending request UNLESS a terminal decision (grant/revoke) already exists for the scope (a
+    /// request must not clobber a decision). A `cancel` withdraws the pending request of the same ConsentScope, and only
+    /// when `peer`, the certificate the connection presented, authenticates the domain of the requester URI (§5.7: the
+    /// requesterUri is in one of the domains of the sending provider): only the requester's own provider can withdraw
+    /// its request. A cancel withdraws a pending request and nothing else, so a grant, a revoke or a preemptive denial
+    /// the target made stays. A cancel with no matching request, or from another provider, changes nothing; the caller
+    /// answers it as any other, so it says nothing about what exists. Validates well-formedness first (fail-closed).
     pub fn process_request_consent(
         &self,
         entry: &ConsentEntry,
+        peer: Option<&crate::peer::PeerIdentity>,
         now_unix: u64,
     ) -> anyhow::Result<()> {
         validate_consent_entry(entry)?;
-        if entry.operation != ConsentOperation::Request {
-            anyhow::bail!("process_request_consent expects operation=request");
-        }
         let rk = Self::room_key(&entry.room_uri);
-        if self
-            .store
-            .consent_state(&entry.requester_uri, &entry.target_uri, rk)?
-            .is_none()
-        {
-            self.store.set_consent(
-                &entry.requester_uri,
-                &entry.target_uri,
-                rk,
-                "requested",
-                now_unix,
-            )?;
+        match entry.operation {
+            ConsentOperation::Request => {
+                if self
+                    .store
+                    .consent_state(&entry.requester_uri, &entry.target_uri, rk)?
+                    .is_none()
+                {
+                    self.store.set_consent(
+                        &entry.requester_uri,
+                        &entry.target_uri,
+                        rk,
+                        "requested",
+                        now_unix,
+                    )?;
+                }
+            }
+            ConsentOperation::Cancel => {
+                let requester = user_domain(&entry.requester_uri)
+                    .ok_or_else(|| anyhow::anyhow!("the requester URI names no provider domain"))?;
+                if !peer.is_some_and(|peer| peer.authenticates(&requester)) {
+                    anyhow::bail!("a cancel is taken only from the requester's provider");
+                }
+                self.store
+                    .withdraw_consent_request(&entry.requester_uri, &entry.target_uri, rk)?;
+            }
+            ConsentOperation::Grant | ConsentOperation::Revoke => {
+                anyhow::bail!("requestConsent takes request or cancel");
+            }
         }
         Ok(())
     }
 
-    /// C2: accept + process an `updateConsent` (grant / revoke / cancel). `grant`→granted, `revoke`→
-    /// revoked (valid PREEMPTIVELY, no prior request needed), `cancel`→delete a pending request. Any
-    /// grant-carried client_key_packages are suite-gated (INV-MLS-002) before they could be stored/used.
+    /// C2: accept + process an `updateConsent` (grant / revoke). `grant`→granted, `revoke`→revoked (valid
+    /// PREEMPTIVELY, no prior request needed). A cancel is the requester's and goes through `requestConsent`
+    /// ([`Self::process_request_consent`]). Any grant-carried client_key_packages are suite-gated (INV-MLS-002) before
+    /// they could be stored/used.
     pub fn process_update_consent(
         &self,
         entry: &ConsentEntry,
@@ -570,12 +606,8 @@ impl Provider {
                     now_unix,
                 )?;
             }
-            ConsentOperation::Cancel => {
-                self.store
-                    .delete_consent(&entry.requester_uri, &entry.target_uri, rk)?;
-            }
-            ConsentOperation::Request => {
-                anyhow::bail!("requestConsent must use process_request_consent, not updateConsent");
+            ConsentOperation::Request | ConsentOperation::Cancel => {
+                anyhow::bail!("a request or a cancel is a requestConsent, not an updateConsent");
             }
         }
         Ok(())
@@ -1050,9 +1082,10 @@ impl Provider {
     /// Refused, in this order: what is not a leave, read from the messages alone (`invalidProposal`: a change that adds
     /// or changes a role, a room-policy change, two changes, proposals of more than one epoch, or `Remove`s with no
     /// change, since a Commit of `Remove`s alone is not one this hub reads and holding them would hold the room); no peer
-    /// certificate, or a removed user of another provider (`notAllowed`, as a room this hub does not host); another epoch
-    /// than the room's (`wrongEpoch` naming it); a message or a room's held proposals past their bounds (`notAllowed`
-    /// saying so).
+    /// certificate (`notAllowed`); another epoch than the room's (`wrongEpoch` naming it, so a leave replayed after its
+    /// Commit says so whatever its indices name now); a removed index past the room's list (`invalidProposal`) or a
+    /// removed user of another provider (`notAllowed`, as a room this hub does not host); a message or a room's held
+    /// proposals past their bounds (`notAllowed` saying so).
     pub fn hold_leave_proposals<'a>(
         &self,
         room_uri: &str,
@@ -1065,8 +1098,9 @@ impl Provider {
         );
         self.assert_hub_of_record(room_uri)
             .map_err(|_| UpdateRefusal::NotAllowed)?;
-        // What the messages are is read first, from their bytes alone; who may ask for them is checked next, so only the
-        // provider of a participant they remove learns the room's epoch or what it holds.
+        // What the messages are is read first, from their bytes alone; then that the peer presented a certificate, the
+        // room's epoch, whose provider the removed users are, and the bounds. Only the provider of a participant a leave
+        // removes learns what the room holds.
         let mut epoch = None;
         let mut change = None;
         let mut oversized = false;
@@ -1108,6 +1142,18 @@ impl Provider {
             return Err(NOT_A_LEAVE);
         };
         let peer = peer.ok_or(UpdateRefusal::NotAllowed)?;
+        // A room the hub has not seen a Commit for has no epoch here to hold the leave to: it is held at its own epoch,
+        // and binds only a Commit at that epoch. The epoch is read before the indices, so a leave replayed after its
+        // Commit is answered as of a past epoch, whatever its indices name in the room now.
+        if let Some(room_epoch) = self
+            .store
+            .room_epoch(room_uri)
+            .map_err(|_| UpdateRefusal::Store)?
+        {
+            if epoch != room_epoch {
+                return Err(UpdateRefusal::WrongEpoch(room_epoch));
+            }
+        }
         let rows = self
             .store
             .list_participant_rows(room_uri)
@@ -1118,17 +1164,6 @@ impl Provider {
             ))?;
             if !peer.authenticates(&row.authority) {
                 return Err(UpdateRefusal::NotAllowed);
-            }
-        }
-        // A room the hub has not seen a Commit for has no epoch here to hold the leave to: it is held at its own epoch,
-        // and binds only a Commit at that epoch.
-        if let Some(room_epoch) = self
-            .store
-            .room_epoch(room_uri)
-            .map_err(|_| UpdateRefusal::Store)?
-        {
-            if epoch != room_epoch {
-                return Err(UpdateRefusal::WrongEpoch(room_epoch));
             }
         }
         if oversized {
@@ -1377,7 +1412,7 @@ mod tests {
             KeyPackageAccess::NoConsent
         );
         // a request is recorded but does NOT grant access
-        p.process_request_consent(&consent_entry(ConsentOperation::Request, None), 1)
+        p.process_request_consent(&consent_entry(ConsentOperation::Request, None), None, 1)
             .unwrap();
         assert_eq!(
             p.keypackage_access(req, tgt, None).unwrap(),
@@ -1452,7 +1487,7 @@ mod tests {
         let p = Provider::in_memory("mimi.havenmessenger.com").unwrap();
         // request with a grant op → rejected by process_request_consent
         assert!(p
-            .process_request_consent(&consent_entry(ConsentOperation::Grant, None), 1)
+            .process_request_consent(&consent_entry(ConsentOperation::Grant, None), None, 1)
             .is_err());
         // grant carrying a garbage (non-0x0001) KeyPackage → gated out
         let mut bad = consent_entry(ConsentOperation::Grant, None);

@@ -206,9 +206,11 @@ without needing that machinery in the first place.
     before the hub learned its epoch) takes a leave at the leave's own epoch, which binds only a Commit at that epoch. A
     held proposal expires after 15 minutes, and an expired one is neither required nor resolvable. One message is at most
     4 KiB, and a room holds at most its participant bound plus one proposals and 64 KiB of them; past any of these the
-    leave is `notAllowed` saying which, and nothing is held. The checks run in the order above (what the messages are,
-    then who sent them, then the epoch, then the bounds), so only the provider of a participant a leave removes learns
-    the room's epoch or what it holds. A Commit's own epoch is not checked (the hub never answers a Commit
+    leave is `notAllowed` saying which, and nothing is held. The checks run in this order: what the messages are, that
+    the peer presented a certificate, the epoch, whose provider the removed users are, then the bounds. So a leave
+    replayed after its Commit is `wrongEpoch` whatever its indices name in the room now, any peer the transport trusts
+    can learn the room's current epoch from that answer (an epoch every member's handshake messages carry), and only the
+    provider of a participant a leave removes learns what the room holds. A Commit's own epoch is not checked (the hub never answers a Commit
     `wrongEpoch`); the epoch it is sent in is the one its references are read at.
   - Refused as a leave (`invalidProposal`, nothing held): a change that adds a participant or changes a role, a
     room-policy change, two changes, proposals of more than one epoch, or `Remove`s with no change (a Commit of

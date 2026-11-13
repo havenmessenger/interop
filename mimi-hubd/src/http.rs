@@ -612,9 +612,13 @@ async fn update_wire(
 /// store failure we cannot hide.
 async fn request_consent(
     State(p): State<SharedProvider>,
+    peer: Option<Extension<PeerCert>>,
     Json(entry): Json<ConsentEntry>,
 ) -> StatusCode {
-    match lock(&p).process_request_consent(&entry, now_unix()) {
+    let peer = peer
+        .as_ref()
+        .and_then(|Extension(PeerCert(identity))| identity.as_ref());
+    match lock(&p).process_request_consent(&entry, peer, now_unix()) {
         Ok(()) => StatusCode::CREATED,
         // a validation failure is NOT surfaced (no oracle); only a real store error is a 500. Since
         // process_request_consent's only non-validation error path is the store, distinguish them:
@@ -642,12 +646,17 @@ async fn update_consent(
 /// The one other answer is 422, for an entry whose `consentOperation` is not `request` or `cancel`
 /// (protocol-07 §5.7). It reads the operation byte alone, so it depends on nothing about the users named.
 ///
+/// A `cancel` withdraws the pending request of its ConsentScope only when the peer's certificate authenticates the
+/// requester URI's domain, and never a grant or a revoke (`Provider::process_request_consent`); either way the answer is
+/// the same 202.
+///
 /// 202 and not 201: protocol-07 §5.7 says both, because the new 202 paragraph was pasted into the middle of the old
 /// 201 one, and "201 Accepted" is not a status. The paragraph the editor meant to leave is the 202 one ("202 Accepted
 /// (indicating the requestConsent was received)"), and a client that checks only for a 2xx answer takes either.
 async fn request_consent_wire(
     State(p): State<SharedProvider>,
     Path(_target_domain): Path<String>,
+    peer: Option<Extension<PeerCert>>,
     body: Bytes,
 ) -> StatusCode {
     if !operation_is_one_of(
@@ -656,8 +665,11 @@ async fn request_consent_wire(
     ) {
         return StatusCode::UNPROCESSABLE_ENTITY;
     }
+    let peer = peer
+        .as_ref()
+        .and_then(|Extension(PeerCert(identity))| identity.as_ref());
     if let Ok(entry) = mimi_core::protocol_wire::decode_consent_entry(&body) {
-        let _ = lock(&p).process_request_consent(&entry, now_unix());
+        let _ = lock(&p).process_request_consent(&entry, peer, now_unix());
     }
     StatusCode::ACCEPTED
 }
@@ -810,6 +822,9 @@ mod update_tests;
 #[path = "http_room_policy_tests.rs"]
 mod room_policy_tests;
 
+#[cfg(test)]
+#[path = "http_consent_cancel_tests.rs"]
+mod consent_cancel_tests;
 #[cfg(test)]
 #[path = "http_wire_tests.rs"]
 mod wire_tests;

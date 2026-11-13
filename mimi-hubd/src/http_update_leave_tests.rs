@@ -264,10 +264,18 @@ async fn a_member_leaves_through_proposals_the_next_commit_includes_by_reference
     let answer = post_from(router.clone(), None, bundle_of(commit)).await;
     assert!(is_success(&answer), "{answer:?}");
     assert_eq!(listed(&p), vec![ALICE, CAROL]);
-    // Replayed after the Commit, the same bytes are refused: index 1 is Carol's now, another provider's user, and the
-    // room is at epoch 2. Nothing changes.
+    // Replayed after the Commit, the same bytes are of a past epoch, though index 1 is Carol's now.
     let replay = post_from(router.clone(), Some(HOME), bundle(&messages)).await;
-    assert!(is_not_allowed(&replay), "{replay:?}");
+    assert!(
+        matches!(
+            replay,
+            UpdateRoomResponse::WrongEpoch {
+                current_epoch: 2,
+                ..
+            }
+        ),
+        "{replay:?}"
+    );
     assert_eq!(listed(&p), vec![ALICE, CAROL]);
     // What was held went with the Commit that included it: a later Commit names nothing and goes.
     let later = commit_of(2, &[by_value_change(&list_change(&[BOB], &[]))]);
@@ -371,6 +379,41 @@ async fn a_leave_replayed_after_its_commit_is_of_a_past_epoch() {
     let next = commit_of(3, &[by_value_change(&list_change(&[], &[]))]);
     assert!(is_success(&post_from(router, None, bundle_of(next)).await));
     assert_eq!(listed(&p), vec![ALICE, BOB, CAROL]);
+}
+
+/// A leave replayed after its Commit, in a room where its removed index no longer fits the list, is answered as of a
+/// past epoch, as DIV-10 says, not as a list it does not fit. Revert check: read the indices against the room before
+/// the epoch and the replay is invalidProposal.
+#[tokio::test]
+async fn a_replayed_leave_whose_index_no_longer_fits_is_of_a_past_epoch() {
+    let (router, p) = app();
+    for user in [ALICE, BOB] {
+        p.lock().unwrap().add_participant(ROOM, user, 1).unwrap();
+    }
+    let first = commit_of(0, &[by_value_change(&list_change(&[], &[]))]);
+    assert!(is_success(
+        &post_from(router.clone(), None, bundle_of(first)).await
+    ));
+    let (messages, own_remove, own_change) = bobs_leave();
+    assert!(is_success(
+        &post_from(router.clone(), Some(HOME), bundle(&messages)).await
+    ));
+    let commit = commit_of(1, &[by_reference(&own_remove), by_reference(&own_change)]);
+    assert!(is_success(
+        &post_from(router.clone(), None, bundle_of(commit)).await
+    ));
+    assert_eq!(listed(&p), vec![ALICE]);
+    let replay = post_from(router, Some(HOME), bundle(&messages)).await;
+    assert!(
+        matches!(
+            replay,
+            UpdateRoomResponse::WrongEpoch {
+                current_epoch: 2,
+                ..
+            }
+        ),
+        "{replay:?}"
+    );
 }
 
 /// The hub requires the next Commit to include what it holds: one that leaves a held proposal out is refused, naming
