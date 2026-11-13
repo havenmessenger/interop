@@ -177,14 +177,14 @@ Output from the sequence above:
         "welcome": "/mimi/v1/welcome"
     },
     "mls_ciphersuites": [1],
-    "protocol_drafts": {"content": "09", "protocol": "07", "room-policy": "04"},
+    "protocol_drafts": {"content": "10", "protocol": "07", "room-policy": "04"},
     "provider": "example.com",
     "unsupported": {
         "assets_ohttp": "DIV-3: v1 is messaging-only",
         "groupInfo_external_commit_join": "DIV-1: add-driven join only (ETK security)",
         "non_0x0001_ciphersuites": "DIV-2: rejected at ingest",
         "reportAbuse_with_abusive_messages": "DIV-9: a report attaching an AbusiveMessage is refused (its Frank cannot yet be verified) - metadata-only reports are accepted",
-        "update_wire_endpoint_mixed_commits": "DIV-10: a Commit combining a custom proposal with a standard MLS proposal (Add, Remove, ...) in the same proposal list is refused - only a Commit whose list holds exactly one custom proposal is applied"
+        "update_wire_endpoint_mixed_commits": "DIV-10: a Commit is applied when it carries exactly one participant-list or room-policy change, alone or with Add and Remove proposals beside it; proposals by reference are accepted only when they are the ones this hub holds for a member's leave. A second change, a Commit with no change, any other proposal type and any other proposal by reference are refused"
     },
     "wireEndpoints": {
         "identifierQuery": "/mimi/pl/identifierQuery/{domain}",

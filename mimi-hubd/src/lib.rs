@@ -210,7 +210,7 @@ impl Provider {
         let mut doc = serde_json::json!({
             "provider": self.domain,
             "mls_ciphersuites": [HAVEN_MLS_CIPHERSUITE_U16],   // 0x0001 only
-            "protocol_drafts": { "protocol": "07", "content": "09", "room-policy": "04" },
+            "protocol_drafts": { "protocol": "07", "content": "10", "room-policy": "04" },
             "endpoints": {
                 "keyMaterial": "/mimi/v1/keyMaterial",
                 "notify": "/mimi/v1/notify",
@@ -235,7 +235,7 @@ impl Provider {
                 "groupInfo_external_commit_join": "DIV-1: add-driven join only (ETK security)",
                 "assets_ohttp": "DIV-3: v1 is messaging-only",
                 "non_0x0001_ciphersuites": "DIV-2: rejected at ingest",
-                "update_wire_endpoint_mixed_commits": "DIV-10: a Commit combining a custom proposal with a standard MLS proposal (Add, Remove, ...) in the same proposal list is refused - only a Commit whose list holds exactly one custom proposal is applied",
+                "update_wire_endpoint_mixed_commits": "DIV-10: a Commit is applied when it carries exactly one participant-list or room-policy change, alone or with Add and Remove proposals beside it; proposals by reference are accepted only when they are the ones this hub holds for a member's leave. A second change, a Commit with no change, any other proposal type and any other proposal by reference are refused",
                 "reportAbuse_with_abusive_messages": "DIV-9: a report attaching an AbusiveMessage is refused (its Frank cannot yet be verified) - metadata-only reports are accepted"
             }
         });
@@ -1603,8 +1603,30 @@ mod tests {
         let p = Provider::in_memory("havenmessenger.com").unwrap();
         let drafts = &p.directory()["protocol_drafts"];
         assert_eq!(drafts["protocol"], "07");
-        assert_eq!(drafts["content"], "09");
+        assert_eq!(drafts["content"], "10");
         assert_eq!(drafts["room-policy"], "04");
+    }
+
+    /// What the directory says of a Commit sent to `update` is what the route does: Add and Remove beside one
+    /// change are applied, proposals by reference are taken only for a held leave, and a second change is refused.
+    #[test]
+    fn the_directory_says_which_commits_update_applies_and_which_it_refuses() {
+        let p = Provider::in_memory("havenmessenger.com").unwrap();
+        let said = p.directory()["unsupported"]["update_wire_endpoint_mixed_commits"]
+            .as_str()
+            .expect("a statement")
+            .to_owned();
+        let (applied, refused) = said
+            .split_once(" A second change")
+            .expect("what is applied, then what is refused");
+        assert!(applied.starts_with("DIV-10: "), "{said}");
+        assert!(
+            applied.contains("exactly one participant-list or room-policy change"),
+            "{said}"
+        );
+        assert!(applied.contains("Add and Remove"), "{said}");
+        assert!(applied.contains("by reference"), "{said}");
+        assert!(refused.ends_with("are refused"), "{said}");
     }
 
     #[test]
