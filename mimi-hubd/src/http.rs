@@ -553,7 +553,9 @@ async fn report_abuse_wire(
 /// answer is an `UpdateRoomResponse` in a 200: `success` with the hub's acceptance time, `notAllowed` for a room this hub
 /// does not host, a bundle under another ciphersuite or a store limit (one answer for all, so a refusal does not say
 /// which applied), or `invalidProposal` for anything this hub cannot read or apply (a `PrivateMessage`, a mixed commit,
-/// an unrecognized proposal type, a by-reference proposal, a bundle of proposals). `wrongEpoch` is never answered: the
+/// an unrecognized proposal type, a bundle of proposals that is not a leave), naming by `ProposalRef` a reference it
+/// holds nothing for or a held proposal the Commit leaves out. A bundle of proposals is a member leaving (protocol-07
+/// §3.5): they are held for the next Commit, which must include them by reference. `wrongEpoch` is never answered: the
 /// hub holds no group state and so no epoch. A store failure is a 500 with no body.
 async fn update_wire(
     State(p): State<SharedProvider>,
@@ -575,6 +577,12 @@ async fn update_wire(
             error_description: why.to_string(),
             invalid_proposals: Vec::new(),
         },
+        Err(crate::UpdateRefusal::InvalidProposals(why, references)) => {
+            UpdateRoomResponse::InvalidProposal {
+                error_description: why.to_string(),
+                invalid_proposals: references,
+            }
+        }
         Err(crate::UpdateRefusal::Store) => {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
@@ -778,6 +786,9 @@ fn now_unix_millis() -> u64 {
 #[cfg(test)]
 #[path = "http_update_add_tests.rs"]
 mod update_add_tests;
+#[cfg(test)]
+#[path = "http_update_leave_tests.rs"]
+mod update_leave_tests;
 #[cfg(test)]
 #[path = "http_update_tests.rs"]
 mod update_tests;

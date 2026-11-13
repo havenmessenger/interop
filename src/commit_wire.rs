@@ -33,10 +33,15 @@ const MLS_WIRE_FORMAT_PUBLIC_MESSAGE: u16 = 1;
 const MLS_WIRE_FORMAT_PRIVATE_MESSAGE: u16 = 2;
 const MLS_SENDER_TYPE_MEMBER: u8 = 1;
 const MLS_CONTENT_TYPE_COMMIT: u8 = 3;
-/// `ProposalOrRef`'s discriminant for an inline (by-value) proposal, as opposed to a
-/// by-reference `proposal_ref` (discriminant 0) pointing at an earlier standalone message this
-/// decoder has no access to.
+/// `ProposalOrRef`'s discriminant for an inline (by-value) proposal, as opposed to a by-reference `proposal_ref`
+/// (discriminant 2) naming a proposal sent earlier in its own message.
 const MLS_PROPOSAL_OR_REF_INLINE: u8 = 1;
+/// `FramedContent.content_type` of a standalone proposal.
+const MLS_CONTENT_TYPE_PROPOSAL: u8 = 2;
+/// The label RFC 9420 §5.2 hashes a proposal's `AuthenticatedContent` under to name it.
+const PROPOSAL_REF_LABEL: &[u8] = b"MLS 1.0 Proposal Reference";
+/// The length of a `ProposalRef` under the one ciphersuite this crate reads (0x0001, SHA-256).
+pub const PROPOSAL_REF_LEN: usize = 32;
 
 /// mls-extensions §4.7 `app_data_update`: the proposal type of an AppDataUpdate (0x0008, the value §7.2.1 of
 /// that draft suggests).
@@ -173,9 +178,10 @@ pub(crate) struct Normalized {
     pub delta: isize,
 }
 
-/// Rewrite the AppDataUpdate proposals of a member-sent `PublicMessage` Commit into custom proposals, so a decoder built
-/// without openmls's `extensions-draft` feature can read the message. Returns `None` when the message is not such a Commit
-/// or carries no AppDataUpdate, and the caller then reads it as it is.
+/// Rewrite the AppDataUpdate proposals of a member-sent `PublicMessage` Commit, or the AppDataUpdate a member-sent
+/// `PublicMessage` proposal carries, into custom proposals, so a decoder built without openmls's `extensions-draft` feature
+/// can read the message. Returns `None` when the message is neither or carries no AppDataUpdate, and the caller then reads
+/// it as it is.
 ///
 /// This works around the openmls release this crate pins (0.9.2, built without `extensions-draft`): remove it when a
 /// pinned release reads an AppDataUpdate itself.
@@ -207,6 +213,9 @@ pub(crate) fn normalize_app_data_updates(bytes: &[u8]) -> Result<Option<Normaliz
     let (_leaf_index, rest) = read_u32(rest, "Sender.leaf_index")?;
     let (_authenticated_data, rest) = read_opaque_vec(rest, "FramedContent.authenticated_data")?;
     let (content_type, window_at) = read_u8(rest, "FramedContent.content_type")?;
+    if content_type == MLS_CONTENT_TYPE_PROPOSAL {
+        return normalize_proposal_message(bytes, window_at);
+    }
     if content_type != MLS_CONTENT_TYPE_COMMIT {
         return Ok(None);
     }
@@ -236,55 +245,10 @@ pub(crate) fn normalize_app_data_updates(bytes: &[u8]) -> Result<Option<Normaliz
                 let (proposal_type, after_type) = read_u16(body, "Proposal.proposal_type")?;
                 if proposal_type == APP_DATA_UPDATE_PROPOSAL_TYPE {
                     found = true;
-                    let (component, after_component) =
-                        read_u16(after_type, "AppDataUpdate.component_id")?;
-                    let (op, after_op) = read_u8(after_component, "AppDataUpdate.op")?;
-                    let (update, tail) = match op {
-                        APP_DATA_UPDATE_OP_UPDATE => {
-                            let (update, tail) = read_opaque_vec(after_op, "AppDataUpdate.update")?;
-                            (Some(update), tail)
-                        }
-                        APP_DATA_UPDATE_OP_REMOVE => (None, after_op),
-                        other => {
-                            return Err(WireError::Codec {
-                                what: "AppDataUpdate.op",
-                                detail: format!("expected update (1) or remove (2), got {other}"),
-                            })
-                        }
-                    };
-                    let (new_type, new_payload) = match (&update, component) {
-                        (Some(update), PARTICIPANT_LIST_COMPONENT_ID) => (
-                            crate::participant_list::MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE,
-                            update.clone(),
-                        ),
-                        (Some(update), ROLES_LIST_COMPONENT_ID) => (
-                            crate::room_policy::MIMI_ROLES_LIST_PROPOSAL_TYPE,
-                            update.clone(),
-                        ),
-                        (Some(update), BASE_ROOM_POLICY_COMPONENT_ID) => (
-                            crate::room_policy::MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE,
-                            update.clone(),
-                        ),
-                        _ => {
-                            // The component, the operation and the update, as sent, behind a type nothing recognizes.
-                            let body_used = after_type.len() - tail.len();
-                            (
-                                APP_DATA_UPDATE_UNREAD_TYPE,
-                                after_type[..body_used].to_vec(),
-                            )
-                        }
-                    };
+                    let (custom, body_used) = app_data_update_as_custom(after_type)?;
                     rewritten.push(MLS_PROPOSAL_OR_REF_INLINE);
-                    rewritten.extend_from_slice(&new_type.to_be_bytes());
-                    rewritten.extend_from_slice(
-                        &VLBytes::new(new_payload)
-                            .tls_serialize_detached()
-                            .map_err(|e| WireError::Codec {
-                                what: "Proposal.custom_payload",
-                                detail: e.to_string(),
-                            })?,
-                    );
-                    1 + 2 + (after_type.len() - tail.len())
+                    rewritten.extend_from_slice(&custom);
+                    1 + 2 + body_used
                 } else {
                     // Not an AppDataUpdate: openmls reads it, and says where it ends.
                     let (_proposal, tail) =
@@ -334,6 +298,71 @@ pub(crate) fn normalize_app_data_updates(bytes: &[u8]) -> Result<Option<Normaliz
     out.extend_from_slice(after_window);
     let delta = new_window.len() as isize - window_total as isize;
     Ok(Some(Normalized { bytes: out, delta }))
+}
+
+/// An AppDataUpdate's body (what follows its proposal type) as the custom proposal it is read as, type and `payload<V>`,
+/// and how many bytes of `body` it took. An update to the participant list, `roles_list` or `base_room_policy` becomes
+/// that change's type carrying the same update bytes; any other AppDataUpdate becomes a private type no caller
+/// recognizes, carrying the component, the operation and the update as sent.
+fn app_data_update_as_custom(body: &[u8]) -> Result<(Vec<u8>, usize), WireError> {
+    let (component, after_component) = read_u16(body, "AppDataUpdate.component_id")?;
+    let (op, after_op) = read_u8(after_component, "AppDataUpdate.op")?;
+    let (update, tail) = match op {
+        APP_DATA_UPDATE_OP_UPDATE => {
+            let (update, tail) = read_opaque_vec(after_op, "AppDataUpdate.update")?;
+            (Some(update), tail)
+        }
+        APP_DATA_UPDATE_OP_REMOVE => (None, after_op),
+        other => {
+            return Err(WireError::Codec {
+                what: "AppDataUpdate.op",
+                detail: format!("expected update (1) or remove (2), got {other}"),
+            })
+        }
+    };
+    let used = body.len() - tail.len();
+    let (new_type, new_payload) = match (update, change_type_of(component)) {
+        (Some(update), Some(change_type)) => (change_type, update),
+        _ => (APP_DATA_UPDATE_UNREAD_TYPE, body[..used].to_vec()),
+    };
+    let payload = VLBytes::new(new_payload)
+        .tls_serialize_detached()
+        .map_err(|e| WireError::Codec {
+            what: "Proposal.custom_payload",
+            detail: e.to_string(),
+        })?;
+    Ok(([new_type.to_be_bytes().to_vec(), payload].concat(), used))
+}
+
+/// [`normalize_app_data_updates`] for a standalone proposal: `proposal_at` is where its `Proposal` starts in `bytes`.
+fn normalize_proposal_message(
+    bytes: &[u8],
+    proposal_at: &[u8],
+) -> Result<Option<Normalized>, WireError> {
+    let (proposal_type, body) = read_u16(proposal_at, "Proposal.proposal_type")?;
+    if proposal_type != APP_DATA_UPDATE_PROPOSAL_TYPE {
+        return Ok(None);
+    }
+    let (custom, body_used) = app_data_update_as_custom(body)?;
+    let start = bytes.len() - proposal_at.len();
+    let out = [&bytes[..start], &custom, &body[body_used..]].concat();
+    let delta = custom.len() as isize - (2 + body_used) as isize;
+    Ok(Some(Normalized { bytes: out, delta }))
+}
+
+/// The change type an AppDataUpdate to `component` is read as: the participant list, `roles_list` or
+/// `base_room_policy`. Any other component has none.
+const fn change_type_of(component: u16) -> Option<u16> {
+    match component {
+        PARTICIPANT_LIST_COMPONENT_ID => {
+            Some(crate::participant_list::MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE)
+        }
+        ROLES_LIST_COMPONENT_ID => Some(crate::room_policy::MIMI_ROLES_LIST_PROPOSAL_TYPE),
+        BASE_ROOM_POLICY_COMPONENT_ID => {
+            Some(crate::room_policy::MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE)
+        }
+        _ => None,
+    }
 }
 
 /// Decode a `PublicMessage`-wrapped Commit whose `proposals` list holds exactly one by-value
@@ -444,18 +473,23 @@ pub struct AddedClient {
     pub key_package: Vec<u8>,
 }
 
-/// What a `PublicMessage`-wrapped Commit proposes: one participant-list or room-policy change, the clients it adds and the
-/// leaves it removes. The hub holds no ratchet tree, so a removed leaf is a number and never a user.
+/// What a `PublicMessage`-wrapped Commit proposes: at most one participant-list or room-policy change by value, the clients
+/// it adds, the leaves it removes, and the proposals it names by reference, at the epoch it is sent in. The hub holds no
+/// ratchet tree, so a removed leaf is a number and never a user, and a reference is read against what the hub cached.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedCommit {
-    pub update: DecodedCustomProposal,
+    /// `FramedContent.epoch`: the epoch the Commit is sent in, and the one its references were proposed in.
+    pub epoch: u64,
+    pub update: Option<DecodedCustomProposal>,
     pub adds: Vec<AddedClient>,
     pub removes: Vec<u32>,
+    /// Each `ProposalRef`, in order.
+    pub references: Vec<Vec<u8>>,
 }
 
-/// The `Commit.proposals` window of a member-sent `PublicMessage` Commit, read through the rewrite of its AppDataUpdates and
-/// checked whole by openmls's own decoder.
-fn proposals_window(bytes: &[u8]) -> Result<Vec<u8>, WireError> {
+/// The epoch and the `Commit.proposals` window of a member-sent `PublicMessage` Commit, read through the rewrite of its
+/// AppDataUpdates and checked whole by openmls's own decoder.
+fn proposals_window(bytes: &[u8]) -> Result<(u64, Vec<u8>), WireError> {
     let normalized = normalize_app_data_updates(bytes)?;
     let bytes = normalized.as_ref().map_or(bytes, |n| n.bytes.as_slice());
     require_complete_public_message_commit(bytes)?;
@@ -474,7 +508,7 @@ fn proposals_window(bytes: &[u8]) -> Result<Vec<u8>, WireError> {
         });
     }
     let (_group_id, rest) = read_opaque_vec(rest, "FramedContent.group_id")?;
-    let (_epoch, rest) = read_u64(rest, "FramedContent.epoch")?;
+    let (epoch, rest) = read_u64(rest, "FramedContent.epoch")?;
     let (sender_type, rest) = read_u8(rest, "Sender.sender_type")?;
     if sender_type != MLS_SENDER_TYPE_MEMBER {
         return Err(WireError::Codec {
@@ -494,20 +528,24 @@ fn proposals_window(bytes: &[u8]) -> Result<Vec<u8>, WireError> {
         });
     }
     let (window, _rest) = read_opaque_vec(rest, "Commit.proposals")?;
-    Ok(window)
+    Ok((epoch, window))
 }
 
-/// Read a Commit that proposes ONE participant-list or room-policy change beside any number of `Add` and `Remove`
-/// proposals, in any order. Each `Add` is read by openmls's own KeyPackage decoder, which says where it ends; a `Remove` is a
-/// leaf index. Anything else in the list (a `GroupContextExtensions`, `Update`, `PreSharedKey`, `ReInit`,
-/// `ExternalInit`, `SelfRemove`, a proposal by reference, a second change, or a Commit with no change) is refused, so the
-/// hub never reads a proposal it has no rule for. No signature or membership is verified here, and no group state is held.
+/// Read a Commit that proposes at most one participant-list or room-policy change by value beside any number of `Add` and
+/// `Remove` proposals and proposals by reference, in any order. Each `Add` is read by openmls's own KeyPackage decoder,
+/// which says where it ends; a `Remove` is a leaf index; a reference is a `ProposalRef` of [`PROPOSAL_REF_LEN`] bytes, which
+/// the caller resolves against the proposals it cached (RFC 9420 §12.4: a proposal another member sent is included by
+/// reference). Anything else in the list (a `GroupContextExtensions`, `Update`, `PreSharedKey`, `ReInit`, `ExternalInit`,
+/// `SelfRemove`, or a second change by value) is refused, so the hub never reads a proposal it has no rule for. Whether
+/// the Commit carries a change at all is the caller's to decide once its references are resolved. No signature or
+/// membership is verified here, and no group state is held.
 pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError> {
-    let window = proposals_window(bytes)?;
+    let (epoch, window) = proposals_window(bytes)?;
     let budget = crate::protocol_wire::MAX_RUN_ELEMENTS;
     let mut update: Option<DecodedCustomProposal> = None;
     let mut adds = Vec::new();
     let mut removes = Vec::new();
+    let mut references = Vec::new();
     let mut at: &[u8] = &window;
     let mut entries = 0usize;
     while !at.is_empty() {
@@ -519,11 +557,25 @@ pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError>
             });
         }
         let (tag, body) = read_u8(at, "ProposalOrRef.tag")?;
+        if tag == MLS_PROPOSAL_OR_REF_REFERENCE {
+            let (reference, tail) = read_opaque_vec(body, "ProposalOrRef.proposal_ref")?;
+            if reference.len() != PROPOSAL_REF_LEN {
+                return Err(WireError::Codec {
+                    what: "ProposalOrRef.proposal_ref",
+                    detail: format!(
+                        "a ProposalRef is {PROPOSAL_REF_LEN} bytes under 0x0001, got {}",
+                        reference.len()
+                    ),
+                });
+            }
+            references.push(reference);
+            at = tail;
+            continue;
+        }
         if tag != MLS_PROPOSAL_OR_REF_INLINE {
             return Err(WireError::Codec {
                 what: "ProposalOrRef.tag",
-                detail: "by-reference (proposal_ref) proposals are not supported - send by value"
-                    .into(),
+                detail: format!("expected 1 or 2, got {tag}"),
             });
         }
         let (proposal_type, body) = read_u16(body, "Proposal.proposal_type")?;
@@ -587,15 +639,148 @@ pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError>
             }
         }
     }
-    let update = update.ok_or_else(|| WireError::Codec {
-        what: "Commit.proposals",
-        detail: "the Commit carries no participant-list or room-policy change".into(),
-    })?;
     Ok(DecodedCommit {
+        epoch,
         update,
         adds,
         removes,
+        references,
     })
+}
+
+/// A standalone proposal this crate reads: a `Remove` (a leaf index) or one participant-list or room-policy change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadProposal {
+    Remove(u32),
+    Change(DecodedCustomProposal),
+}
+
+/// A member-sent `PublicMessage` proposal: the epoch it was sent in, the sender's leaf, its `ProposalRef`, and what it
+/// proposes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedProposal {
+    pub epoch: u64,
+    pub sender: u32,
+    /// RFC 9420 §5.2 `ProposalRef`: the name a Commit includes it by.
+    pub reference: Vec<u8>,
+    pub proposal: ReadProposal,
+}
+
+/// Read a member-sent `PublicMessage` proposal (RFC 9420 §6.2, content type proposal) that removes a leaf or makes one
+/// participant-list or room-policy change (an AppDataUpdate for that component, or the same change as a custom proposal),
+/// and name it by its `ProposalRef`: the hash, under the label "MLS 1.0 Proposal Reference", of its `AuthenticatedContent`,
+/// which is the message's wire format, framed content and signature as sent, without the version before them or the
+/// membership tag after them. Any other proposal, sender or framing is refused. The whole message is read: nothing may
+/// follow the membership tag. No signature or membership tag is verified here, and no group state is held.
+pub fn decode_proposal_message(bytes: &[u8]) -> Result<DecodedProposal, WireError> {
+    let (version, content) = read_u16(bytes, "MLSMessage.version")?;
+    if version != MLS_PROTOCOL_VERSION_MLS10 {
+        return Err(WireError::Codec {
+            what: "MLSMessage.version",
+            detail: format!("unsupported MLS protocol version {version}"),
+        });
+    }
+    let (wire_format, rest) = read_u16(content, "MLSMessage.wire_format")?;
+    if wire_format != MLS_WIRE_FORMAT_PUBLIC_MESSAGE {
+        return Err(WireError::Codec {
+            what: "MLSMessage.wire_format",
+            detail: format!("expected a PublicMessage (1), got {wire_format}"),
+        });
+    }
+    let (_group_id, rest) = read_opaque_vec(rest, "FramedContent.group_id")?;
+    let (epoch, rest) = read_u64(rest, "FramedContent.epoch")?;
+    let (sender_type, rest) = read_u8(rest, "Sender.sender_type")?;
+    if sender_type != MLS_SENDER_TYPE_MEMBER {
+        return Err(WireError::Codec {
+            what: "Sender.sender_type",
+            detail: format!(
+                "unsupported sender type {sender_type} (only member-sent proposals are read)"
+            ),
+        });
+    }
+    let (sender, rest) = read_u32(rest, "Sender.leaf_index")?;
+    let (_authenticated_data, rest) = read_opaque_vec(rest, "FramedContent.authenticated_data")?;
+    let (content_type, rest) = read_u8(rest, "FramedContent.content_type")?;
+    if content_type != MLS_CONTENT_TYPE_PROPOSAL {
+        return Err(WireError::Codec {
+            what: "FramedContent.content_type",
+            detail: format!("expected proposal (2), got {content_type}"),
+        });
+    }
+    let (proposal_type, rest) = read_u16(rest, "Proposal.proposal_type")?;
+    let (proposal, rest) = match proposal_type {
+        MLS_PROPOSAL_TYPE_REMOVE => {
+            let (leaf, rest) = read_u32(rest, "Remove.removed")?;
+            (ReadProposal::Remove(leaf), rest)
+        }
+        APP_DATA_UPDATE_PROPOSAL_TYPE => {
+            let (component, rest) = read_u16(rest, "AppDataUpdate.component_id")?;
+            let (op, rest) = read_u8(rest, "AppDataUpdate.op")?;
+            let change_type = change_type_of(component)
+                .filter(|_| op == APP_DATA_UPDATE_OP_UPDATE)
+                .ok_or_else(|| WireError::Codec {
+                    what: "Proposal.proposal_type",
+                    detail: "this AppDataUpdate is not an update to the participant list or the room policy"
+                        .into(),
+                })?;
+            let (payload, rest) = read_opaque_vec(rest, "AppDataUpdate.update")?;
+            (
+                ReadProposal::Change(DecodedCustomProposal {
+                    proposal_type: change_type,
+                    payload,
+                }),
+                rest,
+            )
+        }
+        custom if is_a_change_this_crate_reads(custom) => {
+            let (payload, rest) = read_opaque_vec(rest, "Proposal.custom_payload")?;
+            (
+                ReadProposal::Change(DecodedCustomProposal {
+                    proposal_type: custom,
+                    payload,
+                }),
+                rest,
+            )
+        }
+        other => {
+            return Err(WireError::Codec {
+                what: "Proposal.proposal_type",
+                detail: format!(
+                    "proposal type {other:#06x} is not read here (only Remove and one participant-list or room-policy change)"
+                ),
+            })
+        }
+    };
+    let (_signature, membership) = read_opaque_vec(rest, "FramedContentAuthData.signature")?;
+    let (_membership_tag, trailing) = read_opaque_vec(membership, "PublicMessage.membership_tag")?;
+    if !trailing.is_empty() {
+        return Err(WireError::Trailing {
+            what: "PublicMessage",
+            n: trailing.len(),
+        });
+    }
+    let authenticated_content = &content[..content.len() - membership.len()];
+    Ok(DecodedProposal {
+        epoch,
+        sender,
+        reference: proposal_ref(authenticated_content)?,
+        proposal,
+    })
+}
+
+/// RFC 9420 §5.2 `RefHash("MLS 1.0 Proposal Reference", authenticated_content)` under SHA-256, the hash of 0x0001.
+fn proposal_ref(authenticated_content: &[u8]) -> Result<Vec<u8>, WireError> {
+    use sha2::{Digest, Sha256};
+    let encode = |value: &[u8]| {
+        VLBytes::new(value.to_vec())
+            .tls_serialize_detached()
+            .map_err(|e| WireError::Codec {
+                what: "RefHashInput",
+                detail: e.to_string(),
+            })
+    };
+    let input = [encode(PROPOSAL_REF_LABEL)?, encode(authenticated_content)?].concat();
+    Ok(Sha256::digest(&input).to_vec())
 }
 
 const fn is_a_change_this_crate_reads(proposal_type: u16) -> bool {
@@ -618,6 +803,10 @@ fn read_u32<'a>(bytes: &'a [u8], what: &'static str) -> Result<(u32, &'a [u8]), 
 #[cfg(test)]
 #[path = "commit_wire_app_data_tests.rs"]
 pub(crate) mod app_data_tests;
+
+#[cfg(test)]
+#[path = "commit_wire_reference_tests.rs"]
+mod reference_tests;
 
 #[cfg(test)]
 mod tests {

@@ -132,7 +132,7 @@ design), plus the receiver-side verification the draft describes. The implementa
 compute or verify `server_frank`; `SubmitMessageResponse` therefore omits `frank`, and `reportAbuse`
 rejects attached `AbusiveMessage` values rather than accepting them unverified.
 
-## DIV-10 - CLOSED for a Commit carrying one change, with or without `Add` and `Remove`; `roomPolicy`/`memberRole`/`addParticipant`/`authorizeSender` still have no wire route of their own
+## DIV-10 - CLOSED for a Commit carrying one change, with or without `Add` and `Remove`, and for a member leaving through proposals the next Commit includes by reference; `roomPolicy`/`memberRole`/`addParticipant`/`authorizeSender` still have no wire route of their own
 
 **This entry has been rewritten twice already this session as the real picture came into focus -
 each rewrite is kept below rather than silently replaced, per this file's own discipline of
@@ -177,8 +177,26 @@ without needing that machinery in the first place.
   the credential-to-user binding is open, so for a `BasicCredential` the identity bytes are read as the user URI (an
   X.509 credential is refused). A Commit with the change alone is read as it always was, so a participant can be listed
   before any client is added. A Commit that carries a `GroupContextExtensions`, `Update`, `PreSharedKey`, `ReInit`,
-  `ExternalInit`, `SelfRemove`, a proposal by reference, a second change, or no change is still refused, whichever order
-  it is in.
+  `ExternalInit`, `SelfRemove`, a second change, or no change is still refused, whichever order it is in.
+- **A member leaving (-07 §3.5).** A leaving client cannot remove its own devices, so it sends its proposals to the hub:
+  an `update` whose bundle is proposals (`proposalOrCommit` and `moreProposals`) is a leave. The hub takes one
+  participant-list change that only removes participants, with any number of `Remove`s, all member-sent `PublicMessage`s
+  of one epoch, and holds them, each named by its `ProposalRef` (RFC 9420 §5.2, SHA-256 under 0x0001) and kept as sent.
+  The change may arrive as the AppDataUpdate for `0x0022` or as `0xF7A0`. A bundle that adds a participant or changes a
+  role, carries a room-policy change, has two changes, mixes epochs, or has `Remove`s with no change is `invalidProposal`
+  and nothing is held: a Commit of `Remove`s alone is one this hub does not read, so holding those would hold the room.
+  The next Commit at that epoch must include every held proposal by reference (RFC 9420 §12.4: a proposal from another
+  member is included by reference). A reference to nothing held for the Commit's epoch, a reference named twice, or a
+  held proposal left out is `invalidProposal`, with those `ProposalRef`s in `invalidProposals`; nothing changes. A held
+  `Remove` joins the Commit's `Remove`s and the held change becomes its change, and §7.5 is checked as above, so a
+  committer's own change beside a held one is a second change and is refused. A Commit accepted at an epoch clears what
+  was held for it and for every earlier epoch; a bundle for a later epoch drops what was held for earlier ones. Limits:
+  the epoch is read from each message's `FramedContent`, unverified, since the hub holds no group state, and no
+  proposal's signature or membership tag is verified, as for a Commit, so a peer on the allowlist can hold a room's
+  Commits at an epoch with proposals its members cannot verify, as it can already send a Commit they cannot. Which user
+  a `Remove`'s leaf belongs to is not checked (no ratchet tree), nor that the change removes only the sender's own user.
+  Held proposals are not fanned out: the hub sends no `/notify` (see Framing), so the committer learns of them from its
+  own provider. At most a room's participant bound plus one are held per room.
 - **openmls and this path.** The hub reads a Commit with its own decoder and holds no group state, so none of the
   group-processing fixes in other openmls revisions (external AppDataUpdate proposals, the order of AppDataUpdate before
   GroupContextExtensions, an `app_data_dictionary` kept in place on update, a KeyPackage consumed only on a Welcome join) is
@@ -187,9 +205,11 @@ without needing that machinery in the first place.
   is an `UpdateRoomResponse` in a 200: `success` with the hub's acceptance time in milliseconds;
   `notAllowed` for a room this hub does not host, a bundle whose Welcome or GroupInfo is under
   another ciphersuite, or a store limit (the participant cap), with the same bytes for each, so a
-  refusal does not say which of them applied; `invalidProposal` (with an empty `invalidProposals` list)
-  for a body that is not an `UpdateRequest`, a bundle of proposals, an unrecognized proposal
-  type, or an update that does not fit the room. The hub checks that the room URI is under its own
+  refusal does not say which of them applied; `invalidProposal` for a body that is not an
+  `UpdateRequest`, a bundle of proposals that is not a leave, an unrecognized proposal type, or
+  an update that does not fit the room, with an empty `invalidProposals` list except where a
+  Commit's references are at fault (above), which it names. `success` for a bundle of proposals
+  means they are held for the next Commit. The hub checks that the room URI is under its own
   domain, not that the room exists, and answers `invalidProposal` or `success` for a room it
   hosts, so a peer on the allowlist can learn a room's participant count from those answers.
   `wrongEpoch` is never answered, because the hub

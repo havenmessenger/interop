@@ -128,6 +128,19 @@ CREATE TABLE IF NOT EXISTS abuse_reports (
     ts                  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_abuse_room ON abuse_reports(room_uri);
+
+-- Proposals a member sent through `update` for the room's next Commit to include by reference (protocol-07 §3.5: a
+-- leaving client's Remove and participant-list proposals). Each is kept with the epoch it was sent in, named by its
+-- ProposalRef (RFC 9420 §5.2), as the bytes that were sent. A Commit accepted at an epoch clears that epoch and every
+-- earlier one.
+CREATE TABLE IF NOT EXISTS pending_proposals (
+    room_uri  TEXT NOT NULL,
+    epoch     INTEGER NOT NULL,
+    reference BLOB NOT NULL,
+    message   BLOB NOT NULL,
+    ts        INTEGER NOT NULL,
+    PRIMARY KEY (room_uri, reference)
+);
 ";
 
 // Store-and-forward bounds (anti-DoS; ephemeral relay state). A recipient cannot queue more than
@@ -147,6 +160,9 @@ pub const MAX_KEYPACKAGES_PER_USER: i64 = 64;
 // Abuse reports (anti-flood; a hostile or malfunctioning peer must not be able to grow the table
 // without bound). note<V> is bounded independently at decode time (MAX_RUN_AGGREGATE_BYTES).
 pub const MAX_ABUSE_REPORTS: i64 = 65536;
+// Proposals held for a room's next Commit (anti-flood). A leave takes one Remove per device of the leaving user plus one
+// participant-list change, so the bound is a room's participant bound with room to spare for the change.
+pub const MAX_PENDING_PROPOSALS_PER_ROOM: i64 = MAX_PARTICIPANTS_PER_ROOM + 1;
 
 /// One entry of a room's participants vector as the hub stores it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -766,6 +782,70 @@ impl SqliteStore {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Hold `proposals` (each its `ProposalRef` and the message as sent) for the room's next Commit at `epoch`, as one
+    /// transaction. What the room held for an earlier epoch is dropped first, since a Commit can only include proposals
+    /// of its own epoch; a proposal already held is kept as it was. Past the per-room bound nothing is held.
+    pub fn hold_proposals(
+        &self,
+        room_uri: &str,
+        epoch: u64,
+        proposals: &[(Vec<u8>, Vec<u8>)],
+        now_unix: u64,
+    ) -> anyhow::Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM pending_proposals WHERE room_uri = ?1 AND epoch < ?2",
+            params![room_uri, epoch as i64],
+        )?;
+        for (reference, message) in proposals {
+            tx.execute(
+                "INSERT OR IGNORE INTO pending_proposals (room_uri, epoch, reference, message, ts) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![room_uri, epoch as i64, reference, message, now_unix as i64],
+            )?;
+        }
+        let held: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM pending_proposals WHERE room_uri = ?1",
+            params![room_uri],
+            |r| r.get(0),
+        )?;
+        if held > MAX_PENDING_PROPOSALS_PER_ROOM {
+            anyhow::bail!(
+                "pending proposal cap reached for room ({MAX_PENDING_PROPOSALS_PER_ROOM})"
+            );
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The proposals held for the room's next Commit at `epoch`, each its `ProposalRef` and the message as sent, in the
+    /// order they arrived.
+    pub fn held_proposals(
+        &self,
+        room_uri: &str,
+        epoch: u64,
+    ) -> anyhow::Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT reference, message FROM pending_proposals \
+             WHERE room_uri = ?1 AND epoch = ?2 ORDER BY ts, rowid",
+        )?;
+        let rows = stmt
+            .query_map(params![room_uri, epoch as i64], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Drop what the room holds for epoch `epoch` and every earlier one, once a Commit at `epoch` is accepted.
+    pub fn drop_held_proposals_through(&self, room_uri: &str, epoch: u64) -> anyhow::Result<()> {
+        self.conn.execute(
+            "DELETE FROM pending_proposals WHERE room_uri = ?1 AND epoch <= ?2",
+            params![room_uri, epoch as i64],
+        )?;
+        Ok(())
     }
 
     /// Write a room's whole participants vector as ONE SQLite transaction: `rows` become the room's list, in

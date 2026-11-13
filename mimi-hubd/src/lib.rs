@@ -29,7 +29,9 @@ pub mod peer;
 pub mod store;
 pub mod tls;
 
-use mimi_core::commit_wire::{decode_commit_proposals, DecodedCommit};
+use mimi_core::commit_wire::{
+    decode_commit_proposals, decode_proposal_message, DecodedCommit, ReadProposal,
+};
 use mimi_core::consent::{
     validate_consent_entry, ConsentEntry, ConsentOperation, KeyPackageAccess,
 };
@@ -69,6 +71,9 @@ pub enum UpdateRefusal {
     /// The request, or the proposal it carries, is not one this hub can read or apply. The text is fixed wording, never
     /// the peer's bytes.
     Invalid(&'static str),
+    /// As [`Self::Invalid`], naming the proposals at fault by their `ProposalRef`: a reference this hub holds nothing
+    /// for, or a held proposal the Commit leaves out.
+    InvalidProposals(&'static str, Vec<Vec<u8>>),
     /// The store failed. This is the hub's own fault, not a verdict on the request.
     Store,
 }
@@ -77,7 +82,7 @@ impl std::fmt::Display for UpdateRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotAllowed => f.write_str("the hub did not accept this update"),
-            Self::Invalid(why) => f.write_str(why),
+            Self::Invalid(why) | Self::InvalidProposals(why, _) => f.write_str(why),
             Self::Store => f.write_str("the hub could not store this update"),
         }
     }
@@ -771,20 +776,102 @@ impl Provider {
         commit_bytes: &[u8],
         now_unix: u64,
     ) -> Result<(), UpdateRefusal> {
-        let commit = decode_commit_proposals(commit_bytes)
+        let mut commit = decode_commit_proposals(commit_bytes)
             .map_err(|_| UpdateRefusal::Invalid("the commit is not one this hub can read"))?;
         // A KeyPackage the gate refuses (a foreign suite, a bad signature) refuses the whole Commit before anything changes.
         for added in &commit.adds {
             mimi_core::gate::mimi_gate_keypackage(&added.key_package)
                 .map_err(|_| UpdateRefusal::NotAllowed)?;
         }
-        let decoded = &commit.update;
+        self.assert_hub_of_record(room_uri)
+            .map_err(|_| UpdateRefusal::NotAllowed)?;
+        self.include_held_proposals(room_uri, &mut commit)?;
+        let epoch = commit.epoch;
+        self.apply_decoded_commit(room_uri, &commit, now_unix)?;
+        self.store
+            .drop_held_proposals_through(room_uri, epoch)
+            .map_err(|_| UpdateRefusal::Store)
+    }
+
+    /// Read the proposals `commit` names by reference into it, from what this hub holds for the room at the Commit's
+    /// epoch (protocol-07 §3.5, RFC 9420 §12.4). Every reference must name a proposal held for that epoch, and every
+    /// proposal held for it must be named: the hub requires the next Commit to include them. A held Remove joins the
+    /// Commit's Removes and a held change becomes its change; a held change beside one sent by value is a second change.
+    fn include_held_proposals(
+        &self,
+        room_uri: &str,
+        commit: &mut DecodedCommit,
+    ) -> Result<(), UpdateRefusal> {
+        let held = self
+            .store
+            .held_proposals(room_uri, commit.epoch)
+            .map_err(|_| UpdateRefusal::Store)?;
+        let unknown: Vec<Vec<u8>> = commit
+            .references
+            .iter()
+            .enumerate()
+            .filter(|(at, reference)| {
+                commit.references[..*at].contains(reference)
+                    || !held.iter().any(|(name, _)| name == *reference)
+            })
+            .map(|(_, reference)| reference.clone())
+            .collect();
+        if !unknown.is_empty() {
+            return Err(UpdateRefusal::InvalidProposals(
+                "the Commit names a proposal this hub does not hold for its epoch, or names one twice",
+                unknown,
+            ));
+        }
+        let left_out: Vec<Vec<u8>> = held
+            .iter()
+            .filter(|(name, _)| !commit.references.contains(name))
+            .map(|(name, _)| name.clone())
+            .collect();
+        if !left_out.is_empty() {
+            return Err(UpdateRefusal::InvalidProposals(
+                "the Commit leaves out proposals this hub holds for its epoch",
+                left_out,
+            ));
+        }
+        for reference in &commit.references {
+            let (_, message) = held
+                .iter()
+                .find(|(name, _)| name == reference)
+                .ok_or(UpdateRefusal::Store)?;
+            match decode_proposal_message(message)
+                .map_err(|_| UpdateRefusal::Store)?
+                .proposal
+            {
+                ReadProposal::Remove(leaf) => commit.removes.push(leaf),
+                ReadProposal::Change(change) => {
+                    if commit.update.is_some() {
+                        return Err(UpdateRefusal::Invalid(
+                            "a second participant-list or room-policy change in one Commit",
+                        ));
+                    }
+                    commit.update = Some(change);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply a Commit whose references are already read in.
+    fn apply_decoded_commit(
+        &self,
+        room_uri: &str,
+        commit: &DecodedCommit,
+        now_unix: u64,
+    ) -> Result<(), UpdateRefusal> {
+        let decoded = commit.update.as_ref().ok_or(UpdateRefusal::Invalid(
+            "the Commit carries no participant-list or room-policy change",
+        ))?;
         match decoded.proposal_type {
             MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE => {
                 let update = decode_participant_list_update(&decoded.payload).map_err(|_| {
                     UpdateRefusal::Invalid("the participant list update is malformed")
                 })?;
-                self.check_commit_against_list(room_uri, &commit, &update)?;
+                self.check_commit_against_list(room_uri, commit, &update)?;
                 self.apply_participant_list_update(room_uri, &update, now_unix)
             }
             MIMI_ROLES_LIST_PROPOSAL_TYPE => {
@@ -794,7 +881,7 @@ impl Provider {
                     .map_err(|_| UpdateRefusal::NotAllowed)?;
                 self.check_commit_against_list(
                     room_uri,
-                    &commit,
+                    commit,
                     &ParticipantListUpdate::default(),
                 )?;
                 // The roles replace the room's roles; the base policy stays as it was, or is the draft's default
@@ -813,7 +900,7 @@ impl Provider {
                     .map_err(|_| UpdateRefusal::NotAllowed)?;
                 self.check_commit_against_list(
                     room_uri,
-                    &commit,
+                    commit,
                     &ParticipantListUpdate::default(),
                 )?;
                 // A base policy applies to roles, so a room with none stored takes the roles first.
@@ -903,9 +990,10 @@ impl Provider {
     }
 
     /// `update` (§5.3): the request body is an `UpdateRequest`, which for MLS is a `HandshakeBundle`. A Commit bundle's
-    /// commit goes through [`Self::apply_update_commit`]; a bundle of proposals is refused, since this hub takes a change
-    /// only as a Commit. The Welcome, `GroupInfoOption` and `RatchetTreeOption` of a Commit bundle are read and
-    /// suite-gated by the codec and are neither stored nor relayed. Nothing changes unless the whole request is accepted.
+    /// commit goes through [`Self::apply_update_commit`]; a bundle of proposals is a member leaving (protocol-07 §3.5)
+    /// and goes through [`Self::hold_leave_proposals`]. The Welcome, `GroupInfoOption` and `RatchetTreeOption` of a Commit
+    /// bundle are read and suite-gated by the codec and are neither stored nor relayed. Nothing changes unless the whole
+    /// request is accepted.
     pub fn apply_update_request(
         &self,
         room_uri: &str,
@@ -920,10 +1008,69 @@ impl Provider {
             HandshakeBundle::Commit {
                 proposal_or_commit, ..
             } => self.apply_update_commit(room_uri, &proposal_or_commit, now_unix),
-            HandshakeBundle::Proposal { .. } => Err(UpdateRefusal::Invalid(
-                "this hub takes a change as a Commit, not as proposals",
-            )),
+            HandshakeBundle::Proposal {
+                proposal_or_commit,
+                more_proposals,
+            } => self.hold_leave_proposals(
+                room_uri,
+                std::iter::once(&proposal_or_commit).chain(&more_proposals),
+                now_unix,
+            ),
         }
+    }
+
+    /// Hold a leaving member's proposals for the room's next Commit (protocol-07 §3.5): Removes for its user's devices and
+    /// one participant-list change that only removes participants, all of one epoch. They are held by `ProposalRef`, and
+    /// the next Commit at that epoch must include every one by reference. Anything else as a proposal is refused: a list
+    /// change that adds or changes a role, a room-policy change, two changes, proposals of different epochs, or Removes
+    /// with no list change (a Commit of Removes alone is not one this hub reads, so holding them would hold the room).
+    /// The proposals' signatures are not verified: the hub holds no group state, as for a Commit.
+    pub fn hold_leave_proposals<'a>(
+        &self,
+        room_uri: &str,
+        messages: impl Iterator<Item = &'a Vec<u8>>,
+        now_unix: u64,
+    ) -> Result<(), UpdateRefusal> {
+        const NOT_A_LEAVE: UpdateRefusal = UpdateRefusal::Invalid(
+            "proposals are taken only as a leave: Removes and one participant-list change that only removes",
+        );
+        self.assert_hub_of_record(room_uri)
+            .map_err(|_| UpdateRefusal::NotAllowed)?;
+        let mut epoch = None;
+        let mut change = None;
+        let mut held = Vec::new();
+        for message in messages {
+            let proposal = decode_proposal_message(message)
+                .map_err(|_| UpdateRefusal::Invalid("a proposal is not one this hub can read"))?;
+            if *epoch.get_or_insert(proposal.epoch) != proposal.epoch {
+                return Err(UpdateRefusal::Invalid(
+                    "the proposals are not all of one epoch",
+                ));
+            }
+            if let ReadProposal::Change(decoded) = &proposal.proposal {
+                if change.is_some() || decoded.proposal_type != MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE
+                {
+                    return Err(NOT_A_LEAVE);
+                }
+                let update = decode_participant_list_update(&decoded.payload).map_err(|_| {
+                    UpdateRefusal::Invalid("the participant list update is malformed")
+                })?;
+                if update.removed_indices.is_empty()
+                    || !update.added_participants.is_empty()
+                    || !update.changed_role_participants.is_empty()
+                {
+                    return Err(NOT_A_LEAVE);
+                }
+                change = Some(update);
+            }
+            held.push((proposal.reference, message.clone()));
+        }
+        let (Some(epoch), Some(_)) = (epoch, change) else {
+            return Err(NOT_A_LEAVE);
+        };
+        self.store
+            .hold_proposals(room_uri, epoch, &held, now_unix)
+            .map_err(|e| store_refusal(&e))
     }
 
     /// Enact a `ParticipantListUpdate` on this room's participants vector, as ONE atomic transition: a failure

@@ -328,11 +328,9 @@ fn removes_beside_the_participant_list_change_are_read_as_leaf_indices() {
         let decoded = decode_commit_proposals(&commit_with(&entries)).unwrap();
         assert_eq!(decoded.removes, vec![1, 3]);
         assert!(decoded.adds.is_empty());
-        assert_eq!(
-            decoded.update.proposal_type,
-            MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE
-        );
-        assert_eq!(decoded.update.payload, update_of(8));
+        let change = decoded.update.expect("the change is read");
+        assert_eq!(change.proposal_type, MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE);
+        assert_eq!(change.payload, update_of(8));
     }
 }
 
@@ -344,14 +342,15 @@ fn a_commit_the_reader_has_no_rule_for_is_refused() {
         Some(&update_of(8)),
     );
     let group_context_extensions = [vec![1], 7u16.to_be_bytes().to_vec(), vec![0]].concat();
-    let reference = [vec![MLS_PROPOSAL_OR_REF_REFERENCE], vl(&[7; 32])].concat();
-    // No change at all, only a Remove.
-    assert!(decode_commit_proposals(&commit_with(&[remove_entry(1)])).is_err());
-    // Another standard proposal, or one by reference, beside the change.
-    for other in [group_context_extensions, reference] {
-        assert!(decode_commit_proposals(&commit_with(&[update.clone(), other.clone()])).is_err());
-        assert!(decode_commit_proposals(&commit_with(&[other, update.clone()])).is_err());
-    }
+    // Another standard proposal beside the change.
+    assert!(decode_commit_proposals(&commit_with(&[
+        update.clone(),
+        group_context_extensions.clone()
+    ]))
+    .is_err());
+    assert!(
+        decode_commit_proposals(&commit_with(&[group_context_extensions, update.clone()])).is_err()
+    );
     // A second change.
     assert!(decode_commit_proposals(&commit_with(&[update.clone(), update.clone()])).is_err());
     // A Remove cut short.

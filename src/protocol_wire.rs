@@ -1746,15 +1746,29 @@ impl HandshakeBundle {
                 let mut budget = RunBudget::new();
                 while offset < window.len() {
                     let slice = &window[offset..];
-                    let consumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let mut c: &[u8] = slice;
-                        MlsMessageIn::tls_deserialize(&mut c).map(|_| slice.len() - c.len())
-                    }))
-                    .map_err(|_| WireError::Codec {
-                        what: "moreProposals[]",
-                        detail: "malformed MLSMessage (decoder panicked)".into(),
-                    })?
-                    .map_err(|e| WireError::MlsMessage(format!("{e:?}")))?;
+                    // A proposal that is an AppDataUpdate is sized through its rewritten form, as the first one is.
+                    let normalized = crate::commit_wire::normalize_app_data_updates(slice)?;
+                    let readable: &[u8] = normalized.as_ref().map_or(slice, |n| n.bytes.as_slice());
+                    let readable_len =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let mut c: &[u8] = readable;
+                            MlsMessageIn::tls_deserialize(&mut c).map(|_| readable.len() - c.len())
+                        }))
+                        .map_err(|_| WireError::Codec {
+                            what: "moreProposals[]",
+                            detail: "malformed MLSMessage (decoder panicked)".into(),
+                        })?
+                        .map_err(|e| WireError::MlsMessage(format!("{e:?}")))?;
+                    let consumed = match &normalized {
+                        Some(n) => usize::try_from(readable_len as isize - n.delta)
+                            .ok()
+                            .filter(|&used| used <= slice.len())
+                            .ok_or_else(|| WireError::Codec {
+                                what: "moreProposals[]",
+                                detail: "the rewritten proposal's end does not map back".into(),
+                            })?,
+                        None => readable_len,
+                    };
                     budget.record("moreProposals[]", consumed)?;
                     wrapped.push(window[offset..offset + consumed].to_vec());
                     offset += consumed;
