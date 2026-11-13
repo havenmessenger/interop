@@ -313,6 +313,33 @@ diagnostic instead of a silent no-op.
 | POST | `/mimi/v1/addParticipant?room=&member=` | Register a room participant. |
 | POST | `/mimi/v1/authorizeSender?room=&sender=` | Check whether a sender may send in a room. |
 
+## Enrolling a handle for identifierQuery
+
+`identifierQuery` answers 200 only for a handle that opted in, and 404 with no body for every other one
+(`../DIVERGENCES.md`, DIV-4). No route enrolls a handle, so no peer can make a user discoverable. The operator does
+it, on the hub's host:
+
+```bash
+mimi-hubd --config /etc/mimi-hubd/mimi-hubd.toml enroll erin
+# or with the environment alone:
+MIMI_DB_PATH=/var/lib/mimi-hubd/hub.db mimi-hubd enroll erin
+```
+
+Output from the sequence above:
+
+```
+enrolled "erin" for identifierQuery in /var/lib/mimi-hubd/hub.db
+```
+
+It takes the database path from the settings the daemon takes, reads no certificate and needs no provider domain. Run
+it as the user the daemon runs as. A running hub reads its store at each query, so it answers for the handle from its
+next request and there is nothing to restart. The handle is matched exactly. Enrolling one that is already there
+changes nothing.
+
+It refuses when no database is at the path it resolved, and creates none: run without the hub's settings it would
+otherwise make a new, empty database at the default path and enroll the handle there, while the hub's own store
+stayed as it was.
+
 ## What this hub does not do (v1 scope)
 
 - **§5.6 GroupInfo / external-commit join.** Membership is add-driven only.

@@ -20,6 +20,10 @@
 //! Startup order is deliberate: mTLS material is read and validated into a `ServerConfig` BEFORE
 //! any durable state is opened. A hub with bad or missing certificates should fail before it
 //! touches disk, not after creating a database file it then never serves from.
+//!
+//! `mimi-hubd enroll <HANDLE>` does not serve. It enrolls a handle for `identifierQuery` in the store the settings
+//! above name (`MIMI_DB_PATH`, or `db_path` in the config file), says which database it wrote, and exits. It reads no
+//! certificate and needs no provider domain. See `mimi_hubd::enroll`.
 
 mod config;
 
@@ -27,9 +31,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use mimi_hubd::{
     activity::{enabled as activity_enabled, with_activity_log},
+    enroll::enroll_handle,
     http::{build_directory_router, build_router},
     tls, Provider,
 };
@@ -42,8 +47,22 @@ struct Cli {
     /// MIMI_PUBLIC_BASE_URL. Any of
     /// these env vars, if set to a non-empty value, overrides the same key from the file. Omit
     /// this flag for the original env-only behavior.
-    #[arg(long)]
+    #[arg(long, global = true)]
     config: Option<PathBuf>,
+
+    /// With no subcommand, run the hub.
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Enroll a handle for identifierQuery in the hub's store, then exit. Run it on the hub's host with the hub's
+    /// own settings, as the user the hub runs as; a running hub answers for the handle from its next request.
+    Enroll {
+        /// The handle, matched exactly by identifierQuery.
+        handle: String,
+    },
 }
 
 #[tokio::main]
@@ -55,6 +74,15 @@ async fn main() -> anyhow::Result<()> {
         .map(config::ConfigFile::load)
         .transpose()?;
     let resolved = config::resolve_all(file.as_ref());
+
+    if let Some(Command::Enroll { handle }) = &cli.command {
+        let db_path = resolved["MIMI_DB_PATH"]
+            .as_deref()
+            .expect("MIMI_DB_PATH always resolves - it has a default");
+        enroll_handle(db_path, handle)?;
+        println!("enrolled {handle:?} for identifierQuery in {db_path}");
+        return Ok(());
+    }
 
     let domain = resolved["MIMI_PROVIDER_DOMAIN"].clone().ok_or_else(|| {
         anyhow::anyhow!(

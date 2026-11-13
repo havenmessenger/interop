@@ -23,6 +23,7 @@
 //! assets+OHTTP §5.10 (DIV-3).
 
 pub mod activity;
+pub mod enroll;
 pub mod http;
 pub mod notify_source;
 pub mod peer;
