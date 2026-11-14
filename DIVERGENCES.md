@@ -336,8 +336,11 @@ room-policy-04, with values `0x0024` to `0x0030` suggested and not yet registere
 They are read the way the participant-list update is, as the private types `0xF7A3` and `0xF7A4`
 while the message is being read. The private JSON carrier `0xF7A1` that earlier versions read is
 gone. A base policy applies to roles, so a base update for a room that has no roles is refused until a
-role list has been sent. A role list sent first sets the roles and leaves the base policy at the
-draft's defaults.
+role list has been sent; room-policy-04 has no such rule. This hub keeps base and roles as one policy and, once a room
+has a policy, enforces `canSendMessage` by role, so a base policy with no roles would leave nobody able to send. A role
+list sent first sets the roles and leaves the base policy at the draft's defaults. A role list whose index 1 is not
+named `banned` is refused: room-policy-04 says the banned role "always has role_index = 1 and role_name = banned" and
+that it "does not have to exist", and this hub reads that as fixing the name of whatever role holds index 1.
 
 What the hub keeps of them is what it enforces. Of a role: its index, its name, its
 `authorized_role_changes`, and the capabilities `canAddParticipant` (`0x0000`),

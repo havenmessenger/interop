@@ -38,9 +38,9 @@ pub enum RoomPolicyError {
     /// A P3 membership-count constraint was violated (fixed_membership growth; max_clients/max_users).
     #[error("{0}")]
     MembershipConstraint(String),
-    /// P2 (§8.6): a room-policy change shared a commit with a participant-list change.
+    /// P2 (room-policy-04 §3): a role list change shared a commit with a participant-list change.
     #[error(
-        "P2: a room-policy change MUST NOT share a commit with a participant-list change (§8.6)"
+        "P2: a role list change MUST NOT share a commit with a participant-list change (room-policy-04 §3)"
     )]
     PolicyRosterCoCommit,
     /// A room-policy component value from a peer did not decode, or broke a rule of the draft a decoder can check.
@@ -257,17 +257,16 @@ impl RoomPolicy {
     }
 }
 
-/// P2 (room-policy-04 §8.6 EXACT): a Role-definition (mimiRoomPolicy) change is NOT valid in the same
-/// commit as any participant-list (mimiParticipantList) change. Given the custom proposal types carried
-/// in one commit, reject the forbidden co-occurrence. Fail-closed.
+/// P2 (room-policy-04 §3): a role list change is not valid in the same commit as any participant-list change. A base
+/// room policy change may share one (§5 sets no such rule). Given the custom proposal types carried in one commit, reject
+/// the forbidden co-occurrence. [`crate::commit_wire::check_changes`] applies the same rule to a decoded Commit.
 pub fn validate_commit_component_exclusivity(
     custom_proposal_types: &[u16],
 ) -> Result<(), RoomPolicyError> {
-    let has_policy = custom_proposal_types.contains(&MIMI_ROLES_LIST_PROPOSAL_TYPE)
-        || custom_proposal_types.contains(&MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE);
+    let has_roles = custom_proposal_types.contains(&MIMI_ROLES_LIST_PROPOSAL_TYPE);
     let has_roster = custom_proposal_types
         .contains(&crate::participant_list::MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE);
-    if has_policy && has_roster {
+    if has_roles && has_roster {
         return Err(RoomPolicyError::PolicyRosterCoCommit);
     }
     Ok(())
@@ -534,17 +533,21 @@ mod tests {
     #[test]
     fn p2_policy_and_roster_cannot_share_a_commit() {
         use crate::participant_list::MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE;
-        // both present → rejected
+        // a role list beside a participant-list change is refused (§3); a base room policy beside one is not (§5)
+        assert!(validate_commit_component_exclusivity(&[
+            MIMI_ROLES_LIST_PROPOSAL_TYPE,
+            MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE
+        ])
+        .is_err());
+        assert!(validate_commit_component_exclusivity(&[
+            MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE,
+            MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE
+        ])
+        .is_ok());
         for policy_type in [
             MIMI_ROLES_LIST_PROPOSAL_TYPE,
             MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE,
         ] {
-            assert!(validate_commit_component_exclusivity(&[
-                policy_type,
-                MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE
-            ])
-            .is_err());
-            // either alone → fine
             assert!(validate_commit_component_exclusivity(&[policy_type]).is_ok());
         }
         assert!(
