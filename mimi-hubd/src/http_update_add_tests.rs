@@ -275,7 +275,15 @@ async fn a_role_list_beside_a_participant_change_is_refused() {
     .concat();
     let commit = commit_around(&update(&[CAROL], &[]), &[add_of(CAROL)], &[roles_change]);
     let (answer, p) = answer_of(commit).await;
-    assert!(is_invalid(&answer), "{answer:?}");
+    // The answer names the rule, not only that the Commit was not read.
+    assert!(
+        matches!(
+            &answer,
+            UpdateRoomResponse::InvalidProposal { error_description, .. }
+                if error_description.contains("room-policy-04 §3")
+        ),
+        "{answer:?}"
+    );
     assert_eq!(listed(&p), vec![ALICE.to_string(), BOB.to_string()]);
     assert_eq!(p.lock().unwrap().room_policy(ROOM).unwrap(), None);
 }

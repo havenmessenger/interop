@@ -31,7 +31,8 @@ pub mod store;
 pub mod tls;
 
 use mimi_core::commit_wire::{
-    check_changes, decode_commit_proposals, decode_proposal_message, DecodedCommit, ReadProposal,
+    changes_refusal, check_changes, decode_commit_proposals, decode_proposal_message,
+    DecodedCommit, ReadProposal,
 };
 use mimi_core::consent::{
     validate_consent_entry, ConsentEntry, ConsentOperation, KeyPackageAccess,
@@ -820,8 +821,12 @@ impl Provider {
         commit_bytes: &[u8],
         now_unix: u64,
     ) -> Result<(), UpdateRefusal> {
-        let mut commit = decode_commit_proposals(commit_bytes)
-            .map_err(|_| UpdateRefusal::Invalid("the commit is not one this hub can read"))?;
+        // A Commit refused for the changes it carries together says which rule refused it; any other is unreadable.
+        let mut commit = decode_commit_proposals(commit_bytes).map_err(|error| {
+            UpdateRefusal::Invalid(
+                changes_refusal(&error).unwrap_or("the commit is not one this hub can read"),
+            )
+        })?;
         // A KeyPackage the gate refuses (a foreign suite, a bad signature) refuses the whole Commit before anything changes.
         for added in &commit.adds {
             mimi_core::gate::mimi_gate_keypackage(&added.key_package)

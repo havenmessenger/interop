@@ -649,6 +649,31 @@ pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError>
     })
 }
 
+/// The reasons [`check_changes`] gives, so a caller can say which one refused a Commit.
+const CHANGE_REFUSALS: [&str; 3] = [
+    TWO_PARTICIPANT_LIST_UPDATES,
+    TWO_POLICY_CHANGES_OF_ONE_KIND,
+    ROLE_LIST_BESIDE_PARTICIPANT_CHANGE,
+];
+const TWO_PARTICIPANT_LIST_UPDATES: &str =
+    "more than one participant-list update in one Commit (this hub reads one)";
+const TWO_POLICY_CHANGES_OF_ONE_KIND: &str =
+    "two changes of the same room-policy component in one Commit";
+const ROLE_LIST_BESIDE_PARTICIPANT_CHANGE: &str =
+    "a role list change may not share a Commit with a participant-list change (room-policy-04 §3)";
+
+/// When [`decode_commit_proposals`] refused a Commit for the changes it carries together, the reason
+/// [`check_changes`] gave; `None` for any other decoding error.
+pub fn changes_refusal(error: &WireError) -> Option<&'static str> {
+    match error {
+        WireError::Codec {
+            what: "Commit.proposals",
+            detail,
+        } => CHANGE_REFUSALS.into_iter().find(|reason| reason == detail),
+        _ => None,
+    }
+}
+
 /// Whether one Commit may carry these participant-list and room-policy changes together. At most one change of each kind:
 /// protocol-07 §7.5 lets a Commit carry several participant-list updates, but this crate reads one. A role list may not
 /// share a Commit with a participant-list change (room-policy-04 §3); a base room policy may.
@@ -663,15 +688,13 @@ pub fn check_changes(changes: &[DecodedCustomProposal]) -> Result<(), &'static s
     let roles_list = count(crate::room_policy::MIMI_ROLES_LIST_PROPOSAL_TYPE);
     let base_room_policy = count(crate::room_policy::MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE);
     if participant_list > 1 {
-        return Err("more than one participant-list update in one Commit (this hub reads one)");
+        return Err(TWO_PARTICIPANT_LIST_UPDATES);
     }
     if roles_list > 1 || base_room_policy > 1 {
-        return Err("two changes of the same room-policy component in one Commit");
+        return Err(TWO_POLICY_CHANGES_OF_ONE_KIND);
     }
     if roles_list == 1 && participant_list == 1 {
-        return Err(
-            "a role list change may not share a Commit with a participant-list change (room-policy-04 §3)",
-        );
+        return Err(ROLE_LIST_BESIDE_PARTICIPANT_CHANGE);
     }
     Ok(())
 }
