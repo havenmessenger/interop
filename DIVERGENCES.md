@@ -264,7 +264,8 @@ length-prefixed window. `id_request_extensions`/`id_response_extensions` (§5.8)
 decoder consumes these fields without interpreting or retaining their contents, since nothing here
 produces or consumes those specific fields.
 `update`'s `RatchetTreeOption` field (§5.3) also stays opaque, for the same reason as the rest
-of `update`'s codec: no live accept-path exists yet. A `Full` `GroupInfoOption` is read raw and
+of `update`'s codec: no live accept-path exists yet. The wire vectors fill it with a real option
+(see DIV-12), not filler bytes, so a decoder that reads it is not thrown by them. A `Full` `GroupInfoOption` is read raw and
 suite-gated; a `Partial` one stays an opaque length-prefixed blob (DIV-12).
 
 ## DIV-12 - a `Partial` `GroupInfoOption` payload carries a length prefix
@@ -280,6 +281,12 @@ where one ends. It is written with a `<V>` length prefix, the only way to keep
 `ratchetTreeOption` (the trailing field) findable, and it is not suite-gated. A peer that
 sends a raw `Partial` payload will not decode against this codec until `PartialGroupInfo` is
 implemented. The codec is not wired to any route, so no live exchange depends on it.
+
+The protocol-07 wire vectors (`tests/vectors/protocol07-vectors.json`) are written so another implementation can decode
+them: every `HandshakeBundle` carries a one-byte `RatchetTreeOption` naming `distributionService`
+(draft-ietf-mls-ratchet-tree-options §3), and every `UpdateRequest` carries a `Full` GroupInfoOption with the committing
+group's GroupInfo. The one exception is `hb-03-partial-group-info`, which carries this divergence's length-prefixed
+`Partial` payload and decodes only against this codec.
 
 ## DIV-13 - an exhausted client is answered with `partialSuccess`
 

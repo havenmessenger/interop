@@ -147,9 +147,9 @@ fn add_commit() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     )
 }
 
-/// The by-value proposal message and the Commit over it: a group of one proposes and commits one custom proposal of
-/// `proposal_type` carrying `payload`.
-fn custom_proposal_and_commit(proposal_type: u16, payload: Vec<u8>) -> (Vec<u8>, Vec<u8>) {
+/// The by-value proposal message, the Commit over it, and the committing group's GroupInfo once the Commit is merged: a
+/// group of one proposes and commits one custom proposal of `proposal_type` carrying `payload`.
+fn custom_proposal_and_commit(proposal_type: u16, payload: Vec<u8>) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let provider = OpenMlsRustCrypto::default();
     let (private_key, public_key) = provider
         .crypto()
@@ -165,7 +165,8 @@ fn custom_proposal_and_commit(proposal_type: u16, payload: Vec<u8>) -> (Vec<u8>,
         Some(&[Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519]),
         None,
         Some(&[ProposalType::Custom(proposal_type)]),
-        None,
+        // A member's own credential type must be among its capabilities (RFC 9420 §7.2).
+        Some(&[CredentialType::Basic]),
     );
     let config = MlsGroupCreateConfig::builder()
         .capabilities(capabilities)
@@ -183,9 +184,18 @@ fn custom_proposal_and_commit(proposal_type: u16, payload: Vec<u8>) -> (Vec<u8>,
     let (commit, _welcome, _group_info) = group
         .commit_to_pending_proposals(&provider, &signer)
         .unwrap();
+    group.merge_pending_commit(&provider).unwrap();
+    let group_info = group
+        .export_group_info(provider.crypto(), &signer, false)
+        .unwrap()
+        .tls_serialize_detached()
+        .unwrap();
+    // `version` (mls10) and `wire_format` (mls_group_info) precede the GroupInfo in an MLSMessage.
+    assert_eq!(group_info[..4], [0x00, 0x01, 0x00, 0x04]);
     (
         proposal.tls_serialize_detached().unwrap(),
         commit.tls_serialize_detached().unwrap(),
+        group_info[4..].to_vec(),
     )
 }
 
@@ -219,16 +229,21 @@ fn vl(bytes: &[u8]) -> Vec<u8> {
         .unwrap()
 }
 
-/// An `UpdateRequest`: a Commit bundle with no Welcome, a Partial group info and no ratchet tree.
-fn update_request(commit: &[u8]) -> Vec<u8> {
+/// `RatchetTreeOption` naming `distributionService` (draft-ietf-mls-ratchet-tree-options §3): the tree is reconstructed
+/// by the Distribution Service from the group's handshake, so the option carries no tree of its own.
+const TREE_FROM_DS: [u8; 1] = [4];
+
+/// An `UpdateRequest`: a Commit bundle with no Welcome, the committing group's Full GroupInfo, and a ratchet tree left to
+/// the Distribution Service.
+fn update_request(commit: &[u8], group_info: &[u8]) -> Vec<u8> {
     HandshakeBundle::Commit {
         proposal_or_commit: commit.to_vec(),
         welcome: None,
         group_info_option: GroupInfoOption {
-            representation: GroupInfoRepresentation::Partial,
-            payload: Vec::new(),
+            representation: GroupInfoRepresentation::Full,
+            payload: group_info.to_vec(),
         },
-        ratchet_tree_option: Vec::new(),
+        ratchet_tree_option: TREE_FROM_DS.to_vec(),
     }
     .encode()
     .unwrap()
@@ -332,7 +347,7 @@ fn main() {
         ..Default::default()
     })
     .unwrap();
-    let (proposal_message, commit_message) =
+    let (proposal_message, commit_message, commit_group_info) =
         custom_proposal_and_commit(MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE, add_carol.clone());
     let app_data_commit =
         as_app_data_update(&commit_message, &add_carol, PARTICIPANT_LIST_COMPONENT);
@@ -340,7 +355,9 @@ fn main() {
     // protocol-07 section 7.5: an index is a position in the list as it stood before the update, and added participants are
     // appended. A user already listed cannot be added.
     let as_commit = |payload: &[u8]| {
-        custom_proposal_and_commit(MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE, payload.to_vec()).1
+        let (_proposal, commit, group_info) =
+            custom_proposal_and_commit(MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE, payload.to_vec());
+        (commit, group_info)
     };
     let remove_position_1 = encode_participant_list_update(&ParticipantListUpdate {
         removed_indices: vec![1],
@@ -371,14 +388,16 @@ fn main() {
         authorized_role_changes: Vec::new(),
     }]);
     let base = encode_base_room_policy(&BaseRoomPolicy::default(), None);
-    let remove_commit = as_commit(&remove_position_1);
-    let again_commit = as_commit(&add_alice_again);
-    let zoe_commit = as_commit(&remove_and_add_zoe);
-    let roles_commit = as_app_data_update(&as_commit(&roles), &roles, ROLES_LIST_COMPONENT);
-    let base_commit = as_app_data_update(&as_commit(&base), &base, BASE_ROOM_POLICY_COMPONENT);
+    let (remove_commit, remove_group_info) = as_commit(&remove_position_1);
+    let (again_commit, again_group_info) = as_commit(&add_alice_again);
+    let (zoe_commit, zoe_group_info) = as_commit(&remove_and_add_zoe);
+    let (roles_custom, roles_group_info) = as_commit(&roles);
+    let roles_commit = as_app_data_update(&roles_custom, &roles, ROLES_LIST_COMPONENT);
+    let (base_custom, base_group_info) = as_commit(&base);
+    let base_commit = as_app_data_update(&base_custom, &base, BASE_ROOM_POLICY_COMPONENT);
     let cut_roles = &roles[..roles.len() - 1];
-    let cut_roles_commit =
-        as_app_data_update(&as_commit(cut_roles), cut_roles, ROLES_LIST_COMPONENT);
+    let (cut_roles_custom, cut_roles_group_info) = as_commit(cut_roles);
+    let cut_roles_commit = as_app_data_update(&cut_roles_custom, cut_roles, ROLES_LIST_COMPONENT);
     let proposals_bundle = HandshakeBundle::Proposal {
         proposal_or_commit: proposal_message,
         more_proposals: Vec::new(),
@@ -441,43 +460,43 @@ fn main() {
             &key_material(0, USER, &[success(CLIENT_A, &a), exhausted(CLIENT_B)]), "refused", None),
         vector("km-x3-user-unknown-with-client", km, "userStatus userUnknown must not carry a client",
             &key_material(4, USER, &[exhausted(CLIENT_A)]), "refused", None),
-        vector("hb-01-commit-bare-welcome-full-group-info", hb, "a Commit, a bare Welcome, a raw Full GroupInfo and a ratchet tree",
-            &bundle(&commit, Some(&welcome), 1, &group_info, &[0xCC, 0xDD]), "ok", Some("Commit")),
+        vector("hb-01-commit-bare-welcome-full-group-info", hb, "a Commit, a bare Welcome, a raw Full GroupInfo and a ratchet tree left to the Distribution Service",
+            &bundle(&commit, Some(&welcome), 1, &group_info, &TREE_FROM_DS), "ok", Some("Commit")),
         vector("hb-02-commit-without-welcome", hb, "a Commit with no Welcome and a raw Full GroupInfo",
-            &bundle(&commit, None, 1, &group_info, &[]), "ok", Some("Commit")),
-        vector("hb-03-partial-group-info", hb, "a Partial GroupInfoOption, written with a length prefix",
-            &bundle(&commit, Some(&welcome), 2, &partial, &[0xEE]), "ok", Some("Commit")),
+            &bundle(&commit, None, 1, &group_info, &TREE_FROM_DS), "ok", Some("Commit")),
+        vector("hb-03-partial-group-info", hb, "a Partial GroupInfoOption, written with a length prefix; it decodes only against this codec (DIVERGENCES.md DIV-12)",
+            &bundle(&commit, Some(&welcome), 2, &partial, &TREE_FROM_DS), "ok", Some("Commit")),
         vector("hb-x1-welcome-in-mls-message", hb, "the Welcome wrapped in an MLSMessage instead of bare",
-            &bundle(&commit, Some(&wrapped_welcome), 1, &group_info, &[]), "refused", None),
+            &bundle(&commit, Some(&wrapped_welcome), 1, &group_info, &TREE_FROM_DS), "refused", None),
         vector("hb-x2-foreign-suite-welcome", hb, "a Welcome whose leading cipher suite is not the pinned one",
-            &bundle(&commit, Some(&foreign_welcome), 1, &group_info, &[]), "refused", None),
+            &bundle(&commit, Some(&foreign_welcome), 1, &group_info, &TREE_FROM_DS), "refused", None),
         vector("kp-x1-grease-key-package", "KeyPackage",
             "a pinned-suite KeyPackage that lists a GREASE value in its capabilities and carries it in its extensions",
             &grease_key_package(), "ok", None),
         update_vector("up-01-participant-list-private-type", "an UpdateRequest whose Commit carries the participant-list update as the 0xF7A0 custom proposal",
-            &update_request(&commit_message), "ok", Some("Commit"), "success", &[ALICE, BOB, CAROL]),
+            &update_request(&commit_message, &commit_group_info), "ok", Some("Commit"), "success", &[ALICE, BOB, CAROL]),
         update_vector("up-02-participant-list-app-data-update", "the same update carried as an AppDataUpdate for component 0x0022 (mls-extensions-10 section 4.7)",
-            &update_request(&app_data_commit), "ok", Some("Commit"), "success", &[ALICE, BOB, CAROL]),
+            &update_request(&app_data_commit, &commit_group_info), "ok", Some("Commit"), "success", &[ALICE, BOB, CAROL]),
         update_vector_from("up-03-index-is-a-position", "removedIndices [1] on the list [alice, zoe, bob] removes the second entry, zoe, and the others keep their order (section 7.5)",
-            &update_request(&remove_commit), "ok", Some("Commit"), "success", &[ALICE, ZOE, BOB], &[ALICE, BOB]),
+            &update_request(&remove_commit, &remove_group_info), "ok", Some("Commit"), "success", &[ALICE, ZOE, BOB], &[ALICE, BOB]),
         update_vector_from("up-04-added-participants-are-appended", "an added participant goes to the end of the list (section 7.5)",
-            &update_request(&app_data_commit), "ok", Some("Commit"), "success", &[BOB, ALICE], &[BOB, ALICE, CAROL]),
+            &update_request(&app_data_commit, &commit_group_info), "ok", Some("Commit"), "success", &[BOB, ALICE], &[BOB, ALICE, CAROL]),
         update_vector_from("up-05-roles-list-app-data-update", "an AppDataUpdate for roles_list (component 0x0025, room-policy-04 section 3) sets the room's roles and leaves the participants as they were",
-            &update_request(&roles_commit), "ok", Some("Commit"), "success", &[ALICE, BOB], &[ALICE, BOB]),
+            &update_request(&roles_commit, &roles_group_info), "ok", Some("Commit"), "success", &[ALICE, BOB], &[ALICE, BOB]),
         update_vector_from("up-x4-added-participant-already-listed", "an added participant who is already in the list is invalid (section 7.5)",
-            &update_request(&again_commit), "ok", Some("Commit"), "invalidProposal", &[ALICE, BOB], &[ALICE, BOB]),
+            &update_request(&again_commit, &again_group_info), "ok", Some("Commit"), "invalidProposal", &[ALICE, BOB], &[ALICE, BOB]),
         update_vector_from("up-x5-removed-and-added-in-one-update", "a user removed and added back in one update is invalid: the update is checked against the list as it stood before it (this hub's reading of section 7.5)",
-            &update_request(&zoe_commit), "ok", Some("Commit"), "invalidProposal", &[ALICE, ZOE, BOB], &[ALICE, ZOE, BOB]),
+            &update_request(&zoe_commit, &zoe_group_info), "ok", Some("Commit"), "invalidProposal", &[ALICE, ZOE, BOB], &[ALICE, ZOE, BOB]),
         update_vector_from("up-x6-base-room-policy-before-roles", "an AppDataUpdate for base_room_policy (component 0x0027) for a room that has no roles yet is invalid",
-            &update_request(&base_commit), "ok", Some("Commit"), "invalidProposal", &[ALICE, BOB], &[ALICE, BOB]),
+            &update_request(&base_commit, &base_group_info), "ok", Some("Commit"), "invalidProposal", &[ALICE, BOB], &[ALICE, BOB]),
         update_vector_from("up-x7-roles-list-cut-short", "an AppDataUpdate for roles_list whose RoleData ends before its length says is invalid",
-            &update_request(&cut_roles_commit), "ok", Some("Commit"), "invalidProposal", &[ALICE, BOB], &[ALICE, BOB]),
+            &update_request(&cut_roles_commit, &cut_roles_group_info), "ok", Some("Commit"), "invalidProposal", &[ALICE, BOB], &[ALICE, BOB]),
         update_vector("up-x1-bare-commit", "the Commit alone, without the HandshakeBundle around it",
             &commit_message, "refused", None, "invalidProposal", &[ALICE, BOB]),
         update_vector("up-x2-bundle-of-proposals", "a HandshakeBundle of proposals that is not a leave: it adds a participant",
             &proposals_bundle, "ok", Some("Proposal"), "invalidProposal", &[ALICE, BOB]),
         update_vector("up-x3-app-data-update-other-component", "an AppDataUpdate for component 0x0023 (room_metadata), which the hub does not read",
-            &update_request(&other_component_commit), "ok", Some("Commit"), "invalidProposal", &[ALICE, BOB]),
+            &update_request(&other_component_commit, &commit_group_info), "ok", Some("Commit"), "invalidProposal", &[ALICE, BOB]),
     ];
     for (id, description, response) in responses {
         let mut v = vector(
@@ -516,7 +535,7 @@ fn grease_key_package() -> Vec<u8> {
         Some(&[Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519]),
         Some(&[ExtensionType::Grease(0x0A0A)]),
         None,
-        None,
+        Some(&[CredentialType::Basic]),
     );
     KeyPackage::builder()
         .leaf_node_capabilities(capabilities)
