@@ -1,7 +1,7 @@
 //! Files for seeding a hub with test state, used by `examples/seed_table.sh`.
 //!
 //! ```text
-//! cargo run --example seed_fixtures -- keypackages <dir> <user-uri> <count>
+//! cargo run --example seed_fixtures -- keypackages <dir> <user-uri> <count> [<component-id>,...]
 //! cargo run --example seed_fixtures -- keymaterial-request <file> <requesting-user-uri> <target-user-uri>
 //! cargo run --example seed_fixtures -- keymaterial-answer <file>
 //! cargo run --example seed_fixtures -- identifier-request <file> <handle>
@@ -10,7 +10,9 @@
 //! `keypackages` writes `<count>` KeyPackages to `<dir>/kp-NNN.bin`, each under ciphersuite 0x0001 with a
 //! `BasicCredential` whose identity is the user URI: a hub that reads an `Add` takes that identity as the user the
 //! client belongs to (DIVERGENCES.md, DIV-10). Its leaf declares what a protocol-07 room requires of a member, so
-//! a peer can add the client to one. Every KeyPackage has its own keys, and the private halves are dropped
+//! a peer can add the client to one: its `app_components` names `app_components` and `participant_list`, or the
+//! component ids given (hex, comma-separated), to which `app_components` is added when it is missing. Every KeyPackage
+//! has its own keys, and the private halves are dropped
 //! when this returns. Nobody can open a Welcome made for one of them, which is what a hub test needs and no more.
 //!
 //! `keymaterial-request` writes a protocol-07 §5.2 `KeyMaterialRequest` naming the two users, and
@@ -79,13 +81,29 @@ fn room_capabilities() -> Capabilities {
     )
 }
 
-/// The leaf's `app_data_dictionary`, naming in `app_components` the components this client supports:
-/// `app_components` itself, which the extension makes mandatory, and `participant_list`.
-fn room_leaf_extensions() -> Result<Extensions<LeafNode>, Failure> {
-    let ids: Vec<u8> = [APP_COMPONENTS, PARTICIPANT_LIST]
-        .iter()
-        .flat_map(|id| id.to_be_bytes())
-        .collect();
+/// The components a client says it supports when none are given: `app_components` itself, which the extension makes
+/// mandatory, and `participant_list`.
+const DEFAULT_COMPONENTS: [u16; 2] = [APP_COMPONENTS, PARTICIPANT_LIST];
+
+/// Component ids from a comma-separated list of hex values, with `app_components` first when the list leaves it out.
+fn parse_components(list: &str) -> Result<Vec<u16>, Failure> {
+    let mut ids = vec![APP_COMPONENTS];
+    for item in list
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+    {
+        let id = u16::from_str_radix(item.trim_start_matches("0x"), 16)?;
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
+/// The leaf's `app_data_dictionary`, naming in `app_components` the components this client supports.
+fn room_leaf_extensions(components: &[u16]) -> Result<Extensions<LeafNode>, Failure> {
+    let ids: Vec<u8> = components.iter().flat_map(|id| id.to_be_bytes()).collect();
     let components_list = VLBytes::new(ids).tls_serialize_detached()?;
     let component_data = [
         APP_COMPONENTS.to_be_bytes().to_vec(),
@@ -100,7 +118,7 @@ fn room_leaf_extensions() -> Result<Extensions<LeafNode>, Failure> {
 }
 
 /// One KeyPackage for a client of `user_uri`, valid from an hour ago, able to join a protocol-07 room.
-fn key_package(user_uri: &str, now: u64) -> Result<Vec<u8>, Failure> {
+fn key_package(user_uri: &str, components: &[u16], now: u64) -> Result<Vec<u8>, Failure> {
     let provider = OpenMlsRustCrypto::default();
     let scheme = SignatureScheme::ED25519;
     let (private_key, public_key) = provider.crypto().signature_key_gen(scheme)?;
@@ -110,7 +128,7 @@ fn key_package(user_uri: &str, now: u64) -> Result<Vec<u8>, Failure> {
     };
     let bundle = KeyPackage::builder()
         .leaf_node_capabilities(room_capabilities())
-        .leaf_node_extensions(room_leaf_extensions()?)
+        .leaf_node_extensions(room_leaf_extensions(components)?)
         .key_package_extensions(Extensions::empty())
         .key_package_lifetime(Lifetime::init(
             now.saturating_sub(3600),
@@ -128,13 +146,18 @@ fn key_package(user_uri: &str, now: u64) -> Result<Vec<u8>, Failure> {
     Ok(bundle.key_package().tls_serialize_detached()?)
 }
 
-fn write_key_packages(dir: &str, user_uri: &str, count: &str) -> Result<(), Failure> {
+fn write_key_packages(
+    dir: &str,
+    user_uri: &str,
+    count: &str,
+    components: &[u16],
+) -> Result<(), Failure> {
     let count: usize = count.parse()?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     std::fs::create_dir_all(dir)?;
     for n in 1..=count {
         let path = Path::new(dir).join(format!("kp-{n:03}.bin"));
-        std::fs::write(path, key_package(user_uri, now)?)?;
+        std::fs::write(path, key_package(user_uri, components, now)?)?;
     }
     Ok(())
 }
@@ -172,16 +195,23 @@ fn main() -> Result<(), Failure> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
-        ["keypackages", dir, user_uri, count] => write_key_packages(dir, user_uri, count),
+        ["keypackages", dir, user_uri, count] => {
+            write_key_packages(dir, user_uri, count, &DEFAULT_COMPONENTS)
+        }
+        ["keypackages", dir, user_uri, count, components] => {
+            write_key_packages(dir, user_uri, count, &parse_components(components)?)
+        }
         ["keymaterial-request", file, requesting, target] => {
             write_key_material_request(file, requesting, target)
         }
         ["keymaterial-answer", file] => say_key_material_answer(file),
         ["identifier-request", file, handle] => write_identifier_request(file, handle),
-        _ => Err("usage: seed_fixtures keypackages <dir> <user-uri> <count> \
+        _ => Err(
+            "usage: seed_fixtures keypackages <dir> <user-uri> <count> [<component-id>,...] \
                   | keymaterial-request <file> <requesting-user-uri> <target-user-uri> \
                   | keymaterial-answer <file> \
                   | identifier-request <file> <handle>"
-            .into()),
+                .into(),
+        ),
     }
 }
