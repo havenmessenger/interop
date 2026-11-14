@@ -31,7 +31,7 @@ pub mod store;
 pub mod tls;
 
 use mimi_core::commit_wire::{
-    decode_commit_proposals, decode_proposal_message, DecodedCommit, ReadProposal,
+    check_changes, decode_commit_proposals, decode_proposal_message, DecodedCommit, ReadProposal,
 };
 use mimi_core::consent::{
     validate_consent_entry, ConsentEntry, ConsentOperation, KeyPackageAccess,
@@ -261,7 +261,7 @@ impl Provider {
                 "groupInfo_external_commit_join": "DIV-1: add-driven join only (ETK security)",
                 "assets_ohttp": "DIV-3: v1 is messaging-only",
                 "non_0x0001_ciphersuites": "DIV-2: rejected at ingest",
-                "update_wire_endpoint_mixed_commits": "DIV-10: a Commit is applied when it carries exactly one participant-list or room-policy change, alone or with Add and Remove proposals beside it; proposals by reference are accepted only when they are the ones this hub holds for a member's leave. A second change, a Commit with no change, any other proposal type and any other proposal by reference are refused",
+                "update_wire_endpoint_mixed_commits": "DIV-10: a Commit is applied when it carries a participant-list change, a room-policy change, or one of each (a role list never beside a participant-list change, room-policy-04 §3), alone or with Add and Remove proposals beside it; proposals by reference are accepted only when they are the ones this hub holds for a member's leave. A second change of one kind, a role list beside a participant-list change, a Commit with no change, any other proposal type and any other proposal by reference are refused",
                 "reportAbuse_with_abusive_messages": "DIV-9: a report attaching an AbusiveMessage is refused (its Frank cannot yet be verified) - metadata-only reports are accepted"
             }
         });
@@ -888,85 +888,96 @@ impl Provider {
                 .proposal
             {
                 ReadProposal::Remove(leaf) => commit.removes.push(leaf),
-                ReadProposal::Change(change) => {
-                    if commit.update.is_some() {
-                        return Err(UpdateRefusal::Invalid(
-                            "a second participant-list or room-policy change in one Commit",
-                        ));
-                    }
-                    commit.update = Some(change);
-                }
+                ReadProposal::Change(change) => commit.updates.push(change),
             }
         }
-        Ok(())
+        check_changes(&commit.updates).map_err(UpdateRefusal::Invalid)
     }
 
-    /// Apply a Commit whose references are already read in.
+    /// Apply a Commit whose references are already read in: its participant-list change, its room-policy change, or one
+    /// of each ([`check_changes`] has already refused any other combination). Everything is decoded and checked before
+    /// anything is written; the participant change is written first and the room policy second, so only a store failure
+    /// between the two writes could leave one without the other.
     fn apply_decoded_commit(
         &self,
         room_uri: &str,
         commit: &DecodedCommit,
         now_unix: u64,
     ) -> Result<(), UpdateRefusal> {
-        let decoded = commit.update.as_ref().ok_or(UpdateRefusal::Invalid(
-            "the Commit carries no participant-list or room-policy change",
-        ))?;
-        match decoded.proposal_type {
-            MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE => {
-                let update = decode_participant_list_update(&decoded.payload).map_err(|_| {
-                    UpdateRefusal::Invalid("the participant list update is malformed")
-                })?;
-                self.check_commit_against_list(room_uri, commit, &update)?;
-                self.apply_participant_list_update(room_uri, &update, now_unix)
+        if commit.updates.is_empty() {
+            return Err(UpdateRefusal::Invalid(
+                "the Commit carries no participant-list or room-policy change",
+            ));
+        }
+        let mut participants = None;
+        let mut roles = None;
+        let mut base = None;
+        for change in &commit.updates {
+            match change.proposal_type {
+                MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE => {
+                    participants = Some(decode_participant_list_update(&change.payload).map_err(
+                        |_| UpdateRefusal::Invalid("the participant list update is malformed"),
+                    )?);
+                }
+                MIMI_ROLES_LIST_PROPOSAL_TYPE => {
+                    roles = Some(
+                        decode_role_data(&change.payload)
+                            .map_err(|_| UpdateRefusal::Invalid("the role list is malformed"))?,
+                    );
+                }
+                MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE => {
+                    base = Some(decode_base_room_policy(&change.payload).map_err(|_| {
+                        UpdateRefusal::Invalid("the base room policy is malformed")
+                    })?);
+                }
+                _ => {
+                    return Err(UpdateRefusal::Invalid(
+                        "the proposal type is not recognized",
+                    ))
+                }
             }
-            MIMI_ROLES_LIST_PROPOSAL_TYPE => {
-                let roles = decode_role_data(&decoded.payload)
-                    .map_err(|_| UpdateRefusal::Invalid("the role list is malformed"))?;
-                self.assert_hub_of_record(room_uri)
-                    .map_err(|_| UpdateRefusal::NotAllowed)?;
-                self.check_commit_against_list(
-                    room_uri,
-                    commit,
-                    &ParticipantListUpdate::default(),
-                )?;
-                // The roles replace the room's roles; the base policy stays as it was, or is the draft's default
-                // while the room has none.
-                let base = self
-                    .room_policy(room_uri)
-                    .map_err(|_| UpdateRefusal::Store)?
-                    .map(|policy| policy.base)
-                    .unwrap_or_default();
-                self.store_room_policy(room_uri, RoomPolicy { base, roles }, now_unix)
-            }
-            MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE => {
-                let base = decode_base_room_policy(&decoded.payload)
-                    .map_err(|_| UpdateRefusal::Invalid("the base room policy is malformed"))?;
-                self.assert_hub_of_record(room_uri)
-                    .map_err(|_| UpdateRefusal::NotAllowed)?;
-                self.check_commit_against_list(
-                    room_uri,
-                    commit,
-                    &ParticipantListUpdate::default(),
-                )?;
-                // A base policy applies to roles, so a room with none stored takes the roles first.
-                let stored = self
-                    .room_policy(room_uri)
-                    .map_err(|_| UpdateRefusal::Store)?
-                    .ok_or(UpdateRefusal::Invalid(
+        }
+        self.assert_hub_of_record(room_uri)
+            .map_err(|_| UpdateRefusal::NotAllowed)?;
+        self.check_commit_against_list(
+            room_uri,
+            commit,
+            participants
+                .as_ref()
+                .unwrap_or(&ParticipantListUpdate::default()),
+        )?;
+        // The policy the room ends with: a new role list keeps the base policy (or the draft's default while the room
+        // has none); a new base policy keeps the roles, and a room with no roles stored takes the roles first.
+        let policy = if roles.is_some() || base.is_some() {
+            let stored = self
+                .room_policy(room_uri)
+                .map_err(|_| UpdateRefusal::Store)?;
+            let roles = match (roles, &stored) {
+                (Some(roles), _) => roles,
+                (None, Some(stored)) => stored.roles.clone(),
+                (None, None) => {
+                    return Err(UpdateRefusal::Invalid(
                         "the room has no roles yet; send the role list first",
-                    ))?;
-                self.store_room_policy(
-                    room_uri,
-                    RoomPolicy {
-                        base,
-                        roles: stored.roles,
-                    },
-                    now_unix,
-                )
-            }
-            _ => Err(UpdateRefusal::Invalid(
-                "the proposal type is not recognized",
-            )),
+                    ))
+                }
+            };
+            let base = base
+                .or_else(|| stored.map(|policy| policy.base))
+                .unwrap_or_default();
+            let policy = RoomPolicy { base, roles };
+            policy
+                .validate()
+                .map_err(|_| UpdateRefusal::Invalid("the room policy is not valid"))?;
+            Some(policy)
+        } else {
+            None
+        };
+        if let Some(update) = &participants {
+            self.apply_participant_list_update(room_uri, update, now_unix)?;
+        }
+        match policy {
+            Some(policy) => self.store_room_policy(room_uri, policy, now_unix),
+            None => Ok(()),
         }
     }
 
@@ -1716,8 +1727,8 @@ mod tests {
         assert_eq!(drafts["room-policy"], "04");
     }
 
-    /// What the directory says of a Commit sent to `update` is what the route does: Add and Remove beside one
-    /// change are applied, proposals by reference are taken only for a held leave, and a second change is refused.
+    /// What the directory says of a Commit sent to `update` is what the route does: Add and Remove beside its changes
+    /// are applied, proposals by reference are taken only for a held leave, and a second change of one kind is refused.
     #[test]
     fn the_directory_says_which_commits_update_applies_and_which_it_refuses() {
         let p = Provider::in_memory("havenmessenger.com").unwrap();
@@ -1726,11 +1737,11 @@ mod tests {
             .expect("a statement")
             .to_owned();
         let (applied, refused) = said
-            .split_once(" A second change")
+            .split_once(" A second change of one kind")
             .expect("what is applied, then what is refused");
         assert!(applied.starts_with("DIV-10: "), "{said}");
         assert!(
-            applied.contains("exactly one participant-list or room-policy change"),
+            applied.contains("a participant-list change, a room-policy change, or one of each"),
             "{said}"
         );
         assert!(applied.contains("Add and Remove"), "{said}");

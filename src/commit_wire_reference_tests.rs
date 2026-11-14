@@ -94,7 +94,7 @@ fn a_proposal_is_named_as_openmls_names_it_and_a_commit_includes_it_by_that_name
     let committed = decode_commit_proposals(&commit).unwrap();
     assert_eq!(committed.references, vec![openmls_reference]);
     assert_eq!(committed.epoch, decoded.epoch);
-    assert!(committed.update.is_none());
+    assert!(committed.updates.is_empty());
     assert!(committed.removes.is_empty() && committed.adds.is_empty());
 }
 

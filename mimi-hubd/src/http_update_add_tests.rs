@@ -219,3 +219,63 @@ async fn an_add_the_gate_refuses_refuses_the_commit_and_changes_nothing() {
     );
     assert_eq!(listed(&p), vec![ALICE.to_string(), BOB.to_string()]);
 }
+
+/// room-policy-04 §5 sets no rule against a base room policy beside a participant-list change, so one Commit carries both:
+/// the user is added and the base policy replaced, with the roles kept.
+#[tokio::test]
+async fn a_participant_change_and_a_base_policy_in_one_commit_are_both_applied() {
+    use mimi_core::room_policy::{BaseRoomPolicy, RoomPolicy, MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE};
+    use mimi_core::room_policy_wire::encode_base_room_policy;
+    let base = BaseRoomPolicy {
+        max_users: Some(4),
+        ..BaseRoomPolicy::default()
+    };
+    let policy_change = [
+        vec![1],
+        MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE.to_be_bytes().to_vec(),
+        vl(&encode_base_room_policy(&base, None)),
+    ]
+    .concat();
+    let commit = commit_around(&update(&[CAROL], &[]), &[add_of(CAROL)], &[policy_change]);
+    let (router, p) = app();
+    room(&p);
+    let roles = super::room_policy_tests::roles();
+    p.lock()
+        .unwrap()
+        .set_room_policy(
+            ROOM,
+            &RoomPolicy {
+                base: BaseRoomPolicy::default(),
+                roles: roles.clone(),
+            },
+            1,
+        )
+        .unwrap();
+    let answer = update_answer(post(router, ROOM, bundle_of(commit)).await).await;
+    assert!(is_success(&answer), "{answer:?}");
+    assert_eq!(
+        listed(&p),
+        vec![ALICE.to_string(), BOB.to_string(), CAROL.to_string()]
+    );
+    let stored = p.lock().unwrap().room_policy(ROOM).unwrap().unwrap();
+    assert_eq!(stored.base, base);
+    assert_eq!(stored.roles, roles);
+}
+
+/// room-policy-04 §3: a role list change may not share a Commit with a participant-list change. Nothing changes.
+#[tokio::test]
+async fn a_role_list_beside_a_participant_change_is_refused() {
+    use mimi_core::room_policy::MIMI_ROLES_LIST_PROPOSAL_TYPE;
+    use mimi_core::room_policy_wire::encode_role_data;
+    let roles_change = [
+        vec![1],
+        MIMI_ROLES_LIST_PROPOSAL_TYPE.to_be_bytes().to_vec(),
+        vl(&encode_role_data(&super::room_policy_tests::roles())),
+    ]
+    .concat();
+    let commit = commit_around(&update(&[CAROL], &[]), &[add_of(CAROL)], &[roles_change]);
+    let (answer, p) = answer_of(commit).await;
+    assert!(is_invalid(&answer), "{answer:?}");
+    assert_eq!(listed(&p), vec![ALICE.to_string(), BOB.to_string()]);
+    assert_eq!(p.lock().unwrap().room_policy(ROOM).unwrap(), None);
+}

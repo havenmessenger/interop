@@ -473,14 +473,16 @@ pub struct AddedClient {
     pub key_package: Vec<u8>,
 }
 
-/// What a `PublicMessage`-wrapped Commit proposes: at most one participant-list or room-policy change by value, the clients
-/// it adds, the leaves it removes, and the proposals it names by reference, at the epoch it is sent in. The hub holds no
+/// What a `PublicMessage`-wrapped Commit proposes: its participant-list and room-policy changes by value (in a combination
+/// [`check_changes`] allows), the clients it adds, the leaves it removes, and the proposals it names by reference, at the
+/// epoch it is sent in. The hub holds no
 /// ratchet tree, so a removed leaf is a number and never a user, and a reference is read against what the hub cached.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedCommit {
     /// `FramedContent.epoch`: the epoch the Commit is sent in, and the one its references were proposed in.
     pub epoch: u64,
-    pub update: Option<DecodedCustomProposal>,
+    /// The changes it carries by value, in the order they appear.
+    pub updates: Vec<DecodedCustomProposal>,
     pub adds: Vec<AddedClient>,
     pub removes: Vec<u32>,
     /// Each `ProposalRef`, in order.
@@ -531,18 +533,20 @@ fn proposals_window(bytes: &[u8]) -> Result<(u64, Vec<u8>), WireError> {
     Ok((epoch, window))
 }
 
-/// Read a Commit that proposes at most one participant-list or room-policy change by value beside any number of `Add` and
+/// Read a Commit that proposes participant-list and room-policy changes by value, in a combination [`check_changes`]
+/// allows, beside any number of `Add` and
 /// `Remove` proposals and proposals by reference, in any order. Each `Add` is read by openmls's own KeyPackage decoder,
 /// which says where it ends; a `Remove` is a leaf index; a reference is a `ProposalRef` of [`PROPOSAL_REF_LEN`] bytes, which
 /// the caller resolves against the proposals it cached (RFC 9420 §12.4: a proposal another member sent is included by
 /// reference). Anything else in the list (a `GroupContextExtensions`, `Update`, `PreSharedKey`, `ReInit`, `ExternalInit`,
-/// `SelfRemove`, or a second change by value) is refused, so the hub never reads a proposal it has no rule for. Whether
+/// `SelfRemove`, or changes [`check_changes`] refuses together) is refused, so the hub never reads a proposal it has no
+/// rule for. Whether
 /// the Commit carries a change at all is the caller's to decide once its references are resolved. No signature or
 /// membership is verified here, and no group state is held.
 pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError> {
     let (epoch, window) = proposals_window(bytes)?;
     let budget = crate::protocol_wire::MAX_RUN_ELEMENTS;
-    let mut update: Option<DecodedCustomProposal> = None;
+    let mut updates: Vec<DecodedCustomProposal> = Vec::new();
     let mut adds = Vec::new();
     let mut removes = Vec::new();
     let mut references = Vec::new();
@@ -620,18 +624,11 @@ pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError>
                     return Err(WireError::Codec {
                         what: "Proposal.proposal_type",
                         detail: format!(
-                            "proposal type {proposal_type:#06x} is not read here (only Add, Remove and one participant-list or room-policy change)"
+                            "proposal type {proposal_type:#06x} is not read here (only Add, Remove, participant-list and room-policy changes)"
                         ),
                     });
                 }
-                if update.is_some() {
-                    return Err(WireError::Codec {
-                        what: "Commit.proposals",
-                        detail: "a second participant-list or room-policy change in one Commit"
-                            .into(),
-                    });
-                }
-                update = Some(DecodedCustomProposal {
+                updates.push(DecodedCustomProposal {
                     proposal_type,
                     payload,
                 });
@@ -639,13 +636,44 @@ pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError>
             }
         }
     }
+    check_changes(&updates).map_err(|why| WireError::Codec {
+        what: "Commit.proposals",
+        detail: why.into(),
+    })?;
     Ok(DecodedCommit {
         epoch,
-        update,
+        updates,
         adds,
         removes,
         references,
     })
+}
+
+/// Whether one Commit may carry these participant-list and room-policy changes together. At most one change of each kind:
+/// protocol-07 §7.5 lets a Commit carry several participant-list updates, but this crate reads one. A role list may not
+/// share a Commit with a participant-list change (room-policy-04 §3); a base room policy may.
+pub fn check_changes(changes: &[DecodedCustomProposal]) -> Result<(), &'static str> {
+    let count = |kind: u16| {
+        changes
+            .iter()
+            .filter(|change| change.proposal_type == kind)
+            .count()
+    };
+    let participant_list = count(crate::participant_list::MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE);
+    let roles_list = count(crate::room_policy::MIMI_ROLES_LIST_PROPOSAL_TYPE);
+    let base_room_policy = count(crate::room_policy::MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE);
+    if participant_list > 1 {
+        return Err("more than one participant-list update in one Commit (this hub reads one)");
+    }
+    if roles_list > 1 || base_room_policy > 1 {
+        return Err("two changes of the same room-policy component in one Commit");
+    }
+    if roles_list == 1 && participant_list == 1 {
+        return Err(
+            "a role list change may not share a Commit with a participant-list change (room-policy-04 §3)",
+        );
+    }
+    Ok(())
 }
 
 /// A standalone proposal this crate reads: a `Remove` (a leaf index) or one participant-list or room-policy change.

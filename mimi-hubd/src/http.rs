@@ -250,6 +250,16 @@ async fn key_material_wire(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+    // The answer only: which user was asked for is a peer's choice and stays out of the line.
+    eprintln!(
+        "[mimi-hubd] keyMaterial: {}",
+        match &outcome {
+            KeyMaterialResponse::Success { .. } => "success",
+            KeyMaterialResponse::Exhausted { .. } => "exhausted",
+            KeyMaterialResponse::Denied { .. } => "denied (no consent)",
+            KeyMaterialResponse::Clients { .. } => "clients",
+        }
+    );
     match outcome.encode() {
         Ok(bytes) => (StatusCode::OK, bytes).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -316,10 +326,19 @@ async fn ingest_welcome(
     body: Bytes,
 ) -> Response {
     let g = lock(&p);
+    let queued = k.recipient.is_some();
     let r = match k.recipient {
         Some(rcpt) => g.relay_welcome(&rcpt, &body, now_unix()),
         None => g.ingest_foreign_welcome(&body),
     };
+    eprintln!(
+        "[mimi-hubd] welcome: {}",
+        match (&r, queued) {
+            (Ok(()), true) => "queued for its recipient",
+            (Ok(()), false) => "validated only (no recipient named, nothing queued)",
+            (Err(_), _) => "refused",
+        }
+    );
     match r {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
@@ -384,11 +403,17 @@ async fn submit_message_wire(
     let sending_uri = &req.sending_uri.0;
     let g = lock(&p);
     if g.authorize_sender(&room_id, sending_uri).is_err() {
+        eprintln!("[mimi-hubd] submitMessage: notAllowed (the sender is not an active participant, or lacks canSendMessage)");
         return (StatusCode::OK, SubmitMessageResponse::NotAllowed.encode()).into_response();
     }
     let outcome = match g.submit_message(&room_id, &req.app_message, now_unix()) {
         Ok(()) => {
             if let Ok(plan) = g.fanout_targets(&room_id, sending_uri) {
+                eprintln!(
+                    "[mimi-hubd] submitMessage: accepted, queued for {} local participant(s); {} on other providers not sent (DIV-5)",
+                    plan.local.len(),
+                    plan.foreign.len()
+                );
                 for member in plan.local {
                     let _ = g.submit_message(&member, &req.app_message, now_unix());
                 }
@@ -600,9 +625,48 @@ async fn update_wire(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+    log_update_answer(&answer, || {
+        lock(&p).store.room_epoch(&room_id).ok().flatten()
+    });
     match answer.encode() {
         Ok(bytes) => (StatusCode::OK, bytes).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// One line per update answer, since the HTTP status is 200 whatever the answer is. It holds the answer, this hub's own
+/// description of a refusal and epoch numbers; never the room, a reference or anything else a peer chose.
+fn log_update_answer(
+    answer: &mimi_core::protocol_wire::UpdateRoomResponse,
+    room_epoch: impl FnOnce() -> Option<u64>,
+) {
+    eprintln!("{}", update_answer_line(answer, room_epoch));
+}
+
+/// The line [`log_update_answer`] prints.
+pub(crate) fn update_answer_line(
+    answer: &mimi_core::protocol_wire::UpdateRoomResponse,
+    room_epoch: impl FnOnce() -> Option<u64>,
+) -> String {
+    use mimi_core::protocol_wire::UpdateRoomResponse;
+    match answer {
+        UpdateRoomResponse::Success { .. } => match room_epoch() {
+            Some(epoch) => format!("[mimi-hubd] update: success room_epoch={epoch}"),
+            None => "[mimi-hubd] update: success".to_owned(),
+        },
+        UpdateRoomResponse::WrongEpoch { current_epoch, .. } => {
+            format!("[mimi-hubd] update: wrongEpoch current_epoch={current_epoch}")
+        }
+        UpdateRoomResponse::InvalidProposal {
+            error_description,
+            invalid_proposals,
+        } => format!(
+            "[mimi-hubd] update: invalidProposal proposals_named={} \"{error_description}\"",
+            invalid_proposals.len()
+        ),
+        UpdateRoomResponse::NotAllowed { error_description } => {
+            format!("[mimi-hubd] update: notAllowed \"{error_description}\"")
+        }
     }
 }
 

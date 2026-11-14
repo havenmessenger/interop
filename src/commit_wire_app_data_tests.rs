@@ -328,7 +328,9 @@ fn removes_beside_the_participant_list_change_are_read_as_leaf_indices() {
         let decoded = decode_commit_proposals(&commit_with(&entries)).unwrap();
         assert_eq!(decoded.removes, vec![1, 3]);
         assert!(decoded.adds.is_empty());
-        let change = decoded.update.expect("the change is read");
+        let [change] = decoded.updates.as_slice() else {
+            panic!("the change is read")
+        };
         assert_eq!(change.proposal_type, MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE);
         assert_eq!(change.payload, update_of(8));
     }
@@ -357,4 +359,35 @@ fn a_commit_the_reader_has_no_rule_for_is_refused() {
     let mut cut = remove_entry(1);
     cut.truncate(cut.len() - 1);
     assert!(decode_commit_proposals(&commit_with(&[update, cut])).is_err());
+}
+
+#[test]
+fn which_changes_one_commit_may_carry_together() {
+    use crate::commit_wire::{check_changes, DecodedCustomProposal};
+    use crate::room_policy::{MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE, MIMI_ROLES_LIST_PROPOSAL_TYPE};
+    let of = |proposal_type| DecodedCustomProposal {
+        proposal_type,
+        payload: Vec::new(),
+    };
+    let list = MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE;
+    let roles = MIMI_ROLES_LIST_PROPOSAL_TYPE;
+    let base = MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE;
+    for allowed in [
+        vec![],
+        vec![of(list)],
+        vec![of(list), of(base)],
+        vec![of(base), of(list)],
+        vec![of(roles), of(base)],
+    ] {
+        assert!(check_changes(&allowed).is_ok(), "{allowed:?}");
+    }
+    for refused in [
+        vec![of(list), of(list)],
+        vec![of(list), of(roles)],
+        vec![of(roles), of(list), of(base)],
+        vec![of(base), of(base)],
+        vec![of(roles), of(roles)],
+    ] {
+        assert!(check_changes(&refused).is_err(), "{refused:?}");
+    }
 }

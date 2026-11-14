@@ -22,7 +22,7 @@ fn role(index: u32, name: &str, capabilities: Vec<Capability>) -> Role {
     }
 }
 
-fn roles() -> Vec<Role> {
+pub(super) fn roles() -> Vec<Role> {
     vec![
         role(
             2,

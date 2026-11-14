@@ -125,3 +125,18 @@ fn a_method_outside_the_usual_set_reads_other() {
         "[mimi-activity] method=DELETE route=unmatched status=405"
     );
 }
+
+#[test]
+fn a_poll_that_finds_nothing_is_not_logged_and_one_that_is_answered_is() {
+    use super::is_empty_poll;
+    assert!(is_empty_poll(&Method::GET, Some("/mimi/v1/message"), 404));
+    assert!(is_empty_poll(&Method::GET, Some("/mimi/v1/welcome"), 404));
+    assert!(!is_empty_poll(&Method::GET, Some("/mimi/v1/message"), 200));
+    assert!(!is_empty_poll(&Method::POST, Some("/mimi/v1/welcome"), 404));
+    assert!(!is_empty_poll(
+        &Method::GET,
+        Some("/mimi/v1/keyMaterial"),
+        404
+    ));
+    assert!(!is_empty_poll(&Method::GET, None, 404));
+}

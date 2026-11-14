@@ -141,9 +141,9 @@ here called blocked on group-state machinery was not blocked on that at all; it 
 now wired end to end for both Haven custom proposal types.
 
 `POST /mimi/pl/update/{roomId}` (§5.3) takes an `UpdateRequest`, a `HandshakeBundle` whose
-`PublicMessage`-wrapped MLS Commit carries exactly one change (and, since the rewrite below, any `Add` and `Remove`
-proposals beside it). `mimi_core::commit_wire::decode_commit_proposals` reads
-the change's type and payload and the Adds and Removes - independent of openmls's own (crate-private) `Commit` type,
+`PublicMessage`-wrapped MLS Commit carries a participant-list change, a room-policy change, or one of each (and, since
+the rewrite below, any `Add` and `Remove` proposals beside them). `mimi_core::commit_wire::decode_commit_proposals` reads
+each change's type and payload and the Adds and Removes - independent of openmls's own (crate-private) `Commit` type,
 hand-coded the same way every other MIMI-specific structure in this codebase is - without verifying
 the Commit's signature or holding any group state, matching RFC 9420's own delivery-service trust
 model (the DS is not expected to do either; that is the receiving member's job). Commits on this
@@ -165,8 +165,14 @@ without needing that machinery in the first place.
 - A room-policy change is an AppDataUpdate for `roles_list` or `base_room_policy` (DIV-15); the policy it
   produces is validated (`RoomPolicy::validate`) before it is stored, the same as one set through the
   JSON-compat `roomPolicy` route.
-- **A Commit with `Add` and `Remove` beside the change is read.** A Commit may carry one participant-list or room-policy
-  change in any order with any number of `Add` and `Remove` proposals (-07 §3.2: "Alice adds Bob to the Room"). Each `Add`
+- **Which changes one Commit may carry together** (`mimi_core::commit_wire::check_changes`). At most one change of each
+  kind. A participant-list change and a `base_room_policy` change may share a Commit (room-policy-04 §5 sets no rule
+  against it), as may `roles_list` and `base_room_policy`. A `roles_list` change beside a participant-list change is
+  refused (room-policy-04 §3). `preauth_list` is not a change this hub reads. Still stricter than -07 §7.5: one
+  participant-list update per Commit. Everything is decoded and checked before anything is written; the participant
+  change is written first and the policy second, so only a store failure between the two writes could split them.
+- **A Commit with `Add` and `Remove` beside the change is read.** A Commit may carry its changes in any order with any
+  number of `Add` and `Remove` proposals (-07 §3.2: "Alice adds Bob to the Room"). Each `Add`
   is read by openmls's own KeyPackage decoder, which says where it ends, and its KeyPackage goes through the same gate as
   any other (the suite, the signature); one the gate refuses refuses the whole Commit, answered `notAllowed`. A `Remove` is
   a leaf index. When the Commit has either, §7.5 is checked against what it says, against the list the room holds now:
@@ -177,7 +183,8 @@ without needing that machinery in the first place.
   the credential-to-user binding is open, so for a `BasicCredential` the identity bytes are read as the user URI (an
   X.509 credential is refused). A Commit with the change alone is read as it always was, so a participant can be listed
   before any client is added. A Commit that carries a `GroupContextExtensions`, `Update`, `PreSharedKey`, `ReInit`,
-  `ExternalInit`, `SelfRemove`, a second change, or no change is still refused, whichever order it is in.
+  `ExternalInit`, `SelfRemove`, changes it may not carry together, or no change is still refused, whichever order it is
+  in.
 - **A member leaving (-07 §3.5).** A leaving client cannot remove its own devices, so it sends its proposals to the hub:
   an `update` whose bundle is proposals (`proposalOrCommit` and `moreProposals`) is a leave. The hub takes one
   participant-list change that only removes participants, with `Remove`s, all member-sent `PublicMessage`s, and holds
@@ -186,8 +193,8 @@ without needing that machinery in the first place.
   reference (RFC 9420 §12.4: a proposal from another member is included by reference). A reference to nothing held for
   the Commit's epoch, a reference named twice, or a held proposal left out is `invalidProposal`, with those
   `ProposalRef`s in `invalidProposals`; nothing changes. A held `Remove` joins the Commit's `Remove`s and the held change
-  becomes its change, and §7.5 is checked as above, so a committer's own change beside a held one is a second change and
-  is refused.
+  becomes one of its changes, and §7.5 is checked as above, so a committer's own participant-list change beside a held one
+  is a second participant-list update and is refused.
   - **Signatures are not verified, and what that costs is bounded by who may ask.** The hub holds no group state, so it
     verifies neither a proposal's signature nor its membership tag, as for a Commit. A held proposal that the next
     Commit must include would otherwise let any peer have the hub require someone's removal from the participant list.

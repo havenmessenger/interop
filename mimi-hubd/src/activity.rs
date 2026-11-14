@@ -4,7 +4,8 @@
 //! status: `[mimi-activity] method=POST route=/mimi/pl/update/:room_id status=200`. It never holds a path, a query
 //! string, a header, a certificate or a body. The route is the template from this crate's own router, not what the peer
 //! typed, so a room URI, a domain or any other byte a peer chose does not reach the line, and a request no route matched
-//! reads `route=unmatched`. A method outside the usual set reads `OTHER`.
+//! reads `route=unmatched`. A method outside the usual set reads `OTHER`. A poll for a message or Welcome that finds
+//! none is not logged ([`is_empty_poll`]).
 
 use std::sync::Arc;
 
@@ -40,12 +41,23 @@ async fn log_request(State(sink): State<ActivitySink>, request: Request, next: N
         .get::<MatchedPath>()
         .map(|matched| matched.as_str().to_owned());
     let response = next.run(request).await;
+    if is_empty_poll(&method, route.as_deref(), response.status().as_u16()) {
+        return response;
+    }
     sink(activity_line(
         &method,
         route.as_deref(),
         response.status().as_u16(),
     ));
     response
+}
+
+/// A client polling for a message or Welcome when none waits: a client does this every few seconds, so a line per poll
+/// would bury every other line. A poll that is answered is still logged.
+pub fn is_empty_poll(method: &Method, route: Option<&str>, status: u16) -> bool {
+    *method == Method::GET
+        && status == 404
+        && matches!(route, Some("/mimi/v1/message" | "/mimi/v1/welcome"))
 }
 
 /// The line for one request.
