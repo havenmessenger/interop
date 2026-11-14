@@ -1,7 +1,7 @@
 //! Files for seeding a hub with test state, used by `examples/seed_table.sh`.
 //!
 //! ```text
-//! cargo run --example seed_fixtures -- keypackages <dir> <user-uri> <count> [<component-id>,...]
+//! cargo run --example seed_fixtures -- keypackages <dir> <user-uri> <count> [<component-id>,... [<safe-aad-id>,...]]
 //! cargo run --example seed_fixtures -- keymaterial-request <file> <requesting-user-uri> <target-user-uri>
 //! cargo run --example seed_fixtures -- keymaterial-answer <file>
 //! cargo run --example seed_fixtures -- identifier-request <file> <handle>
@@ -11,7 +11,9 @@
 //! `BasicCredential` whose identity is the user URI: a hub that reads an `Add` takes that identity as the user the
 //! client belongs to (DIVERGENCES.md, DIV-10). Its leaf declares what a protocol-07 room requires of a member, so
 //! a peer can add the client to one: its `app_components` names `app_components` and `participant_list`, or the
-//! component ids given (hex, comma-separated), to which `app_components` is added when it is missing. Every KeyPackage
+//! component ids given (hex, comma-separated), to which `app_components` is added when it is missing. A second list
+//! names the components the client protects as safe AAD: it goes into the leaf's `safe_aad` entry
+//! (draft-ietf-mls-extensions §5), which a room that requires safe AAD components reads. Every KeyPackage
 //! has its own keys, and the private halves are dropped
 //! when this returns. Nobody can open a Welcome made for one of them, which is what a hub test needs and no more.
 //!
@@ -65,6 +67,8 @@ impl Signer for MemorySigner {
 const APP_DATA_DICTIONARY: u16 = 0x0006;
 /// `app_components` (draft-ietf-mls-extensions §5): the component listing what a member supports.
 const APP_COMPONENTS: u16 = 0x0001;
+/// `safe_aad` (draft-ietf-mls-extensions §5): the component listing what a member protects as safe AAD.
+const SAFE_AAD: u16 = 0x0002;
 /// `participant_list` (draft-ietf-mimi-protocol §7.5): the component a protocol-07 room keeps its participants in.
 const PARTICIPANT_LIST: u16 = 0x0022;
 
@@ -85,9 +89,9 @@ fn room_capabilities() -> Capabilities {
 /// mandatory, and `participant_list`.
 const DEFAULT_COMPONENTS: [u16; 2] = [APP_COMPONENTS, PARTICIPANT_LIST];
 
-/// Component ids from a comma-separated list of hex values, with `app_components` first when the list leaves it out.
-fn parse_components(list: &str) -> Result<Vec<u16>, Failure> {
-    let mut ids = vec![APP_COMPONENTS];
+/// Component ids from a comma-separated list of hex values.
+fn parse_ids(list: &str) -> Result<Vec<u16>, Failure> {
+    let mut ids = Vec::new();
     for item in list
         .split(',')
         .map(str::trim)
@@ -101,15 +105,39 @@ fn parse_components(list: &str) -> Result<Vec<u16>, Failure> {
     Ok(ids)
 }
 
-/// The leaf's `app_data_dictionary`, naming in `app_components` the components this client supports.
-fn room_leaf_extensions(components: &[u16]) -> Result<Extensions<LeafNode>, Failure> {
-    let ids: Vec<u8> = components.iter().flat_map(|id| id.to_be_bytes()).collect();
-    let components_list = VLBytes::new(ids).tls_serialize_detached()?;
-    let component_data = [
-        APP_COMPONENTS.to_be_bytes().to_vec(),
-        VLBytes::new(components_list).tls_serialize_detached()?,
+/// Component ids for `app_components`, with `app_components` itself first when the list leaves it out.
+fn parse_components(list: &str) -> Result<Vec<u16>, Failure> {
+    let mut ids = vec![APP_COMPONENTS];
+    for id in parse_ids(list)? {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
+/// One `ComponentData` of the dictionary: a component id and a `ComponentsList` of ids as its data.
+fn components_entry(component: u16, ids: &[u16]) -> Result<Vec<u8>, Failure> {
+    let ids: Vec<u8> = ids.iter().flat_map(|id| id.to_be_bytes()).collect();
+    let list = VLBytes::new(ids).tls_serialize_detached()?;
+    Ok([
+        component.to_be_bytes().to_vec(),
+        VLBytes::new(list).tls_serialize_detached()?,
     ]
-    .concat();
+    .concat())
+}
+
+/// The leaf's `app_data_dictionary`: `app_components` naming the components this client supports and, when there are
+/// any, `safe_aad` naming those it protects as safe AAD. The entries are in component-id order, as the dictionary
+/// requires.
+fn room_leaf_extensions(
+    components: &[u16],
+    safe_aad: &[u16],
+) -> Result<Extensions<LeafNode>, Failure> {
+    let mut component_data = components_entry(APP_COMPONENTS, components)?;
+    if !safe_aad.is_empty() {
+        component_data.extend(components_entry(SAFE_AAD, safe_aad)?);
+    }
     let dictionary = VLBytes::new(component_data).tls_serialize_detached()?;
     Ok(Extensions::single(Extension::Unknown(
         APP_DATA_DICTIONARY,
@@ -118,7 +146,12 @@ fn room_leaf_extensions(components: &[u16]) -> Result<Extensions<LeafNode>, Fail
 }
 
 /// One KeyPackage for a client of `user_uri`, valid from an hour ago, able to join a protocol-07 room.
-fn key_package(user_uri: &str, components: &[u16], now: u64) -> Result<Vec<u8>, Failure> {
+fn key_package(
+    user_uri: &str,
+    components: &[u16],
+    safe_aad: &[u16],
+    now: u64,
+) -> Result<Vec<u8>, Failure> {
     let provider = OpenMlsRustCrypto::default();
     let scheme = SignatureScheme::ED25519;
     let (private_key, public_key) = provider.crypto().signature_key_gen(scheme)?;
@@ -128,7 +161,7 @@ fn key_package(user_uri: &str, components: &[u16], now: u64) -> Result<Vec<u8>, 
     };
     let bundle = KeyPackage::builder()
         .leaf_node_capabilities(room_capabilities())
-        .leaf_node_extensions(room_leaf_extensions(components)?)
+        .leaf_node_extensions(room_leaf_extensions(components, safe_aad)?)
         .key_package_extensions(Extensions::empty())
         .key_package_lifetime(Lifetime::init(
             now.saturating_sub(3600),
@@ -151,13 +184,14 @@ fn write_key_packages(
     user_uri: &str,
     count: &str,
     components: &[u16],
+    safe_aad: &[u16],
 ) -> Result<(), Failure> {
     let count: usize = count.parse()?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     std::fs::create_dir_all(dir)?;
     for n in 1..=count {
         let path = Path::new(dir).join(format!("kp-{n:03}.bin"));
-        std::fs::write(path, key_package(user_uri, components, now)?)?;
+        std::fs::write(path, key_package(user_uri, components, safe_aad, now)?)?;
     }
     Ok(())
 }
@@ -196,18 +230,25 @@ fn main() -> Result<(), Failure> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         ["keypackages", dir, user_uri, count] => {
-            write_key_packages(dir, user_uri, count, &DEFAULT_COMPONENTS)
+            write_key_packages(dir, user_uri, count, &DEFAULT_COMPONENTS, &[])
         }
         ["keypackages", dir, user_uri, count, components] => {
-            write_key_packages(dir, user_uri, count, &parse_components(components)?)
+            write_key_packages(dir, user_uri, count, &parse_components(components)?, &[])
         }
+        ["keypackages", dir, user_uri, count, components, safe_aad] => write_key_packages(
+            dir,
+            user_uri,
+            count,
+            &parse_components(components)?,
+            &parse_ids(safe_aad)?,
+        ),
         ["keymaterial-request", file, requesting, target] => {
             write_key_material_request(file, requesting, target)
         }
         ["keymaterial-answer", file] => say_key_material_answer(file),
         ["identifier-request", file, handle] => write_identifier_request(file, handle),
         _ => Err(
-            "usage: seed_fixtures keypackages <dir> <user-uri> <count> [<component-id>,...] \
+            "usage: seed_fixtures keypackages <dir> <user-uri> <count> [<component-id>,... [<safe-aad-id>,...]] \
                   | keymaterial-request <file> <requesting-user-uri> <target-user-uri> \
                   | keymaterial-answer <file> \
                   | identifier-request <file> <handle>"
