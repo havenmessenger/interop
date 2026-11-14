@@ -2025,8 +2025,17 @@ impl FanoutMessage {
         // nested-length-prefix input -- the same tls_codec-internal panic risk as the other
         // peer-controlled MLSMessage sites in this file. catch_unwind turns a hostile/malformed
         // `message` into a decode error instead of an unhandled panic in the request task.
+        //
+        // A Commit or proposal carrying AppDataUpdates (how a protocol-07 room changes its participant list and policy) is
+        // checked as its rewritten copy, which the pinned openmls can read (`commit_wire::normalize_app_data_updates`);
+        // the bytes kept are the ones sent.
+        let rewritten = crate::commit_wire::normalize_app_data_updates(rest)
+            .ok()
+            .flatten()
+            .map(|normalized| normalized.bytes);
+        let checked = rewritten.as_deref().unwrap_or(rest);
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut c: &[u8] = rest;
+            let mut c: &[u8] = checked;
             MlsMessageIn::tls_deserialize(&mut c)
         }))
         .map_err(|_| WireError::Codec {

@@ -324,7 +324,7 @@ private type `0xF7A0` (`mimiParticipantList`). Both carry the draft's `Participa
 encoding and are applied the same way. The openmls release this crate pins (0.9.2) is built
 without its `extensions-draft` feature and cannot read an AppDataUpdate, so `commit_wire` reads
 the proposals window itself and rewrites an AppDataUpdate to the `0xF7A0` form for reading only; the
-bytes of the Commit are never changed.
+bytes of the Commit are never changed. `/notify` checks a fanned-out Commit or proposal the same way.
 
 Protocol-07 §5.3 sends a room-policy change as an AppDataUpdate for the room policy components of
 room-policy-04, with values `0x0024` to `0x0030` suggested and not yet registered. This hub reads two:

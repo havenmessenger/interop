@@ -499,12 +499,26 @@ async fn notify_wire(
 ) -> StatusCode {
     let source = match verify_notify_source(&room_id, peer.as_ref()) {
         Ok(source) => source,
-        Err(status) => return status,
+        Err(status) => {
+            eprintln!(
+                "[mimi-hubd] notify: {}",
+                if status == StatusCode::FORBIDDEN {
+                    "refused (the peer's certificate is not the room's hub)"
+                } else {
+                    "refused (the path is not a room URI)"
+                }
+            );
+            return status;
+        }
     };
-    if mimi_core::protocol_wire::FanoutMessage::decode(&body).is_err() {
+    if let Err(error) = mimi_core::protocol_wire::FanoutMessage::decode(&body) {
+        // The decoder's own words: a field of the message and a codec value, never a URI or a user.
+        eprintln!("[mimi-hubd] notify: refused (not a FanoutMessage: {error})");
         return StatusCode::BAD_REQUEST;
     }
-    accept_notify(&p, &source, &body)
+    let status = accept_notify(&p, &source, &body);
+    eprintln!("[mimi-hubd] notify: {status}");
+    status
 }
 
 #[derive(Deserialize)]
