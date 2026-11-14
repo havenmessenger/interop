@@ -5,6 +5,8 @@
 //! cargo run --example seed_fixtures -- keymaterial-request <file> <requesting-user-uri> <target-user-uri>
 //! cargo run --example seed_fixtures -- keymaterial-answer <file>
 //! cargo run --example seed_fixtures -- identifier-request <file> <handle>
+//! cargo run --example seed_fixtures -- consent <file> <request|cancel> <requester-uri> <target-uri> [<room-uri>]
+//! cargo run --example seed_fixtures -- abuse-report <file> <reporting-user-uri> <alleged-abuser-uri> <note>
 //! ```
 //!
 //! `keypackages` writes `<count>` KeyPackages to `<dir>/kp-NNN.bin`, each under ciphersuite 0x0001 with a
@@ -23,12 +25,18 @@
 //! the wire lane.
 //!
 //! `identifier-request` writes a §5.8 `IdentifierRequest` with one element, a search for `<handle>` as a handle.
+//!
+//! `consent` writes a §5.7 `ConsentEntry` for `requestConsent`: a request, or the cancel of one, from the requester to
+//! the target, for one room or (with no room) any. `abuse-report` writes a §5.9 `AbuseReport` with no message attached
+//! (DIVERGENCES.md, DIV-8). With these a provider can send another provider's hub what a peer sends ours.
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use mimi_core::consent::{ConsentEntry, ConsentOperation};
 use mimi_core::protocol_wire::{
-    IdentifierRequest, KeyMaterialRequest, KeyMaterialResponse, QueryElement, SearchIdentifierType,
+    encode_consent_entry, AbuseReport, IdentifierRequest, IdentifierUri, KeyMaterialRequest,
+    KeyMaterialResponse, QueryElement, SearchIdentifierType, ABUSE_TYPE_RESERVED,
 };
 use openmls::ciphersuite::signature::SignaturePublicKey;
 use openmls::credentials::{BasicCredential, CredentialWithKey};
@@ -225,6 +233,46 @@ fn write_identifier_request(file: &str, handle: &str) -> Result<(), Failure> {
     Ok(())
 }
 
+fn write_consent(
+    file: &str,
+    operation: &str,
+    requester: &str,
+    target: &str,
+    room: Option<&str>,
+) -> Result<(), Failure> {
+    let operation = match operation {
+        "request" => ConsentOperation::Request,
+        "cancel" => ConsentOperation::Cancel,
+        other => return Err(format!("consent takes request or cancel, not {other}").into()),
+    };
+    let entry = ConsentEntry {
+        operation,
+        requester_uri: requester.into(),
+        target_uri: target.into(),
+        room_uri: room.map(Into::into),
+        client_key_packages: Vec::new(),
+        consent_extensions: Vec::new(),
+    };
+    std::fs::write(file, encode_consent_entry(&entry)?)?;
+    Ok(())
+}
+
+fn write_abuse_report(
+    file: &str,
+    reporting: &str,
+    alleged: &str,
+    note: &str,
+) -> Result<(), Failure> {
+    let report = AbuseReport {
+        reporting_user: IdentifierUri(reporting.into()),
+        alleged_abuser_uri: IdentifierUri(alleged.into()),
+        reason_code: ABUSE_TYPE_RESERVED,
+        note: note.into(),
+    };
+    std::fs::write(file, report.encode()?)?;
+    Ok(())
+}
+
 fn main() -> Result<(), Failure> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -247,11 +295,22 @@ fn main() -> Result<(), Failure> {
         }
         ["keymaterial-answer", file] => say_key_material_answer(file),
         ["identifier-request", file, handle] => write_identifier_request(file, handle),
+        ["consent", file, operation, requester, target] => {
+            write_consent(file, operation, requester, target, None)
+        }
+        ["consent", file, operation, requester, target, room] => {
+            write_consent(file, operation, requester, target, Some(room))
+        }
+        ["abuse-report", file, reporting, alleged, note] => {
+            write_abuse_report(file, reporting, alleged, note)
+        }
         _ => Err(
             "usage: seed_fixtures keypackages <dir> <user-uri> <count> [<component-id>,... [<safe-aad-id>,...]] \
                   | keymaterial-request <file> <requesting-user-uri> <target-user-uri> \
                   | keymaterial-answer <file> \
-                  | identifier-request <file> <handle>"
+                  | identifier-request <file> <handle> \
+                  | consent <file> <request|cancel> <requester-uri> <target-uri> [<room-uri>] \
+                  | abuse-report <file> <reporting-user-uri> <alleged-abuser-uri> <note>"
                 .into(),
         ),
     }
