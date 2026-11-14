@@ -2,11 +2,11 @@ sender mimi://mimi.havenmessenger.com/u/erin
 room mimi://mimi.havenmessenger.com/r/table
 message IDs: SHA-256, as sent by the sender in the room
 
-alternative.cbor: 138 bytes, message ID 01532a9a5f05f39d407aae12080cbe1d448e53835834e3646210ce0abbfe4849
-  chooseOne: text/plain "Hello from Haven." | text/markdown "Hello from **Haven**."
+alternative.cbor: 141 bytes, message ID 0196bc672b649aa896a4a08ce984583ff58f38ea716623792c9acec09d763bb9
+  chooseOne: text/plain "Hello from Haven." | text/markdown;variant=GFM-MIMI "Hello from **Haven**."
 attachment.cbor: 221 bytes, message ID 012b025709a0bf29df6a9f56542ebff8424e224c5bad26f83e353856d18f3c2c
   processAll: text/plain "The file is attached." + external image/png, disposition attachment, encAlg 0, hashAlg 1
-reply.cbor: 104 bytes, message ID 014aef83ff2fbc84e6d40ed1ed1ffddba43f55cd127e0347dd11c5dcc61d69d9
+reply.cbor: 104 bytes, message ID 01b2588c24d9bd7e6ef3a829e8ccdf990e7bb25e9b29da71da2e80dc5a20f953
   text/plain "Thanks, got it.", inReplyTo = the message ID of alternative.cbor
 
 attachment contentHash = SHA-256 of the 45 bytes "an example attachment for a MIMI content test": 0d596f224b1ee8e6f4dcaabdea9832f3c3323b4035019d30e32b069371186f8e

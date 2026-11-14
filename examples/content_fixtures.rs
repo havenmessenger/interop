@@ -7,7 +7,7 @@
 //! Writes three documents to `<dir>`, each as deterministic CBOR (`*.cbor`), and `fixtures.txt` saying what each one
 //! holds and the message ID each has as sent by `SENDER` in `ROOM`:
 //!
-//! - `alternative.cbor`: a multipart/alternative, `chooseOne` over a text/plain and a text/markdown part.
+//! - `alternative.cbor`: a multipart/alternative, `chooseOne` over a text/plain and a GFM-MIMI markdown part.
 //! - `attachment.cbor`: `processAll` over a text/plain part and an external part for an image, its disposition
 //!   `attachment`, with no encryption (`encAlg` 0) and the SHA-256 of the bytes named in `fixtures.txt`.
 //! - `reply.cbor`: a text/plain reply whose `inReplyTo` is the message ID of `alternative.cbor`.
@@ -20,7 +20,7 @@ use std::path::Path;
 
 use mimi_core::content::{
     from_content08_cbor, to_content08_cbor, Disposition, MimiContent, NestedPart, PartBody,
-    PartSemantics,
+    PartSemantics, GFM_MIMI_CONTENT_TYPE,
 };
 use mimi_core::message_id::{derive_message_id, HashAlgorithm, MimiMessage};
 use sha2::{Digest, Sha256};
@@ -66,7 +66,7 @@ fn alternative() -> MimiContent {
                 semantics: PartSemantics::ChooseOne,
                 parts: vec![
                     text("text/plain;charset=utf-8", "Hello from Haven."),
-                    text("text/markdown;charset=utf-8", "Hello from **Haven**."),
+                    text(GFM_MIMI_CONTENT_TYPE, "Hello from **Haven**."),
                 ],
             },
         },
@@ -157,7 +157,7 @@ fn main() -> Result<(), Failure> {
         (
             "alternative.cbor",
             &alternative,
-            "chooseOne: text/plain \"Hello from Haven.\" | text/markdown \"Hello from **Haven**.\"",
+            "chooseOne: text/plain \"Hello from Haven.\" | text/markdown;variant=GFM-MIMI \"Hello from **Haven**.\"",
         ),
         (
             "attachment.cbor",
