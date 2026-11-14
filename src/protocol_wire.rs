@@ -2048,11 +2048,9 @@ impl FanoutMessage {
 // client's query. This reference hub's own `identifier_query` handler is DIV-4 (a documented
 // PRIVACY-UPGRADE divergence, stronger than the spec default): it answers a single opt-in-enrolled
 // username lookup and returns NO response body over JSON, by design, so a found-vs-not-found
-// answer can never be distinguished by response shape (only by status). The wire lane preserves
-// this: only the first query element's search value is used (matching the v1 single-username
-// model), and `IdentifierResponse` is built for wire completeness/testing but the actual mimi-hubd
-// route (like the JSON one) never sends a response body, keeping the DIV-4 property intact rather
-// than reintroducing a body-shaped oracle the JSON lane is built specifically to avoid.
+// answer can never be distinguished by response shape (only by status). On the wire lane only the first query
+// element's search value is used (matching the v1 single-username model). mimi-hubd's wire route answers with an `IdentifierResponse`: `success` and the URI for an enrollee, and one
+// `notFound` answer, the same bytes, for everything else (DIV-4).
 
 /// §5.8 `SearchIdentifierType` (0-8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2260,7 +2258,7 @@ impl IdentifierQueryCode {
     }
 }
 
-/// §5.8 `IdentifierResponse`, built for wire completeness/testing. `foundProfiles<V>` and
+/// §5.8 `IdentifierResponse`. `foundProfiles<V>` and
 /// `id_response_extensions` are always empty in this reference hub's usage (DIV-4: it never
 /// discloses profile data, only an opt-in-enrolled/not existence signal) so this only encodes the
 /// zero-profile shape rather than the general `ProfileField` list.

@@ -38,12 +38,11 @@ asset transfer, no OHTTP relay path (`§5.10`).
 
 ## DIV-4 - `identifierQuery` has no existence oracle, and only ever answers a single Handle query
 
-A query for a non-enrolled user returns HTTP 404 with a zero-byte body, identical on both the
-JSON and TLS-PL wire lanes. The response carries no signal that would let a caller
-distinguish "not found" from any other failure mode, so repeated queries cannot be used to
-enumerate who has an account. This is symmetric across BOTH outcomes: a match also returns a
-bare status with no decodable body (HTTP 200 on the JSON lane, HTTP 200 on TLS-PL) - not just
-the not-found case - because a body that only appears on success would itself be an oracle.
+Only users who opted in (enrolled) can be found. On the TLS-PL wire lane the answer is an `IdentifierResponse`, as
+§5.8 has it: an enrollee is HTTP 200 with `success` and the user's URI on this provider; every other answer is HTTP 404
+with the same `notFound` body, byte for byte, whether the user is not enrolled, does not exist, or the request could not
+be decoded or evaluated. So an answer says found or not found and nothing else, and repeated queries cannot tell a real
+but private account from a name nobody has. The JSON lane answers with the bare status (200 or 404, no body).
 
 This also means the hub cannot honor the draft's implied AND-across-elements semantics for a
 multi-element `IdentifierRequest`: v1 has no data model for `email`/`phone`/`oidcStdClaim`/

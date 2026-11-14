@@ -76,8 +76,8 @@ HTTP_STATUS=200
 ```
 
 `notify` (an application message wrapped as `FanoutMessage`) and `identifierQuery` (a
-wire-encoded query against a non-enrolled user, proving DIV-4's no-body-oracle property holds on
-the wire lane the same way it holds on the JSON lane):
+wire-encoded query against a non-enrolled user, which gets the same `notFound` answer as a name nobody has, DIV-4's
+no-oracle property):
 
 ```
 $ curl -s --cacert ca-cert.pem --cert client-cert.pem --key client-key.pem \
@@ -95,8 +95,8 @@ $ curl -s --cacert ca-cert.pem --cert client-cert.pem --key client-key.pem \
     -X POST --data-binary @idq.bin \
     https://localhost:8443/mimi/pl/identifierQuery -o idq_resp.bin -w 'HTTP_STATUS=%{http_code}\n'
 HTTP_STATUS=404
-$ wc -c idq_resp.bin
-0 idq_resp.bin
+$ xxd -p idq_resp.bin
+01000000
 ```
 
 ## Quickstart (env vars)

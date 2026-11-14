@@ -23,7 +23,7 @@
 //!   POST /mimi/pl/updateConsent/:requester_domain   (§5.7 C2, ConsentEntry body, always 201)
 //!   POST /mimi/pl/keyMaterial/:target_user          (§5.2, KeyMaterialRequest/Response bodies)
 //!   POST /mimi/pl/notify/{roomId}                   (§5.5, inbound-receive only, FanoutMessage)
-//!   POST /mimi/pl/identifierQuery                   (§5.8, DIV-4 no-body-oracle preserved)
+//!   POST /mimi/pl/identifierQuery                   (§5.8, IdentifierResponse; DIV-4 no-oracle)
 //!   POST /mimi/pl/reportAbuse/:room_id              (§5.9, DIV-8 metadata-only - no AbusiveMessage)
 //!   POST /mimi/pl/update/:room_id                   (§4.3.2, DIV-10 - single custom proposal only)
 //! `groupInfo` (§5.6, DIV-1's external-commit join) is not built. Most wire-route path segments
@@ -530,24 +530,56 @@ async fn identifier_query(
 /// fidelity) but only ever answers a request carrying exactly one `Handle`-typed query element,
 /// matching the v1 single-username model (DIV-4: no data model exists for the other identifier
 /// types, and a request this hub can't evaluate is treated as not-found rather than silently
-/// evaluating a different element than the caller may have meant). Returns a BARE status, no
-/// body, on both outcomes: DIV-4 requires a found-vs-not-found answer to be indistinguishable by
-/// response shape, and a decodable `IdentifierResponse` body would reintroduce exactly the oracle
-/// DIV-4 exists to close. An undecodable or unanswerable request also gets a bare 404 for the
-/// same reason, not a 400: 400 vs 404 would itself leak information about whether the request was
-/// well-formed, which is a smaller but real fingerprint the JSON lane doesn't have either (a
-/// malformed JSON body there hits axum's own rejection path before this handler runs, which is a
-/// pre-existing asymmetry this wire twin does not widen).
-async fn identifier_query_wire(State(p): State<SharedProvider>, body: Bytes) -> StatusCode {
-    let Ok(req) = mimi_core::protocol_wire::IdentifierRequest::decode(&body) else {
-        return StatusCode::NOT_FOUND;
+/// evaluating a different element than the caller may have meant).
+///
+/// The body is an `IdentifierResponse`, as §5.8 has it. An opt-in enrollee is found: 200, `success`, and the user's URI
+/// on this provider. Every other answer is the same 404 and the same `notFound` body, byte for byte: a user who is not
+/// enrolled, one who does not exist, and a request this hub cannot decode or evaluate. So the answer says found or not
+/// found and nothing more, which is DIV-4's no-oracle property; the status says no more than the body does.
+async fn identifier_query_wire(State(p): State<SharedProvider>, body: Bytes) -> Response {
+    let found = mimi_core::protocol_wire::IdentifierRequest::decode(&body)
+        .ok()
+        .and_then(|req| req.primary_search_value())
+        .and_then(|username| {
+            let g = lock(&p);
+            match g.identifier_query(&username) {
+                Ok(IdentifierQueryResult::Found) => {
+                    Some(format!("mimi://{}/u/{username}", g.domain))
+                }
+                Ok(IdentifierQueryResult::NotFound) | Err(_) => None,
+            }
+        });
+    identifier_answer(found)
+}
+
+/// The `IdentifierResponse` for one found user URI, or the one `notFound` answer.
+fn identifier_answer(found: Option<String>) -> Response {
+    use mimi_core::protocol_wire::{IdentifierQueryCode, IdentifierResponse, IdentifierUri};
+    let (status, answer) = match found {
+        Some(uri) => (
+            StatusCode::OK,
+            IdentifierResponse {
+                response_code: IdentifierQueryCode::Success,
+                uris: vec![IdentifierUri(uri)],
+            },
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            IdentifierResponse {
+                response_code: IdentifierQueryCode::NotFound,
+                uris: Vec::new(),
+            },
+        ),
     };
-    let Some(username) = req.primary_search_value() else {
-        return StatusCode::NOT_FOUND;
-    };
-    match lock(&p).identifier_query(&username) {
-        Ok(IdentifierQueryResult::Found) => StatusCode::OK,
-        Ok(IdentifierQueryResult::NotFound) | Err(_) => StatusCode::NOT_FOUND,
+    // The `notFound` answer is a protocol structure too, so it carries the wire type as `success` does.
+    match answer.encode() {
+        Ok(bytes) => (
+            status,
+            [(axum::http::header::CONTENT_TYPE, WIRE_MEDIA_TYPE)],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -2165,15 +2197,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(found.status(), StatusCode::OK);
-        assert!(
-            found
-                .into_body()
-                .collect()
-                .await
-                .unwrap()
-                .to_bytes()
-                .is_empty(),
-            "DIV-4: no response body on the wire lane either"
+        let found_body = found.into_body().collect().await.unwrap().to_bytes();
+        let answer = mimi_core::protocol_wire::IdentifierResponse::decode(&found_body).unwrap();
+        assert_eq!(
+            answer.response_code,
+            mimi_core::protocol_wire::IdentifierQueryCode::Success
+        );
+        assert_eq!(
+            answer.uris,
+            vec![mimi_core::protocol_wire::IdentifierUri(
+                "mimi://havenmessenger.com/u/alice".into()
+            )]
         );
 
         let not_enrolled = router
@@ -2199,5 +2233,34 @@ mod tests {
             .unwrap();
         assert_eq!(not_enrolled.status(), StatusCode::NOT_FOUND);
         assert_eq!(nonexistent.status(), StatusCode::NOT_FOUND);
+        // DIV-4: a user who is not enrolled and one who does not exist get the same bytes, and so does a request
+        // this hub cannot decode.
+        let not_enrolled = not_enrolled.into_body().collect().await.unwrap().to_bytes();
+        let nonexistent = nonexistent.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(not_enrolled, nonexistent);
+        // `notFound`, then empty `uri<V>`, `foundProfiles<V>` and `id_response_extensions`.
+        assert_eq!(not_enrolled.as_ref(), [1, 0, 0, 0]);
+        let answer = mimi_core::protocol_wire::IdentifierResponse::decode(&not_enrolled).unwrap();
+        assert_eq!(
+            answer.response_code,
+            mimi_core::protocol_wire::IdentifierQueryCode::NotFound
+        );
+        assert!(answer.uris.is_empty());
+        let (router, _p) = app();
+        let garbage = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mimi/pl/identifierQuery")
+                    .body(Body::from(vec![0xff, 0x00, 0x07]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(garbage.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            garbage.into_body().collect().await.unwrap().to_bytes(),
+            not_enrolled
+        );
     }
 }
