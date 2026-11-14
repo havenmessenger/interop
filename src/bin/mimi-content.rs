@@ -1,10 +1,10 @@
-//! mimi-content - a tiny CLI that wraps the mimi-core content-09 codec.
+//! mimi-content - a tiny CLI that wraps the mimi-core content codec (content-10; DIV-17).
 //!
-//! This CLI encodes and decodes content-09 frames using `mimi_core::content` - not a separate
+//! This CLI encodes and decodes content documents using `mimi_core::content` - not a separate
 //! reimplementation - without linking mimi-core into any other binary.
 //!
-//!   mimi-content encode   stdin = plaintext UTF-8        → stdout = deterministic content-09 CBOR
-//!   mimi-content decode   stdin = content-09 CBOR        → stdout = the plaintext UTF-8
+//!   mimi-content encode   stdin = plaintext UTF-8        → stdout = deterministic content CBOR
+//!   mimi-content decode   stdin = content CBOR           → stdout = the plaintext UTF-8
 //!
 //! encode wraps the plaintext as a SinglePart (text/plain;charset=utf-8) with a per-message random
 //! 16-byte salt (content-09 §4.1 - salt MUST be cryptographically random; read from /dev/urandom to
