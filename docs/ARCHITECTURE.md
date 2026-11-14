@@ -28,7 +28,7 @@ This crate tracks the relevant IETF drafts/RFCs. Known divergences from the draf
 - `gate` - the security-critical foreign-input ingest logic: the ciphersuite accept-gate
   (`INV-MLS-002`), the `identifierQuery` no-existence-oracle (`DIV-4`), the one-time KeyPackage
   store contract, and notify dedup.
-- `content` - the MIMI content codec (content-09 §4-6): deterministic CBOR, the part type
+- `content` - the MIMI content codec (content-09 §4-6, read and written as content-10; DIV-17): deterministic CBOR, the part type
   system, and the validation MUSTs (nesting depth, no-HTML, reply-loop).
 - `consent` - the cross-provider anti-spam/privacy gate (protocol-07 §5.7): consent request,
   grant, and revoke, checked before a requester can reach a target.

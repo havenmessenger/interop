@@ -13,7 +13,7 @@ interoperate with Haven, or adopt it as the interop layer for your own service. 
 Haven-specific - the protocol logic follows the IETF drafts, and Haven is one deployment of it.
 
 > **Status:** a reference implementation of the MIMI content codec and room-policy roles, with
-> content-09 test vectors byte-verified against the official IETF examples, and a hub
+> the IETF content test vectors byte-verified against the official examples, and a hub
 > demonstrating the core mechanisms (directory, key material, message relay, consent). It
 > implements protocol-07. Known
 > gaps against the full protocol-07 surface are listed in [`DIVERGENCES.md`](DIVERGENCES.md).
@@ -21,9 +21,9 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 
 ## Why use this
 - **Protocol code against the IETF drafts.** MIMI protocol-07 (the JSON lane and the
-  TLS presentation-language wire lane), mimi-content-09, and room-policy-04, over MLS (RFC 9420)
-  via openmls. `update` reads two of room-policy-04's components and refuses the other eleven
-  (DIV-15). Content-10 is published and not done yet.
+  TLS presentation-language wire lane), mimi-content-10 (and what it reads from content-09
+  peers, DIV-17), and room-policy-04, over MLS (RFC 9420) via openmls. `update` reads two of
+  room-policy-04's components and refuses the other eleven (DIV-15).
 - **A runnable, installable hub.** `mimi-hubd` is an mTLS daemon you can stand up from its
   quickstart and point an implementation at; its README shows the output of the commands
   it lists. It also installs like a normal system service - a systemd unit, a `.deb`, prebuilt
