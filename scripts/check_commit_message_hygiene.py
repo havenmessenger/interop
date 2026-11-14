@@ -64,6 +64,11 @@ from check_public_comment_hygiene import (  # noqa: E402
 # rather than living in the shared, comment-scoped set.
 GENERIC_PATTERNS = {
     "internal tracker-ID reference": re.compile(r"\bDISPATCH-\d+\b|\bBUG(?:-SEC)?-\d+\b"),
+    # A co-author trailer or a link to an assistant's session. Commits to these repositories carry their author and
+    # nothing else; a tool that appends such lines by default is caught here, whatever its name.
+    "attribution trailer": re.compile(
+        r"(?im)^(?:co-authored-by|claude-session)\s*:|claude\.ai/code/session|generated with \[?claude code"
+    ),
 }
 
 try:
@@ -201,6 +206,7 @@ _SELF_TEST_TELL_FIXTURE = [
     "see the rust/ crate for the FRB-bound wrapper",
     "closed anti-abuse and mail-delivery infrastructure handle the rest of the pipeline",
     "this example points a curious reader at the wire format in detail",
+    "Tidy the decoder\n\nCo-Authored-By: An Assistant <noreply@example.com>",
 ]
 
 
