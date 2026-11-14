@@ -9,7 +9,8 @@
 //!
 //! `keypackages` writes `<count>` KeyPackages to `<dir>/kp-NNN.bin`, each under ciphersuite 0x0001 with a
 //! `BasicCredential` whose identity is the user URI: a hub that reads an `Add` takes that identity as the user the
-//! client belongs to (DIVERGENCES.md, DIV-10). Every KeyPackage has its own keys, and the private halves are dropped
+//! client belongs to (DIVERGENCES.md, DIV-10). Its leaf declares what a protocol-07 room requires of a member, so
+//! a peer can add the client to one. Every KeyPackage has its own keys, and the private halves are dropped
 //! when this returns. Nobody can open a Welcome made for one of them, which is what a hub test needs and no more.
 //!
 //! `keymaterial-request` writes a protocol-07 §5.2 `KeyMaterialRequest` naming the two users, and
@@ -58,7 +59,47 @@ impl Signer for MemorySigner {
     }
 }
 
-/// One KeyPackage for a client of `user_uri`, valid from an hour ago.
+/// `app_data_dictionary` (draft-ietf-mls-extensions §4.6): the extension a protocol-07 room's GroupContext carries.
+const APP_DATA_DICTIONARY: u16 = 0x0006;
+/// `app_components` (draft-ietf-mls-extensions §5): the component listing what a member supports.
+const APP_COMPONENTS: u16 = 0x0001;
+/// `participant_list` (draft-ietf-mimi-protocol §7.5): the component a protocol-07 room keeps its participants in.
+const PARTICIPANT_LIST: u16 = 0x0022;
+
+/// What a client must support to be added to a protocol-07 room: the `app_data_dictionary` extension, the
+/// `AppDataUpdate` proposal that changes it, and the basic credential its own identity uses.
+fn room_capabilities() -> Capabilities {
+    Capabilities::new(
+        None,
+        Some(&[Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519]),
+        Some(&[ExtensionType::Unknown(APP_DATA_DICTIONARY)]),
+        // `AppDataUpdate` (draft-ietf-mls-extensions §4.7); this build of openmls names it only as a custom type.
+        Some(&[ProposalType::Custom(0x0008)]),
+        Some(&[CredentialType::Basic]),
+    )
+}
+
+/// The leaf's `app_data_dictionary`, naming in `app_components` the components this client supports:
+/// `app_components` itself, which the extension makes mandatory, and `participant_list`.
+fn room_leaf_extensions() -> Result<Extensions<LeafNode>, Failure> {
+    let ids: Vec<u8> = [APP_COMPONENTS, PARTICIPANT_LIST]
+        .iter()
+        .flat_map(|id| id.to_be_bytes())
+        .collect();
+    let components_list = VLBytes::new(ids).tls_serialize_detached()?;
+    let component_data = [
+        APP_COMPONENTS.to_be_bytes().to_vec(),
+        VLBytes::new(components_list).tls_serialize_detached()?,
+    ]
+    .concat();
+    let dictionary = VLBytes::new(component_data).tls_serialize_detached()?;
+    Ok(Extensions::single(Extension::Unknown(
+        APP_DATA_DICTIONARY,
+        UnknownExtension(dictionary),
+    ))?)
+}
+
+/// One KeyPackage for a client of `user_uri`, valid from an hour ago, able to join a protocol-07 room.
 fn key_package(user_uri: &str, now: u64) -> Result<Vec<u8>, Failure> {
     let provider = OpenMlsRustCrypto::default();
     let scheme = SignatureScheme::ED25519;
@@ -68,6 +109,8 @@ fn key_package(user_uri: &str, now: u64) -> Result<Vec<u8>, Failure> {
         signature_key: SignaturePublicKey::from(public_key),
     };
     let bundle = KeyPackage::builder()
+        .leaf_node_capabilities(room_capabilities())
+        .leaf_node_extensions(room_leaf_extensions()?)
         .key_package_extensions(Extensions::empty())
         .key_package_lifetime(Lifetime::init(
             now.saturating_sub(3600),
