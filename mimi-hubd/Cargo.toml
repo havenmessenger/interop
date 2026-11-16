@@ -41,15 +41,16 @@ tower = "0.5"                                           # Layer, to attach the p
 # Durable state - one store, no in-memory residue. bundled = sqlite compiled from source, so the
 # binary is container-portable with no system sqlite dependency.
 rusqlite = { version = "0.41", features = ["bundled"] }
+# Each room's public group state (the ratchet tree and GroupContext a delivery service keeps, no secrets). The hub reads
+# participant-list and room-policy changes as AppDataUpdates, which openmls applies only with `extensions-draft`.
+openmls = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3", features = ["extensions-draft"] }
+openmls_rust_crypto = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3", features = ["extensions-draft"] }
+openmls_traits = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3" }
 
 [dev-dependencies]
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }        # ServiceExt::oneshot for router tests
 rcgen = "0.14"                                          # test cert generation (CA + server + client)
-# Build a real 0x0001 KeyPackage for wiring tests (already in the graph via mimi-core).
-openmls = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3" }
-openmls_rust_crypto = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3" }
-openmls_traits = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3" }
 tls_codec = "0.5"
 
 [lints.clippy]

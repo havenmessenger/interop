@@ -62,7 +62,7 @@ async fn a_requirement_no_key_package_meets_is_no_compatible_material_and_takes_
         .unwrap()
         .add_key_package("bob", &real_keypackage(), now_unix() + 100)
         .unwrap();
-    let unmet = RequiredCapabilitiesExtension::new(&[ExtensionType::Unknown(0x0006)], &[], &[]);
+    let unmet = RequiredCapabilitiesExtension::new(&[ExtensionType::from(0x0006)], &[], &[]);
     let answer = ask(router.clone(), unmet).await;
     // On the wire: userStatus noCompatibleMaterial, no clients (the decoder reads that shape as `Clients`).
     assert!(
@@ -88,7 +88,7 @@ async fn a_requirement_no_key_package_meets_is_no_compatible_material_and_takes_
 async fn a_user_with_no_key_packages_is_still_exhausted() {
     let (router, p) = app();
     granted(&p);
-    let unmet = RequiredCapabilitiesExtension::new(&[ExtensionType::Unknown(0x0006)], &[], &[]);
+    let unmet = RequiredCapabilitiesExtension::new(&[ExtensionType::from(0x0006)], &[], &[]);
     let answer = ask(router, unmet).await;
     assert!(
         matches!(answer, KeyMaterialResponse::Exhausted { .. }),

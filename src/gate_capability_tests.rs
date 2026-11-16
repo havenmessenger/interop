@@ -10,8 +10,8 @@ fn room_capable() -> Vec<u8> {
     key_package_with_capabilities(Capabilities::new(
         None,
         Some(&[PINNED]),
-        Some(&[ExtensionType::Unknown(0x0006)]),
-        Some(&[ProposalType::Custom(0x0008)]),
+        Some(&[ExtensionType::from(0x0006)]),
+        Some(&[ProposalType::from(0x0008)]),
         Some(&[CredentialType::Basic]),
     ))
 }
@@ -27,8 +27,8 @@ fn requiring(
 #[test]
 fn a_leaf_that_lists_what_is_required_meets_it() {
     let required = requiring(
-        &[ExtensionType::Unknown(0x0006)],
-        &[ProposalType::Custom(0x0008)],
+        &[ExtensionType::from(0x0006)],
+        &[ProposalType::from(0x0008)],
         &[CredentialType::Basic],
     );
     assert!(keypackage_meets(&room_capable(), &[PINNED], &required));
@@ -41,12 +41,12 @@ fn a_leaf_that_lacks_a_required_extension_or_proposal_does_not() {
     assert!(!keypackage_meets(
         &plain,
         &[],
-        &requiring(&[ExtensionType::Unknown(0x0006)], &[], &[])
+        &requiring(&[ExtensionType::from(0x0006)], &[], &[])
     ));
     assert!(!keypackage_meets(
         &plain,
         &[],
-        &requiring(&[], &[ProposalType::Custom(0x0008)], &[])
+        &requiring(&[], &[ProposalType::from(0x0008)], &[])
     ));
 }
 

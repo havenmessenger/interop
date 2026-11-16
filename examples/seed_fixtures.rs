@@ -86,9 +86,9 @@ fn room_capabilities() -> Capabilities {
     Capabilities::new(
         None,
         Some(&[Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519]),
-        Some(&[ExtensionType::Unknown(APP_DATA_DICTIONARY)]),
+        Some(&[ExtensionType::from(APP_DATA_DICTIONARY)]),
         // `AppDataUpdate` (draft-ietf-mls-extensions §4.7); this build of openmls names it only as a custom type.
-        Some(&[ProposalType::Custom(0x0008)]),
+        Some(&[ProposalType::from(0x0008)]),
         Some(&[CredentialType::Basic]),
     )
 }
