@@ -284,6 +284,7 @@ the file - see [`debian/mimi-hubd.toml.example`](debian/mimi-hubd.toml.example) 
 | `MIMI_DB_PATH` | `db_path` | no | `/var/lib/mimi/provider.db` | SQLite file path for durable state. This binary-level default is unchanged by packaging - the shipped `.toml.example` template recommends `/var/lib/mimi-hubd/hub.db` instead (matching the systemd unit's `StateDirectory=`), but that is the template's choice, not a change to this daemon's own default. |
 | `MIMI_PUBLIC_BASE_URL` | `public_base_url` | no | `https://{MIMI_PROVIDER_DOMAIN}` | The `https://` URL the directory's endpoint URLs start at, for a hub behind a reverse proxy, on a port other than 443, or on a dedicated host. Identifiers keep using `MIMI_PROVIDER_DOMAIN`. One trailing `/` is dropped; a query, fragment or non-`https` URL is a hard error at startup. |
 | `MIMI_DIRECTORY_BIND_ADDR` | `directory_bind_addr` | no | none | A second listener, plain HTTP and with no client certificate, that answers `GET /.well-known/mimi-protocol-directory` and nothing else. It is meant to sit behind whatever terminates TLS for the public name. Unset means there is no such listener. |
+| `MIMI_ADMIN_BIND_ADDR` | `admin_bind_addr` | no | none | The operator's listener: plain HTTP with no client certificate, serving `roomPolicy`, `memberRole` and `addParticipant` and nothing else. It must be a loopback `ip:port` (127.0.0.0/8 or `::1`); any other address stops the hub at start. Unset means there is no such listener, and no request can change a room's policy, roles or participants except a peer's `update`. |
 | `MIMI_PEER_KEYS` | `peer_keys` | no | none | Path of a JSON file of peers' DNS-published signing keys, `{"<keyid>._mimi.<domain>": "<base64 Ed25519 public key>"}`, an empty value for a revoked key. Re-read when it changes. Without it, no signature verifies and only a client certificate admits a peer. |
 | `MIMI_ACTIVITY_LOG` | `activity_log` | no | off | `1` prints one line per request on the peer-facing listener to stderr: `[mimi-activity] method=POST route=/mimi/pl/update/:room_id status=200`. The route is the template the request matched (`route=unmatched` when none did), so no path, query string, header, certificate or body appears in it. Any other value, or none, leaves it off. The directory-only listener is not logged. |
 
@@ -326,10 +327,16 @@ that does not validate gives no key) and writes the `MIMI_PEER_KEYS` file; the r
 | POST | `/mimi/v1/identifierQuery` | Opt-in-only identifier lookup. |
 | POST | `/mimi/v1/requestConsent` | Consent request or cancel (§5.7 C1), always 201. A cancel withdraws only a pending request, and only from the requester's provider. The wire route answers 202, and 422 for an operation it does not take. |
 | POST | `/mimi/v1/updateConsent` | Consent grant/revoke (§5.7 C2), always 201. |
+| POST | `/mimi/v1/authorizeSender?room=&sender=` | Check whether a sender may send in a room. |
+
+The operator's routes are served only on the loopback listener `MIMI_ADMIN_BIND_ADDR` names, never to a peer. They are
+not MIMI routes; a peer changes a room's roster or policy through `update`.
+
+| Method | Path | Purpose |
+|---|---|---|
 | POST | `/mimi/v1/roomPolicy?room=` | Set a room's RBAC policy. |
 | POST | `/mimi/v1/memberRole?room=&member=&role=` | Assign a member's role in a room. |
 | POST | `/mimi/v1/addParticipant?room=&member=` | Register a room participant. |
-| POST | `/mimi/v1/authorizeSender?room=&sender=` | Check whether a sender may send in a room. |
 
 ### How user and room URIs compare
 
@@ -397,10 +404,10 @@ says whether the handle it was given is enrolled.
   proposal in the same list is refused. This hub does not hold live MLS group state or verify a
   Commit's signature (matching RFC 9420's own delivery-service trust model), and it does not store
   or relay the Commit.
-- **A per-caller room-admin principal.** The mutating room-policy endpoints trust any mTLS peer in
-  the allowlist to administer any room this hub hosts; they do not yet bind an authenticated
-  principal and check a per-room admin role before mutating. See the `SECURITY SCOPE` comment in
-  `src/http.rs` for the exact boundary.
+- **Who sets a room's policy.** `roomPolicy`, `memberRole` and `addParticipant` are the hub
+  operator's, on a loopback listener with no credential; a peer cannot reach them. A peer's
+  `update` is checked against the room's policy, but who made a role change is not (DIVERGENCES,
+  DIV-15).
 
 The directory endpoint discloses the ciphersuite and join-model restrictions programmatically, so
 a client can detect them without reading source.

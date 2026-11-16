@@ -2,7 +2,7 @@
 # Seeds a mimi-hubd with the state a visiting implementation needs to test against it, through the hub's own
 # routes, and checks the result on the wire lane.
 #
-#   HUB=https://mimi.example.com:8443 CERT=client-cert.pem KEY=client-key.pem \
+#   HUB=https://mimi.example.com:8443 ADMIN=http://127.0.0.1:8445 CERT=client-cert.pem KEY=client-key.pem \
 #   PEER_USER=mimi://other.example/u/alice examples/seed_table.sh seed
 #
 #   ... examples/seed_table.sh check
@@ -20,11 +20,13 @@
 # KeyPackages as $PEER_USER (exhausted means the consent grant is there; denied means it is not), and asks
 # identifierQuery for $HANDLE. The last two go over the wire lane, as a peer provider asks them.
 #
-# One thing no route does: enroll a handle for identifierQuery. That is `mimi-hubd enroll <handle>`, run on the hub's
-# host. `check` says whether $HANDLE is enrolled.
+# The room is set up through the hub operator's listener ($ADMIN), which serves only on a loopback address of the hub's
+# host, so `seed` runs there (or through a tunnel to it). One thing no route does: enroll a handle for identifierQuery.
+# That is `mimi-hubd enroll <handle>`, also run on the hub's host. `check` says whether $HANDLE is enrolled.
 #
 # Environment:
 #   HUB           the hub's mTLS listener, scheme and port included (required)
+#   ADMIN         the hub's operator listener, as `MIMI_ADMIN_BIND_ADDR` names it (required for `seed`)
 #   CERT, KEY     a client certificate the hub trusts, and its key (required)
 #   PEER_USER     the visiting user's URI (required)
 #   CACERT        the CA of the hub's server certificate, when the system store does not hold it
@@ -97,6 +99,11 @@ expect() {
     fi
 }
 
+# curl against the hub operator's listener: loopback, no certificate. Prints the status; the body goes to $WORK/answer.
+admin() {
+    curl -sS -o "$WORK/answer" -w '%{http_code}' "$@"
+}
+
 # What the hub's keyMaterial answers $PEER_USER about `target_uri`, asked under the path key `key`: one word.
 key_material_answer() {
     local key=$1 target_uri=$2 status
@@ -137,11 +144,12 @@ seed() {
     grant_consent "$without_uri"
     echo "sent: consent grants from $with_uri and $without_uri to $PEER_USER"
 
-    status=$(hub -X POST \
-        "$HUB/mimi/v1/addParticipant?room=$(urlencode "$room_uri")&member=$(urlencode "$PEER_USER")")
+    : "${ADMIN:?set ADMIN to the operator listener of the hub, e.g. http://127.0.0.1:8445}"
+    status=$(admin -X POST \
+        "$ADMIN/mimi/v1/addParticipant?room=$(urlencode "$room_uri")&member=$(urlencode "$PEER_USER")")
     expect 201 "$status" "adding $PEER_USER to $room_uri"
-    status=$(hub -X POST \
-        "$HUB/mimi/v1/memberRole?room=$(urlencode "$room_uri")&member=$(urlencode "$PEER_USER")&role=$ROLE")
+    status=$(admin -X POST \
+        "$ADMIN/mimi/v1/memberRole?room=$(urlencode "$room_uri")&member=$(urlencode "$PEER_USER")&role=$ROLE")
     expect 201 "$status" "giving $PEER_USER role $ROLE in $room_uri"
     echo "added: $PEER_USER to $room_uri, role $ROLE"
 

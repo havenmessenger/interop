@@ -460,10 +460,19 @@ answers 201; it delivers nothing.
   request whose header names a domain the peer's certificate does not carry, is not of that form, or
   arrives on a connection that presented no certificate (403). The `Host` header, which names the
   target provider, is not compared with this hub's domain.
-- **The JSON lane's admin routes.** `roomPolicy`, `memberRole`, `addParticipant` and `authorizeSender` check that the
-  caller completed the handshake and that the room is one this hub hosts, and nothing about who the caller is. Any
-  certificate in the client CA bundle can use them, which is true of every peer today and is part of what trusting a CA
-  means. The hub prints the fingerprint of each CA in the bundle at startup, so the list can be read and compared.
+- **The operator's routes.** `roomPolicy`, `memberRole` and `addParticipant` set a room's policy, roles and
+  participants. They are not MIMI routes, and no peer reaches them: they are served only on a listener bound to a
+  loopback address (`MIMI_ADMIN_BIND_ADDR`; the hub does not start with any other address), with no client
+  certificate, so the caller is whoever can reach that address on the hub's host, the same person who can run
+  `mimi-hubd enroll` or open the hub's store. Unset, there is no such listener. That listener is safe without a
+  credential only while nothing a peer sends can make the hub connect to it: this hub makes no requests to other hubs.
+  When it delivers to them, each request will be https with the hub's client certificate, and a destination that is
+  loopback, link-local or unspecified will be refused before connecting, so a peer name that resolves to 127.0.0.1 does
+  not reach this listener.
+- **`authorizeSender`.** It changes nothing. It checks that the caller completed the handshake and that the room is one
+  this hub hosts, and nothing about who the caller is; any certificate in the client CA bundle can ask it, which is
+  part of what trusting a CA means. The hub prints the fingerprint of each CA in the bundle at startup, so the list can
+  be read and compared.
 - **`submitMessage`, `update` and the rest.** Only `/notify` is bound to the room's hub. A peer that
   passes mTLS is not otherwise tied to the provider domain in its certificate on the other routes,
   as DIV-6 says for the identities inside a request body.
