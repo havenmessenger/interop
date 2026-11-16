@@ -30,6 +30,53 @@ impl SqliteStore {
     pub fn groups(&self) -> crate::group_store::GroupStore<'_> {
         crate::group_store::GroupStore::new(&self.conn)
     }
+
+    /// The room's tracking record, when the hub keeps its tree.
+    pub fn room_tree(
+        &self,
+        room_uri: &str,
+    ) -> anyhow::Result<Option<crate::room_tree::RoomTracking>> {
+        let room_uri = mimi_core::uri::canonical(room_uri);
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT group_id, seeded_by FROM room_tree WHERE room_uri = ?1",
+                params![room_uri.as_str()],
+                |row| {
+                    Ok(crate::room_tree::RoomTracking {
+                        group_id: row.get(0)?,
+                        seeded_by: row.get(1)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// Record that the hub keeps the room's tree, seeded by `seeded_by` at `epoch`.
+    pub fn set_room_tree(
+        &self,
+        room_uri: &str,
+        group_id: &[u8],
+        seeded_by: &str,
+        epoch: u64,
+    ) -> anyhow::Result<()> {
+        let room_uri = mimi_core::uri::canonical(room_uri);
+        self.conn.execute(
+            "INSERT INTO room_tree (room_uri, group_id, seeded_by, seeded_epoch) VALUES (?1, ?2, ?3, ?4)",
+            params![room_uri.as_str(), group_id, seeded_by, epoch as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Forget that the hub keeps the room's tree.
+    pub fn drop_room_tree(&self, room_uri: &str) -> anyhow::Result<()> {
+        let room_uri = mimi_core::uri::canonical(room_uri);
+        self.conn.execute(
+            "DELETE FROM room_tree WHERE room_uri = ?1",
+            params![room_uri.as_str()],
+        )?;
+        Ok(())
+    }
 }
 
 const SCHEMA: &str = r"
@@ -172,6 +219,15 @@ CREATE TABLE IF NOT EXISTS pending_proposals (
 CREATE TABLE IF NOT EXISTS room_epoch (
     room_uri TEXT PRIMARY KEY,
     epoch    INTEGER NOT NULL
+);
+
+-- The rooms whose ratchet tree the hub keeps (room_tree.rs): the MLS group id each was seeded with, the provider that
+-- seeded it, and the epoch it was seeded at.
+CREATE TABLE IF NOT EXISTS room_tree (
+    room_uri     TEXT PRIMARY KEY,
+    group_id     BLOB NOT NULL,
+    seeded_by    TEXT NOT NULL,
+    seeded_epoch INTEGER NOT NULL
 );
 
 -- A room's public MLS group state, as openmls's PublicGroup writes it (group_store.rs): the ratchet tree, the

@@ -35,6 +35,7 @@ pub mod peer;
 pub mod policy;
 pub mod problem;
 pub mod provider_auth;
+pub mod room_tree;
 pub mod signature;
 pub mod store;
 mod store_canonical;
@@ -55,7 +56,7 @@ use mimi_core::participant_list::{
     apply_update, decode_participant_list_update, ParticipantListData, ParticipantListUpdate,
     UserRolePair, MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE,
 };
-use mimi_core::protocol_wire::{HandshakeBundle, WireError};
+use mimi_core::protocol_wire::{GroupInfoOption, HandshakeBundle, WireError};
 use mimi_core::room_policy::{
     RoomPolicy, MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE, MIMI_ROLES_LIST_PROPOSAL_TYPE,
 };
@@ -940,6 +941,22 @@ impl Provider {
         commit_bytes: &[u8],
         now_unix: u64,
     ) -> Result<(), UpdateRefusal> {
+        self.apply_commit_bundle(room_uri, commit_bytes, None, None, now_unix)
+    }
+
+    /// [`Self::apply_update_commit`] with the rest of the Commit's bundle: its `GroupInfoOption` and `RatchetTreeOption`,
+    /// and the peer that sent it. For a room whose tree the hub keeps, the Commit is verified against the tree and staged
+    /// before anything changes, and merged once the hub's tables are written; one the tree refuses changes nothing. For
+    /// a room it does not keep yet, an accepted Commit whose bundle carries a Full GroupInfo and a full tree seeds it
+    /// (`room_tree`).
+    fn apply_commit_bundle(
+        &self,
+        room_uri: &str,
+        commit_bytes: &[u8],
+        bundle: Option<(&GroupInfoOption, &Vec<u8>)>,
+        peer: Option<&crate::peer::PeerIdentity>,
+        now_unix: u64,
+    ) -> Result<(), UpdateRefusal> {
         // A Commit refused for the changes it carries together says which rule refused it; any other is unreadable.
         let mut commit = decode_commit_proposals(commit_bytes).map_err(|error| {
             changes_refusal(&error).map_or(
@@ -966,12 +983,32 @@ impl Provider {
                 return Err(UpdateRefusal::WrongEpoch(room_epoch));
             }
         }
+        let tracked = match self
+            .room_tracking(room_uri)
+            .map_err(|_| UpdateRefusal::Store)?
+        {
+            Some(tracking) => Some(self.stage_tracked_commit(
+                room_uri,
+                &tracking,
+                commit_bytes,
+                bundle.map(|(group_info, _)| group_info),
+            )?),
+            None => None,
+        };
         self.include_held_proposals(room_uri, &mut commit, now_unix)?;
         let epoch = commit.epoch;
         self.apply_decoded_commit(room_uri, &commit, now_unix)?;
         self.store
             .commit_accepted_at(room_uri, epoch)
-            .map_err(|_| UpdateRefusal::Store)
+            .map_err(|_| UpdateRefusal::Store)?;
+        match (tracked, bundle) {
+            (Some(staged), _) => self.merge_tracked_commit(staged),
+            (None, Some((group_info, ratchet_tree))) => {
+                self.seed_room_tree(room_uri, epoch, peer, group_info, ratchet_tree);
+                Ok(())
+            }
+            (None, None) => Ok(()),
+        }
     }
 
     /// Read the proposals `commit` names by reference into it, from what this hub holds for the room at the Commit's
@@ -1282,8 +1319,17 @@ impl Provider {
             })?;
         match bundle {
             HandshakeBundle::Commit {
-                proposal_or_commit, ..
-            } => self.apply_update_commit(room_uri, &proposal_or_commit, now_unix),
+                proposal_or_commit,
+                group_info_option,
+                ratchet_tree_option,
+                ..
+            } => self.apply_commit_bundle(
+                room_uri,
+                &proposal_or_commit,
+                Some((&group_info_option, &ratchet_tree_option)),
+                peer,
+                now_unix,
+            ),
             HandshakeBundle::Proposal {
                 proposal_or_commit,
                 more_proposals,
