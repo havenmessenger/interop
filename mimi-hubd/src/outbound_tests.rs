@@ -318,7 +318,7 @@ async fn a_peer_resolving_to_loopback_is_refused_before_connecting() {
         resolver(PEER, &[public, addr]),
     );
     assert!(matches!(
-        mixed.vetted_address(&url("/", addr.port())).await,
+        mixed.vetted_addresses(&url("/", addr.port())).await,
         Err(OutboundError::Refused { .. })
     ));
 }
@@ -354,6 +354,24 @@ async fn a_request_carries_the_client_certificate_from_and_host() {
     assert!(head.contains(&format!("from: mimi@{HUB}\r\n")));
     assert!(head.contains("content-type: application/mimi-protocol\r\n"));
     assert_eq!(seen.body, b"fanout");
+}
+
+/// A host with several addresses is tried address by address: one that refuses the connection is passed over for the
+/// next. Revert check: connect to the first address only, and the request fails.
+#[tokio::test]
+async fn each_checked_address_is_tried_in_turn() {
+    let pki = Pki::new();
+    let (addr, seen) = server(&pki, PEER, answer("201 Created", "", b"")).await;
+    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead = closed.local_addr().unwrap();
+    drop(closed);
+    let client = pki.client(loopback_allowed(), None, resolver(PEER, &[dead, addr]));
+    let response = client.get(&url("/", addr.port())).await;
+    assert!(
+        matches!(&response, Ok(response) if response.status == 201),
+        "PLANT-OUTBOUND-EACH-ADDRESS: {response:?}"
+    );
+    assert_eq!(seen.lock().unwrap().len(), 1);
 }
 
 /// A server certificate that is not for the host connected to fails the handshake.

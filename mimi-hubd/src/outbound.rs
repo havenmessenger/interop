@@ -8,8 +8,10 @@
 //! - The host is resolved once, and every address it resolves to is checked against [`AddressPolicy`]: loopback,
 //!   unspecified, link-local, private (RFC 1918), shared (RFC 6598), unique-local, multicast, documentation and the other
 //!   special ranges are refused unless the operator's allowlist names them. One refused address refuses the request.
-//! - The connection is made to the checked address itself, so no second lookup can name another one. Through a proxy
-//!   ([`ProxyAddr`]) the `CONNECT` names that address too, and the proxy never resolves the peer's name.
+//! - The connection is made to a checked address itself, so no second lookup can name another one: each address the
+//!   host resolved to is tried in turn until one connects, as a host with both an IPv6 and an IPv4 address needs.
+//!   Through a proxy ([`ProxyAddr`]) the `CONNECT` names that address too, and the proxy never resolves the peer's
+//!   name.
 //!
 //! Then TLS is run with the hub's own certificate as the client certificate, always, and the peer's server certificate
 //! must be valid for the host connected to: a `dNSName` subject alternative name matching it exactly or by a leftmost
@@ -497,8 +499,9 @@ impl PeerClient {
             .await
     }
 
-    /// The address `url`'s host resolves to, once every address it resolves to has passed the policy.
-    pub async fn vetted_address(&self, url: &PeerUrl) -> Result<SocketAddr, OutboundError> {
+    /// The addresses `url`'s host resolves to, in the resolver's order without repeats, once every one has passed the
+    /// policy.
+    pub async fn vetted_addresses(&self, url: &PeerUrl) -> Result<Vec<SocketAddr>, OutboundError> {
         let addresses = self
             .resolver
             .resolve(&url.host, url.port)
@@ -516,10 +519,40 @@ impl PeerClient {
                     range,
                 })?;
         }
-        addresses
-            .first()
-            .copied()
-            .ok_or_else(|| OutboundError::NoAddress(url.host.clone()))
+        let mut unique = Vec::with_capacity(addresses.len());
+        for addr in addresses {
+            if !unique.contains(&addr) {
+                unique.push(addr);
+            }
+        }
+        if unique.is_empty() {
+            return Err(OutboundError::NoAddress(url.host.clone()));
+        }
+        Ok(unique)
+    }
+
+    /// A connection to the first of `addresses` that answers, directly or through the proxy; the last failure if none
+    /// does.
+    async fn connect_any(&self, addresses: &[SocketAddr]) -> Result<TcpStream, OutboundError> {
+        let mut last = OutboundError::NoAddress(String::new());
+        for addr in addresses {
+            let attempt = match &self.proxy {
+                None => {
+                    deadline(CONNECT_TIMEOUT, "connecting", async {
+                        TcpStream::connect(addr)
+                            .await
+                            .map_err(OutboundError::Connect)
+                    })
+                    .await
+                }
+                Some(proxy) => self.tunnel(proxy, *addr).await,
+            };
+            match attempt {
+                Ok(stream) => return Ok(stream),
+                Err(error) => last = error,
+            }
+        }
+        Err(last)
     }
 
     async fn send(
@@ -528,18 +561,8 @@ impl PeerClient {
         method: hyper::Method,
         body: Option<(&str, Vec<u8>)>,
     ) -> Result<PeerResponse, OutboundError> {
-        let addr = self.vetted_address(url).await?;
-        let tcp = match &self.proxy {
-            None => {
-                deadline(CONNECT_TIMEOUT, "connecting", async {
-                    TcpStream::connect(addr)
-                        .await
-                        .map_err(OutboundError::Connect)
-                })
-                .await?
-            }
-            Some(proxy) => self.tunnel(proxy, addr).await?,
-        };
+        let addresses = self.vetted_addresses(url).await?;
+        let tcp = self.connect_any(&addresses).await?;
         let name = ServerName::try_from(url.host.clone())
             .map_err(|_| OutboundError::BadUrl("its host is not a DNS name"))?;
         let tls = deadline(HANDSHAKE_TIMEOUT, "in the TLS handshake", async {

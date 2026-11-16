@@ -170,7 +170,15 @@ impl OutboxWorker {
     pub fn settle(&self, row: &OutboxRow, attempt: &Attempt, now_ms: u64) {
         let provider = self.lock();
         let result = match attempt {
-            Attempt::Delivered => provider.store.remove_outbox_row(row.id),
+            Attempt::Delivered => {
+                eprintln!(
+                    "[mimi-hubd] outbox: delivered a fan-out for {} to {} (attempt {})",
+                    row.room_uri,
+                    row.domain,
+                    row.attempts.saturating_add(1)
+                );
+                provider.store.remove_outbox_row(row.id)
+            }
             Attempt::Refused(status) => {
                 eprintln!(
                     "[mimi-hubd] outbox: {} refused a fan-out for {} with {status}; dropped",
