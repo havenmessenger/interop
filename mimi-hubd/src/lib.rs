@@ -41,6 +41,7 @@ pub mod peer_directory;
 pub mod policy;
 pub mod problem;
 pub mod provider_auth;
+pub mod request_signing;
 pub mod role_checks;
 pub mod room_tree;
 pub mod signature;

@@ -37,6 +37,10 @@ pub enum Refusal {
     DigestMismatch,
     UnknownKey(String),
     BadSignature,
+    /// The same key already used this nonce within the window.
+    Replayed,
+    /// A keyMaterial request with no nonce, where the hub's policy requires one.
+    NoNonce,
 }
 
 /// The request facts a signature is checked against.
@@ -83,12 +87,30 @@ impl PeerKeys {
     }
 }
 
+/// What a valid signature says: the provider domain it authenticates, and the key, nonce and time it was made with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Verified {
+    pub domain: String,
+    pub keyid: String,
+    pub nonce: Option<String>,
+    pub created: i64,
+}
+
 /// The provider domain a valid signature on `request` authenticates, or why it authenticates none.
 pub fn verify(
     request: &SignedRequest<'_>,
     now: SystemTime,
     keys: &PeerKeys,
 ) -> Result<String, Refusal> {
+    verify_signed(request, now, keys).map(|verified| verified.domain)
+}
+
+/// As [`verify`], with the signature's key, nonce and time.
+pub fn verify_signed(
+    request: &SignedRequest<'_>,
+    now: SystemTime,
+    keys: &PeerKeys,
+) -> Result<Verified, Refusal> {
     let input = (request.header)("signature-input").ok_or(Refusal::NoSignature)?;
     let signatures = (request.header)("signature").ok_or(Refusal::NoSignature)?;
     let members = parse_signature_input(&input)?;
@@ -152,7 +174,51 @@ pub fn verify(
     ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, &key)
         .verify(base.as_bytes(), &signature)
         .map_err(|_| Refusal::BadSignature)?;
-    Ok(domain)
+    Ok(Verified {
+        domain,
+        keyid,
+        nonce: member.param("nonce"),
+        created,
+    })
+}
+
+/// The longest nonce kept; a longer one is refused rather than stored.
+pub const MAX_NONCE_LEN: usize = 128;
+
+/// The nonces of signatures that verified, each until its `created` time leaves the window ([`MAX_AGE_SECS`]): a second
+/// use by the same key within the window is a replay (draft-atwood-mimi-provider-auth §13.2; a keyMaterial answer hands
+/// out a KeyPackage). Kept in memory, so a restart forgets at most one window. Entries leave by time, not by count.
+#[derive(Default)]
+pub struct NonceLedger {
+    seen: Mutex<HashMap<(String, String, String), i64>>,
+}
+
+impl NonceLedger {
+    /// Record `verified`'s nonce at `now` (seconds). `Err` when the same key already used it within the window, or it is
+    /// too long. A signature with no nonce records nothing.
+    pub fn record(&self, verified: &Verified, now: i64) -> Result<(), Refusal> {
+        let Some(nonce) = &verified.nonce else {
+            return Ok(());
+        };
+        if nonce.len() > MAX_NONCE_LEN {
+            return Err(Refusal::Malformed("nonce too long"));
+        }
+        let mut seen = self
+            .seen
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        seen.retain(|_, expires| *expires >= now);
+        let key = (
+            verified.domain.clone(),
+            verified.keyid.clone(),
+            nonce.clone(),
+        );
+        if seen.contains_key(&key) {
+            return Err(Refusal::Replayed);
+        }
+        seen.insert(key, verified.created.saturating_add(MAX_AGE_SECS));
+        Ok(())
+    }
 }
 
 /// One member of a `Signature-Input` dictionary: its label, covered components, parameters, and its serialized value

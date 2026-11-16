@@ -32,6 +32,8 @@ const KNOWN_KEYS: &[&str] = &[
     "client_cert",
     "client_key",
     "peers",
+    "signing_key",
+    "signing_selector",
 ];
 
 /// The settings this daemon takes from env vars, also loadable from a TOML file. Field names match the env var suffix in lowercase (`MIMI_PROVIDER_DOMAIN` ->
@@ -66,6 +68,9 @@ pub struct ConfigFile {
     pub client_key: Option<String>,
     /// A TOML file mapping a peer's domain to the base its directory is under, when that is not `https://<domain>`.
     pub peers: Option<String>,
+    /// The file holding the provider's request-signing key (a base64 32-byte Ed25519 seed), with its DNS selector.
+    pub signing_key: Option<String>,
+    pub signing_selector: Option<String>,
 }
 
 impl ConfigFile {
@@ -113,6 +118,8 @@ impl ConfigFile {
             "client_cert" => self.client_cert.as_ref(),
             "client_key" => self.client_key.as_ref(),
             "peers" => self.peers.as_ref(),
+            "signing_key" => self.signing_key.as_ref(),
+            "signing_selector" => self.signing_selector.as_ref(),
             _ => None,
         }
     }
@@ -294,6 +301,15 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
         resolve("MIMI_CLIENT_KEY", "client_key", file, None),
     );
     m.insert("MIMI_PEERS", resolve("MIMI_PEERS", "peers", file, None));
+    // No defaults: without a signing key the hub signs nothing it sends.
+    m.insert(
+        "MIMI_SIGNING_KEY",
+        resolve("MIMI_SIGNING_KEY", "signing_key", file, None),
+    );
+    m.insert(
+        "MIMI_SIGNING_SELECTOR",
+        resolve("MIMI_SIGNING_SELECTOR", "signing_selector", file, None),
+    );
     m
 }
 

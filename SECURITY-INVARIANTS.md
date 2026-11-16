@@ -32,7 +32,9 @@ The hub reads the keys of peers that sign requests from a file a job on the host
 has one outbound client (`mimi-hubd/src/outbound.rs`); the outbox worker (`outbox.rs`) and the directory lookup
 (`peer_directory.rs`) send through it and nothing else does. Every request that
 client makes is `https` to a host that is the peer's domain or a subdomain of it, endpoint URLs from a peer's directory
-included, presents the hub's client certificate (`MIMI_CLIENT_CERT`, else the server's), and checks the peer's server certificate for that host. The
+included, is signed with the provider's DNS-published key when one is configured (`request_signing.rs`), presents a
+client certificate when one is configured (`MIMI_CLIENT_CERT`; the server's, for a hub that does not sign), and checks
+the peer's server certificate for that host. The
 host is resolved once; if any address it resolves to is loopback, unspecified, link-local, private, shared,
 unique-local, multicast, documentation or reserved, the request is refused and nothing connects, unless the operator's
 `MIMI_OUTBOUND_ALLOW` names that range. The connection goes to the checked address itself, and through a `CONNECT`
@@ -42,8 +44,10 @@ proxy the tunnel names that address, so no second lookup can lead anywhere else.
 
 The peer listener requires a client certificate from the configured CA bundle, or a request signed with a key the
 provider publishes in DNS (`mimi-hubd/src/provider_auth.rs`, `signature.rs`: a signature older than 300 s or more than
-60 s ahead is refused). Only the directory document is served without either. Which provider a certificate names, and
-what any CA in the bundle can name, is in DIV-16.
+60 s ahead is refused). Only the directory document is served without either. Every other request names its provider
+in `From`, and the proof must authenticate that domain. A signature's nonce is remembered for its window, and a second
+use by the same key is refused; the policy can require a nonce on keyMaterial (`require_nonce_on_key_material`).
+Which provider a certificate names, and what any CA in the bundle can name, is in DIV-16.
 
 ## The operator's routes listen on loopback only
 

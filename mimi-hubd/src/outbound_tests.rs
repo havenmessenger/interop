@@ -57,12 +57,24 @@ impl Pki {
         proxy: Option<ProxyAddr>,
         resolve: Arc<dyn Resolve>,
     ) -> PeerClient {
+        self.client_with(addresses, proxy, resolve, true, None)
+    }
+
+    /// A client for `HUB`, with or without a client certificate from this CA, and signing with `signer` if given.
+    pub(crate) fn client_with(
+        &self,
+        addresses: AddressPolicy,
+        proxy: Option<ProxyAddr>,
+        resolve: Arc<dyn Resolve>,
+        certificate: bool,
+        signer: Option<Arc<crate::request_signing::RequestSigner>>,
+    ) -> PeerClient {
         let (cert, key) = issue(&self.ca, vec![HUB.into()], HUB);
         PeerClient::new(
             OutboundSettings {
                 own_domain: HUB.into(),
-                client_cert_pem: cert.into_bytes(),
-                client_key_pem: key.into_bytes(),
+                client_certificate: certificate.then(|| (cert.into_bytes(), key.into_bytes())),
+                signer,
                 peer_bundle_pem: Some(self.ca_pem.clone().into_bytes()),
                 trust: PeerTrust::BundleOnly,
                 addresses,
@@ -372,6 +384,70 @@ async fn each_checked_address_is_tried_in_turn() {
         "PLANT-OUTBOUND-EACH-ADDRESS: {response:?}"
     );
     assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+/// A hub with a signing key signs each request: the peer gets `Content-Digest`, `Signature-Input` and `Signature`
+/// that verify, by this hub's own verifier, for the hub's domain; with no client certificate configured, none is
+/// presented. Revert check: do not sign, and the request carries no signature.
+#[tokio::test]
+async fn a_signing_hub_signs_each_request_and_need_present_no_certificate() {
+    let pki = Pki::new();
+    let (addr, seen) = server(&pki, PEER, answer("201 Created", "", b"")).await;
+    let signer =
+        Arc::new(crate::request_signing::RequestSigner::from_seed(&[9u8; 32], "haven1").unwrap());
+    let client = pki.client_with(
+        loopback_allowed(),
+        None,
+        resolver(PEER, &[addr]),
+        false,
+        Some(signer.clone()),
+    );
+    let url = url("/v1/notify/r", addr.port());
+    client
+        .post(&url, "application/mimi-protocol", b"fanout".to_vec())
+        .await
+        .unwrap();
+    let seen = seen.lock().unwrap()[0].clone();
+    assert!(
+        !seen.client_certificate,
+        "a client certificate was presented"
+    );
+    let header = |name: &str| {
+        seen.head.lines().find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.eq_ignore_ascii_case(name)
+                .then(|| value.trim().to_string())
+        })
+    };
+    assert!(
+        header("signature").is_some(),
+        "PLANT-OUTBOUND-SIGN: the request is not signed"
+    );
+    let dir = std::env::temp_dir().join(format!("mimi-outbound-sign-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let keys_path = dir.join("keys.json");
+    std::fs::write(
+        &keys_path,
+        format!(r#"{{"haven1._mimi.{HUB}": "{}"}}"#, signer.public_key_b64()),
+    )
+    .unwrap();
+    let keys = crate::signature::PeerKeys::from_file(Some(keys_path));
+    let host = format!("{PEER}:{}", addr.port());
+    let verdict = crate::signature::verify(
+        &crate::signature::SignedRequest {
+            method: "POST",
+            target_uri: &format!("https://{host}/v1/notify/r"),
+            authority: &host,
+            path: "/v1/notify/r",
+            query: None,
+            header: &header,
+            body: &seen.body,
+        },
+        std::time::SystemTime::now(),
+        &keys,
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(verdict, Ok(HUB.to_string()));
 }
 
 /// A server certificate that is not for the host connected to fails the handshake.

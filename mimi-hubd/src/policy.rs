@@ -8,6 +8,9 @@
 //! # Who identifierQuery may find: "all" (default), every user this hub can answer for, which here means a user it has
 //! # enrolled or holds KeyPackages for; or "enrolled", only users enrolled with `mimi-hubd enroll`.
 //! identifier_discovery = "enrolled"
+//! # Refuse a signed keyMaterial request that carries no nonce. Default false: draft-atwood-mimi-provider-auth-00 has no
+//! # nonce. A repeated nonce is refused whatever this says.
+//! require_nonce_on_key_material = true
 //! ```
 //!
 //! A named file the hub cannot read, a key it does not know, an empty suite list or a suite the crypto provider does not
@@ -35,6 +38,8 @@ pub struct HubPolicy {
     /// The MLS ciphersuites accepted from other providers, as wire values.
     pub mls_ciphersuites: Vec<u16>,
     pub identifier_discovery: Discovery,
+    /// Refuse a signed keyMaterial request with no `nonce`: a replayed one would take another KeyPackage.
+    pub require_nonce_on_key_material: bool,
 }
 
 impl Default for HubPolicy {
@@ -42,6 +47,7 @@ impl Default for HubPolicy {
         Self {
             mls_ciphersuites: mimi_core::gate::default_mls_ciphersuites(),
             identifier_discovery: Discovery::default(),
+            require_nonce_on_key_material: false,
         }
     }
 }
@@ -88,8 +94,9 @@ impl HubPolicy {
             Discovery::Enrolled => "enrolled",
         };
         format!(
-            "mls_ciphersuites={} identifier_discovery={discovery}",
-            hex_list(&self.mls_ciphersuites)
+            "mls_ciphersuites={} identifier_discovery={discovery} require_nonce_on_key_material={}",
+            hex_list(&self.mls_ciphersuites),
+            self.require_nonce_on_key_material
         )
     }
 }

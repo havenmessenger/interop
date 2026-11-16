@@ -36,6 +36,11 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   makes the users it names members here, and the Commits, proposals and application messages that follow are queued
   for them, each message once. A message for a room with no member here is answered `404` with the new problem
   `no-local-member`; `remote-room-not-delivered` (422) is retired.
+- mimi-hubd signs every request it sends with the provider's DNS-published key when `MIMI_SIGNING_KEY` and
+  `MIMI_SIGNING_SELECTOR` are set (RFC 9421, as draft-atwood-mimi-provider-auth §5 profiles it, with a nonce), and then
+  presents a client certificate only when `MIMI_CLIENT_CERT` names one. Inbound, `From` is required on every peer
+  request and must name a domain its proof authenticates; a signature's nonce is refused the second time within its
+  window; the policy setting `require_nonce_on_key_material` refuses a signed keyMaterial request without one.
 
 ## 0.1.0 - 2026-11-16
 

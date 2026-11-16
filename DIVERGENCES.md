@@ -544,20 +544,29 @@ answers 201; it delivers nothing.
   take a name constraint per CA (an X.509 name-constraints extension on the CA certificate, or a
   configured list of allowed domains for each CA in the bundle, enforced when the chain is built).
   This hub has neither; a deployment that trusts an outside CA is trusting it with every domain.
-- **`From`.** §4.1 says a request MUST identify its source provider in a `From` header (`mimi@<provider domain>`).
-  This hub does not require the header, since the draft's own note questions it, and it refuses a
-  request whose header names a domain the peer's certificate does not carry, is not of that form, or
-  arrives on a connection that presented no certificate (403). The `Host` header, which names the
-  target provider, is not compared with this hub's domain.
+- **`From`.** §4.1 says a request MUST identify its source provider in a `From` header (`mimi@<provider domain>`),
+  and the draft's own note asks whether `From` is the right field. This hub requires it on every peer request but the
+  directory, whatever the proof: a signature covers it (draft-atwood-mimi-provider-auth §5), and a certificate must
+  carry the domain it names. A request with no `From`, one not of that form, or one naming a domain its proof does not
+  authenticate is refused (403). That follows the direction Mark gave for provider-auth -01 (what the proof binds to
+  cannot be optional); if the WG moves the source provider to another field, the check moves with it. The `Host`
+  header, which names the target provider, is not compared with this hub's domain.
+- **Signatures and nonces.** The hub signs every request it sends with its provider's DNS-published key when one is
+  configured (`MIMI_SIGNING_KEY`, `MIMI_SIGNING_SELECTOR`), as mimid does: `@method`, `@target-uri`, `content-digest`
+  (sent on every request) and `from`, with `created`, a random `nonce`, `keyid` and `tag="mimi"`. A client certificate
+  is then presented only when `MIMI_CLIENT_CERT` names one. Of a signature it receives, it remembers the nonce for the
+  signature's window and refuses a second use by the same key (provider-auth §13.2, as Mark described it for -01: a
+  replayed keyMaterial request takes another KeyPackage). The ledger is in memory, as mimid's is, so a restart forgets
+  at most one window. A signed keyMaterial request with no nonce is accepted by default, since -00 has no nonce; the
+  policy setting `require_nonce_on_key_material` refuses it.
 - **The operator's routes.** `roomPolicy`, `memberRole` and `addParticipant` set a room's policy, roles and
   participants. They are not MIMI routes, and no peer reaches them: they are served only on a listener bound to a
   loopback address (`MIMI_ADMIN_BIND_ADDR`; the hub does not start with any other address), with no client
   certificate, so the caller is whoever can reach that address on the hub's host, the same person who can run
   `mimi-hubd enroll` or open the hub's store. Unset, there is no such listener. That listener is safe without a
-  credential only while nothing a peer sends can make the hub connect to it: this hub makes no requests to other hubs.
-  When it delivers to them, each request will be https with the hub's client certificate, and a destination that is
-  loopback, link-local or unspecified will be refused before connecting, so a peer name that resolves to 127.0.0.1 does
-  not reach this listener.
+  credential only while nothing a peer sends can make the hub connect to it: every request the hub sends is https and
+  goes only to an address its outbound client checked, which refuses loopback unless the operator allowlists it, and
+  this plain-HTTP listener does not answer TLS.
 - **`authorizeSender`.** It changes nothing. It checks that the caller completed the handshake and that the room is one
   this hub hosts, and nothing about who the caller is; any certificate in the client CA bundle can ask it, which is
   part of what trusting a CA means. The hub prints the fingerprint of each CA in the bundle at startup, so the list can

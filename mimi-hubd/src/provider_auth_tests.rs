@@ -159,3 +159,135 @@ async fn a_signed_request_reaches_its_route() {
     assert_eq!(other.status(), StatusCode::FORBIDDEN);
     std::fs::remove_dir_all(dir).ok();
 }
+
+fn gated_with(keys: PeerKeys, require_nonce_on_key_material: bool) -> Router {
+    let provider = Arc::new(Mutex::new(
+        Provider::in_memory("havenmessenger.com").unwrap(),
+    ));
+    with_provider_auth_settings(
+        build_router(provider),
+        Arc::new(ProviderAuth {
+            keys: Arc::new(keys),
+            nonces: NonceLedger::default(),
+            require_nonce_on_key_material,
+        }),
+    )
+}
+
+/// A request signed by `s1` for a.example with `nonce`, made by this hub's own signer.
+fn signed_with_nonce(path: &str, nonce: Option<&str>) -> Request<Body> {
+    let uri = format!("https://mimi.havenmessenger.com{path}");
+    let signer = crate::request_signing::RequestSigner::from_seed(
+        &URL_SAFE_NO_PAD.decode(SEED).unwrap(),
+        "s1",
+    )
+    .unwrap();
+    let created = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let body = vec![1, 0, 0, 0];
+    let headers = signer.sign_with("POST", &uri, "mimi@a.example", &body, created, nonce);
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("from", "mimi@a.example")
+        .header("content-digest", headers.content_digest)
+        .header("signature-input", headers.signature_input)
+        .header("signature", headers.signature)
+        .body(Body::from(body))
+        .unwrap()
+}
+
+async fn status(router: &Router, request: Request<Body>) -> StatusCode {
+    router.clone().oneshot(request).await.unwrap().status()
+}
+
+/// A signed request whose nonce the same key already used within the window is refused; a fresh nonce passes. Revert
+/// check: do not record nonces, and the replay passes the gate.
+#[tokio::test]
+async fn a_repeated_nonce_is_refused() {
+    let (keys, dir) = key_file("nonce-repeat");
+    let router = gated_with(keys, false);
+    let path = "/mimi/pl/keyMaterial/user";
+    assert_ne!(
+        status(&router, signed_with_nonce(path, Some("n-1"))).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        status(&router, signed_with_nonce(path, Some("n-1"))).await,
+        StatusCode::FORBIDDEN,
+        "PLANT-GATE-NONCE: a replayed nonce passed the gate"
+    );
+    assert_ne!(
+        status(&router, signed_with_nonce(path, Some("n-2"))).await,
+        StatusCode::FORBIDDEN
+    );
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// By default a signed keyMaterial request may omit the nonce (draft-atwood-mimi-provider-auth-00 has none); with
+/// `require_nonce_on_key_material` it is refused without one, and other requests are not affected. Revert check: ignore
+/// the setting, and the keyMaterial request without a nonce passes.
+#[tokio::test]
+async fn the_policy_can_require_a_nonce_on_key_material() {
+    let (keys, dir) = key_file("nonce-policy");
+    let lenient = gated_with(PeerKeys::from_file(Some(dir.join("peer_keys.json"))), false);
+    let strict = gated_with(keys, true);
+    let key_material = "/mimi/pl/keyMaterial/user";
+    assert_ne!(
+        status(&lenient, signed_with_nonce(key_material, None)).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        status(&strict, signed_with_nonce(key_material, None)).await,
+        StatusCode::FORBIDDEN,
+        "PLANT-GATE-REQUIRE-NONCE: a keyMaterial request with no nonce passed"
+    );
+    assert_ne!(
+        status(&strict, signed_with_nonce(key_material, Some("n-3"))).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_ne!(
+        status(&strict, signed_with_nonce("/mimi/pl/identifierQuery", None)).await,
+        StatusCode::FORBIDDEN
+    );
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// A peer proved by certificate must name, in `From`, a domain the certificate carries: no `From`, or another domain, is
+/// refused. Revert check: let a certificate pass without `From`, and the request reaches its route.
+#[tokio::test]
+async fn a_certificate_request_needs_from_naming_its_domain() {
+    use crate::peer::PeerIdentity;
+    use crate::tls::tests::{issue, make_ca};
+    let (ca, _) = make_ca();
+    let (cert_pem, _) = issue(&ca, vec!["a.example".into()], "a");
+    let chain = crate::tls::certs_from_pem(cert_pem.as_bytes()).unwrap();
+    let peer = PeerCert(Some(PeerIdentity::new(chain[0].clone().into_owned())));
+    let (keys, dir) = key_file("cert-from");
+    let router = gated(keys).layer(axum::Extension(peer));
+    let request = |from: Option<&str>| {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("https://mimi.havenmessenger.com/mimi/pl/identifierQuery");
+        if let Some(from) = from {
+            request = request.header("from", from);
+        }
+        request.body(Body::from(vec![1, 0, 0, 0])).unwrap()
+    };
+    assert_eq!(
+        status(&router, request(None)).await,
+        StatusCode::FORBIDDEN,
+        "PLANT-GATE-FROM: a certificate request with no From passed"
+    );
+    assert_eq!(
+        status(&router, request(Some("mimi@b.example"))).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_ne!(
+        status(&router, request(Some("mimi@a.example"))).await,
+        StatusCode::FORBIDDEN
+    );
+    std::fs::remove_dir_all(dir).ok();
+}

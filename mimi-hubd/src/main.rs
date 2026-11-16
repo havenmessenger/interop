@@ -160,6 +160,7 @@ async fn main() -> anyhow::Result<()> {
         policy.describe()
     );
 
+    let require_nonce_on_key_material = policy.require_nonce_on_key_material;
     let mut provider = Provider::open(&domain, &db_path)?.with_policy(policy);
     if let Some(url) = &resolved["MIMI_PUBLIC_BASE_URL"] {
         provider = provider.with_public_base_url(url)?;
@@ -191,7 +192,14 @@ async fn main() -> anyhow::Result<()> {
             .map(std::path::PathBuf::from),
     ));
     let router = with_activity_log(
-        mimi_hubd::provider_auth::with_provider_auth(build_router(shared.clone()), peer_keys),
+        mimi_hubd::provider_auth::with_provider_auth_settings(
+            build_router(shared.clone()),
+            Arc::new(mimi_hubd::provider_auth::ProviderAuth {
+                keys: peer_keys,
+                nonces: mimi_hubd::signature::NonceLedger::default(),
+                require_nonce_on_key_material,
+            }),
+        ),
         activity_enabled(resolved["MIMI_ACTIVITY_LOG"].as_deref()),
         Arc::new(|line| eprintln!("{line}")),
     );
@@ -263,22 +271,41 @@ fn outbound_client(
         .transpose()
         .map_err(anyhow::Error::msg)?
         .unwrap_or_default();
-    let (client_cert_pem, client_key_pem) = match (
+    // The provider's signing key, when set, signs every outbound request (draft-atwood-mimi-provider-auth §5).
+    let signer = match (
+        resolved["MIMI_SIGNING_KEY"].as_deref(),
+        resolved["MIMI_SIGNING_SELECTOR"].as_deref(),
+    ) {
+        (Some(path), Some(selector)) => Some(Arc::new(
+            mimi_hubd::request_signing::RequestSigner::from_file(
+                std::path::Path::new(path),
+                selector,
+            )?,
+        )),
+        (None, None) => None,
+        _ => anyhow::bail!(
+            "MIMI_SIGNING_KEY and MIMI_SIGNING_SELECTOR are set together or not at all"
+        ),
+    };
+    // A client certificate: MIMI_CLIENT_CERT/KEY when set; else the server's, but only for a hub that does not sign,
+    // since a server certificate without the clientAuth extended key usage is refused by a strict peer.
+    let client_certificate = match (
         resolved["MIMI_CLIENT_CERT"].as_deref(),
         resolved["MIMI_CLIENT_KEY"].as_deref(),
     ) {
-        (Some(cert), Some(key)) => (
+        (Some(cert), Some(key)) => Some((
             std::fs::read(cert).map_err(|e| anyhow::anyhow!("MIMI_CLIENT_CERT {cert}: {e}"))?,
             std::fs::read(key).map_err(|e| anyhow::anyhow!("MIMI_CLIENT_KEY {key}: {e}"))?,
-        ),
-        (None, None) => (server_cert.to_vec(), server_key.to_vec()),
+        )),
+        (None, None) if signer.is_none() => Some((server_cert.to_vec(), server_key.to_vec())),
+        (None, None) => None,
         _ => anyhow::bail!("MIMI_CLIENT_CERT and MIMI_CLIENT_KEY are set together or not at all"),
     };
     PeerClient::new(
         OutboundSettings {
             own_domain: domain.to_string(),
-            client_cert_pem,
-            client_key_pem,
+            client_certificate,
+            signer,
             peer_bundle_pem: Some(client_ca.to_vec()),
             trust,
             addresses: AddressPolicy::with_allowlist(allow),

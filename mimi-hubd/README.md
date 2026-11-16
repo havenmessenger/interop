@@ -297,7 +297,9 @@ the file - see [`debian/mimi-hubd.toml.example`](debian/mimi-hubd.toml.example) 
 | `MIMI_OUTBOUND_ALLOW` | `outbound_allow` | no | none | Comma-separated `addr/len` ranges an outbound request may reach although they are special (loopback, private, link-local, ...), for a test deployment whose peers run on such addresses. A value that does not parse stops the start. See "Outbound requests" below. |
 | `MIMI_OUTBOUND_PROXY` | `outbound_proxy` | no | none | An HTTP `CONNECT` proxy for outbound requests, `http://host:port`. The tunnel is opened to the address the hub checked, and TLS with the hub's client certificate runs end to end inside it. |
 | `MIMI_PEER_TRUST` | `peer_trust` | no | `system` | The roots a peer's server certificate may chain to: `system` (the system's roots plus `MIMI_CLIENT_CA`) or `bundle` (`MIMI_CLIENT_CA` only). |
-| `MIMI_CLIENT_CERT` | `client_cert` | no | `MIMI_SERVER_CERT` | PEM path of the certificate outbound requests present, with `MIMI_CLIENT_KEY`; for a server certificate without the `clientAuth` extended key usage. Set both or neither. |
+| `MIMI_CLIENT_CERT` | `client_cert` | no | `MIMI_SERVER_CERT`, for a hub that does not sign | PEM path of the certificate outbound requests present, with `MIMI_CLIENT_KEY`. With a signing key set and this unset, no client certificate is presented. Set both or neither. |
+| `MIMI_SIGNING_KEY` | `signing_key` | no | none | Path of a file holding the provider's request-signing key, a base64 32-byte Ed25519 seed (for example `head -c 32 /dev/urandom` encoded as base64), mode 0600, never in a repository. With it, every outbound request is signed. Set with `MIMI_SIGNING_SELECTOR`. |
+| `MIMI_SIGNING_SELECTOR` | `signing_selector` | no | none | The key's DNS selector: its public half is the TXT record `v=MIMI1; k=ed25519; p=...` at `<selector>._mimi.<MIMI_PROVIDER_DOMAIN>`. |
 | `MIMI_CLIENT_KEY` | `client_key` | no | `MIMI_SERVER_KEY` | PEM path of that certificate's key. |
 | `MIMI_PEERS` | `peers` | no | none | A TOML file of `"<peer domain>" = "https://<base>"`, for a peer whose directory is not at `https://<domain>` (mimid serves it at its configured base, such as `https://mimi.a.example`). A base outside the peer's domain stops the start. |
 
@@ -321,6 +323,9 @@ mls_ciphersuites = [0x0001]
 # hub means a user it has enrolled or holds an unexpired KeyPackage for. "enrolled": only users
 # enrolled with `mimi-hubd enroll`.
 identifier_discovery = "enrolled"
+# Refuse a signed keyMaterial request that carries no nonce (default false: provider-auth -00 has no nonce). A
+# repeated nonce is always refused.
+require_nonce_on_key_material = true
 ```
 
 A key the hub does not know, an empty suite list, or a suite the crypto provider does not implement stops the start,
@@ -350,9 +355,12 @@ Every request this hub makes to another provider goes through one client (`src/o
 connection. Before connecting it requires an `https` URL whose host is the peer's domain or a subdomain of it, resolves
 the host once, and refuses the request if any address it resolves to is in a special range (loopback, unspecified,
 link-local, private, shared, unique-local, multicast, documentation, reserved), unless `MIMI_OUTBOUND_ALLOW` names it;
-it then connects to that checked address. TLS presents a client certificate on every request: `MIMI_CLIENT_CERT` /
-`MIMI_CLIENT_KEY` when set, else `MIMI_SERVER_CERT` / `MIMI_SERVER_KEY`, which then needs the `clientAuth` extended key
-usage as well as `serverAuth`. The peer's server certificate must be valid for the host connected to. Requests carry
+it then connects to that checked address. With `MIMI_SIGNING_KEY` and `MIMI_SIGNING_SELECTOR` set, every request is
+signed with the provider's DNS-published key (draft-atwood-mimi-provider-auth §5), and a client certificate is presented
+only when `MIMI_CLIENT_CERT` / `MIMI_CLIENT_KEY` name one. Without a signing key, the client certificate is
+`MIMI_CLIENT_CERT` when set, else `MIMI_SERVER_CERT` / `MIMI_SERVER_KEY`, which then needs the `clientAuth` extended key
+usage as well as `serverAuth` (a Let's Encrypt certificate has `serverAuth` only). The peer's server certificate must
+be valid for the host connected to. Requests carry
 `From: mimi@<MIMI_PROVIDER_DOMAIN>`; redirects are not followed. The startup log says how the client reaches peers.
 
 A peer's endpoints come from its directory, `<base>/.well-known/mimi-protocol-directory`, where the base is

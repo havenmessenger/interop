@@ -22,14 +22,17 @@ fn each_field_is_read() {
         r#"
         mls_ciphersuites = [0x0001]
         identifier_discovery = "enrolled"
+        require_nonce_on_key_material = true
         "#,
     )
     .unwrap();
+    assert!(policy.require_nonce_on_key_material);
+    assert!(!HubPolicy::default().require_nonce_on_key_material);
     assert_eq!(policy.mls_ciphersuites, vec![0x0001]);
     assert_eq!(policy.identifier_discovery, Discovery::Enrolled);
     assert_eq!(
         policy.describe(),
-        "mls_ciphersuites=0x0001 identifier_discovery=enrolled"
+        "mls_ciphersuites=0x0001 identifier_discovery=enrolled require_nonce_on_key_material=true"
     );
 }
 

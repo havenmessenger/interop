@@ -13,8 +13,10 @@
 //!   Through a proxy ([`ProxyAddr`]) the `CONNECT` names that address too, and the proxy never resolves the peer's
 //!   name.
 //!
-//! Then TLS is run with the hub's own certificate as the client certificate, always, and the peer's server certificate
-//! must be valid for the host connected to: a `dNSName` subject alternative name matching it exactly or by a leftmost
+//! Each request is signed with the provider's DNS-published key when the hub has one (`request_signing.rs`,
+//! draft-atwood-mimi-provider-auth §5), and a client certificate is presented when one is configured; either proves to
+//! the peer which provider sends it. Then TLS is run, and the peer's server certificate must be valid for the host
+//! connected to: a `dNSName` subject alternative name matching it exactly or by a leftmost
 //! wildcard label, the same test the inbound listener applies (DIVERGENCES, DIV-16). The trust anchors are the system's
 //! roots plus the configured peer bundle, or the bundle alone ([`PeerTrust`]). Each request carries `From:
 //! mimi@<own domain>` and the URL's `Host` (protocol-07 §4.1). Redirects are not followed: a `3xx` is returned as the
@@ -400,9 +402,10 @@ impl ProxyAddr {
 pub struct OutboundSettings {
     /// This provider's domain, for `From: mimi@<domain>`.
     pub own_domain: String,
-    /// The hub's certificate chain and key, presented as the client certificate on every request.
-    pub client_cert_pem: Vec<u8>,
-    pub client_key_pem: Vec<u8>,
+    /// A certificate chain and key presented as the client certificate on every request, if any.
+    pub client_certificate: Option<(Vec<u8>, Vec<u8>)>,
+    /// The signer every request is signed with, if any.
+    pub signer: Option<Arc<crate::request_signing::RequestSigner>>,
     /// Extra trust anchors for peers' server certificates (the peer CA bundle).
     pub peer_bundle_pem: Option<Vec<u8>>,
     pub trust: PeerTrust,
@@ -423,6 +426,7 @@ pub struct PeerResponse {
 pub struct PeerClient {
     own_domain: String,
     posture: String,
+    signer: Option<Arc<crate::request_signing::RequestSigner>>,
     tls: TlsConnector,
     addresses: AddressPolicy,
     proxy: Option<ProxyAddr>,
@@ -447,16 +451,29 @@ impl PeerClient {
         if roots.is_empty() {
             anyhow::bail!("outbound: no trust anchor for peers' server certificates");
         }
-        let certs = crate::tls::certs_from_pem(&settings.client_cert_pem)?;
-        let key = crate::tls::key_from_pem(&settings.client_key_pem)?;
-        let mut config =
+        let builder =
             ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
                 .with_safe_default_protocol_versions()?
-                .with_root_certificates(roots)
-                .with_client_auth_cert(certs, key)?;
+                .with_root_certificates(roots);
+        let mut config = match &settings.client_certificate {
+            Some((cert_pem, key_pem)) => builder.with_client_auth_cert(
+                crate::tls::certs_from_pem(cert_pem)?,
+                crate::tls::key_from_pem(key_pem)?,
+            )?,
+            None => builder.with_no_client_auth(),
+        };
         config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let proof = match (&settings.signer, &settings.client_certificate) {
+            (Some(signer), Some(_)) => format!(
+                "signed with selector {} and a client certificate",
+                signer.keyid()
+            ),
+            (Some(signer), None) => format!("signed with selector {}", signer.keyid()),
+            (None, Some(_)) => "a client certificate, not signed".to_string(),
+            (None, None) => "UNAUTHENTICATED (no signing key, no client certificate)".to_string(),
+        };
         let posture = format!(
-            "https only, the hub's certificate as client certificate, trust {}, special ranges refused{}, {}",
+            "https only, {proof}, trust {}, special ranges refused{}, {}",
             match settings.trust {
                 PeerTrust::SystemAndBundle => "the system roots plus the client CA bundle",
                 PeerTrust::BundleOnly => "the client CA bundle only",
@@ -473,6 +490,7 @@ impl PeerClient {
         Ok(Self {
             own_domain: settings.own_domain,
             posture,
+            signer: settings.signer,
             tls: TlsConnector::from(Arc::new(config)),
             addresses: settings.addresses,
             proxy: settings.proxy,
@@ -622,6 +640,8 @@ impl PeerClient {
             .await
             .map_err(|error| OutboundError::Http(error.to_string()))?;
         let driver = tokio::spawn(connection);
+        let method_name = method.as_str().to_string();
+        let method_name = method_name.as_str();
         let mut request = hyper::Request::builder()
             .method(method)
             .uri(url.path_and_query.as_str())
@@ -634,6 +654,22 @@ impl PeerClient {
             }
             None => Bytes::new(),
         };
+        if let Some(signer) = &self.signer {
+            // The target URI as the receiver rebuilds it from what it got: `https://`, the Host header, the path.
+            let target_uri = format!("https://{}{}", url.host_header(), url.path_and_query);
+            let headers = signer
+                .sign(
+                    method_name,
+                    &target_uri,
+                    &format!("mimi@{}", self.own_domain),
+                    &payload,
+                )
+                .map_err(|error| OutboundError::Http(error.to_string()))?;
+            request = request
+                .header("content-digest", headers.content_digest)
+                .header("signature-input", headers.signature_input)
+                .header("signature", headers.signature);
+        }
         let request = request
             .body(Full::new(payload))
             .map_err(|error| OutboundError::Http(error.to_string()))?;
