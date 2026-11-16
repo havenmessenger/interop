@@ -47,21 +47,52 @@ impl Member {
         }
     }
 
-    /// A KeyPackage for this member to be added with.
+    /// A KeyPackage for this member to be added with, advertising the app data dictionary and AppDataUpdate.
     pub(crate) fn key_package(&self) -> KeyPackage {
         KeyPackage::builder()
+            .leaf_node_capabilities(capabilities())
             .build(SUITE, &self.provider, &self.signer, self.credential.clone())
             .unwrap()
             .key_package()
             .clone()
     }
 
+    /// A KeyPackage bundle (with its private keys in this member's provider), for a join that processes the Welcome.
+    pub(crate) fn key_package_bundle(&self) -> KeyPackageBundle {
+        KeyPackage::builder()
+            .leaf_node_capabilities(capabilities())
+            .build(SUITE, &self.provider, &self.signer, self.credential.clone())
+            .unwrap()
+    }
+
     /// A new group with this member alone, under `group_id`, as a PublicMessage-sending creator.
     pub(crate) fn create_group(&self, group_id: &[u8]) -> MlsGroup {
-        let config = MlsGroupCreateConfig::builder()
+        self.create_group_with(group_id, &[])
+    }
+
+    /// As [`Self::create_group`], with `components` (id, value) in the GroupContext's app data dictionary.
+    pub(crate) fn create_group_with(
+        &self,
+        group_id: &[u8],
+        components: &[(u16, Vec<u8>)],
+    ) -> MlsGroup {
+        let mut builder = MlsGroupCreateConfig::builder()
             .ciphersuite(SUITE)
             .wire_format_policy(PURE_PLAINTEXT_WIRE_FORMAT_POLICY)
-            .build();
+            .capabilities(capabilities());
+        if !components.is_empty() {
+            let mut dictionary = AppDataDictionary::new();
+            for (id, value) in components {
+                let _ = dictionary.insert(*id, value.clone());
+            }
+            builder = builder.with_group_context_extensions(
+                Extensions::single(Extension::AppDataDictionary(
+                    AppDataDictionaryExtension::new(dictionary),
+                ))
+                .unwrap(),
+            );
+        }
+        let config = builder.build();
         MlsGroup::new_with_group_id(
             &self.provider,
             &self.signer,
@@ -71,6 +102,45 @@ impl Member {
         )
         .unwrap()
     }
+}
+
+/// The capabilities every fixture leaf advertises: the suite, the app data dictionary, AppDataUpdate, basic credentials.
+fn capabilities() -> Capabilities {
+    Capabilities::new(
+        None,
+        Some(&[SUITE]),
+        Some(&[ExtensionType::AppDataDictionary]),
+        Some(&[ProposalType::AppDataUpdate]),
+        Some(&[CredentialType::Basic]),
+    )
+}
+
+/// `by` adds `joiner` to `group` and merges; `joiner` processes the Welcome and has its own copy of the group.
+pub(crate) fn add_and_join(group: &mut MlsGroup, by: &Member, joiner: &Member) -> MlsGroup {
+    let key_package = joiner.key_package_bundle();
+    let (_commit, welcome, _group_info) = group
+        .add_members(
+            &by.provider,
+            &by.signer,
+            &[key_package.key_package().clone()],
+        )
+        .unwrap();
+    group.merge_pending_commit(&by.provider).unwrap();
+    let welcome: MlsMessageIn = welcome.into();
+    let MlsMessageBodyIn::Welcome(welcome) = welcome.extract() else {
+        panic!("not a Welcome");
+    };
+    StagedWelcome::new_from_welcome(
+        &joiner.provider,
+        &MlsGroupJoinConfig::builder()
+            .wire_format_policy(PURE_PLAINTEXT_WIRE_FORMAT_POLICY)
+            .build(),
+        welcome,
+        Some(group.export_ratchet_tree().into()),
+    )
+    .unwrap()
+    .into_group(&joiner.provider)
+    .unwrap()
 }
 
 /// A Commit `by` makes in `group` adding `joiners`, merged on its side: the Commit as serialized MLSMessage bytes, and
@@ -93,6 +163,47 @@ pub(crate) fn add_commit(
             .tls_serialize_detached()
             .unwrap(),
     )
+}
+
+/// A Commit `by` makes in `group` carrying AppDataUpdates by value, each (component, the update, the component's value
+/// after it), as MLSMessage bytes. It is left pending on `by`'s side: the caller merges it once the hub accepts it, or
+/// clears it after a refusal.
+pub(crate) fn app_data_commit(
+    group: &mut MlsGroup,
+    by: &Member,
+    updates: &[(u16, Vec<u8>, Vec<u8>)],
+) -> Vec<u8> {
+    let proposals: Vec<Proposal> = updates
+        .iter()
+        .map(|(component, update, _)| {
+            Proposal::AppDataUpdate(Box::new(AppDataUpdateProposal::update(
+                *component,
+                update.clone(),
+            )))
+        })
+        .collect();
+    let mut stage = group
+        .commit_builder()
+        .add_proposals(proposals)
+        .load_psks(by.provider.storage())
+        .unwrap();
+    let mut updater = stage.app_data_dictionary_updater();
+    for (component, _, value) in updates {
+        updater.set(openmls::component::ComponentData::from_parts(
+            *component,
+            value.clone().into(),
+        ));
+    }
+    stage.with_app_data_dictionary_updates(updater.changes());
+    let (commit, _welcome, _group_info) = stage
+        .build(by.provider.rand(), by.provider.crypto(), &by.signer, |_| {
+            true
+        })
+        .unwrap()
+        .stage_commit(&by.provider)
+        .unwrap()
+        .into_contents();
+    commit.tls_serialize_detached().unwrap()
 }
 
 /// The group's current GroupInfo, signed by `by`, without the ratchet tree in it, as the bare `GroupInfo` a bundle's

@@ -11,6 +11,12 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   do not apply, and its held proposals are queued in the group. The hub records which provider seeded each room and
   logs every Commit the tree refuses. The operator's listener gains `untrackRoom`. mimi-hubd depends on openmls with
   `extensions-draft`.
+- For a tracked room, mimi-hubd authorizes each participant-list change for its proposer (room-policy-04 §8.1): the
+  committer for a change carried by value, the leaving member for a held leave. One's own leave needs `canRemoveSelf`;
+  any other change to one's own role is refused until `canChangeOwnRole` is built. A tracked room's policy and list are
+  taken from its GroupContext when it is seeded, a Commit adding a first `roles_list` is refused (room-policy PR #52),
+  and the operator's `roomPolicy`, `memberRole` and `addParticipant` answer 409 for it.
+- mimi-core: `Capability::RemoveSelf` (`canRemoveSelf`, `0x0006`) and `RoomPolicy::authorize_self_removal`.
 
 ## 0.1.0 - 2026-11-16
 

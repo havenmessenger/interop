@@ -96,6 +96,30 @@ async fn the_joint_vectors_get_their_answers_with_the_tree_tracked() {
             Some(setup_epoch),
             "{id}: seeded from the setup"
         );
+        // The room's policy and list are now the setup GroupContext's, so the role checks run on these vectors with the
+        // policy the joint setup publishes.
+        {
+            let hub = p.lock().unwrap();
+            assert_eq!(
+                hub.room_policy(room).unwrap(),
+                Some(policy.clone()),
+                "{id}: the policy is the GroupContext's"
+            );
+            let listed: Vec<String> = hub
+                .store
+                .list_participant_rows(room)
+                .unwrap()
+                .into_iter()
+                .map(|row| row.member_uri)
+                .collect();
+            let before: Vec<String> = vector["participants_before"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|user| mimi_core::uri::canonical(user.as_str().unwrap()))
+                .collect();
+            assert_eq!(listed, before, "{id}: the list is the GroupContext's");
+        }
         let mut accepted = 0;
         for earlier in vector["earlier"].as_array().unwrap() {
             let answer = update_answer(

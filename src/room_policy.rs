@@ -54,6 +54,8 @@ pub enum Capability {
     SendMessage,
     AddParticipant,
     RemoveParticipant,
+    /// `canRemoveSelf`: the holder may propose its own leaving (room-policy-04 §8.1.2); someone else commits it.
+    RemoveSelf,
     ChangeRole,
     Kick,
     Ban,
@@ -242,6 +244,30 @@ impl RoomPolicy {
         Ok(())
     }
 
+    /// room-policy-04 §8.1.2 `canRemoveSelf`: may a participant whose role is `actor_role_index` leave, from that role?
+    /// The role must hold the capability and its own `authorized_role_changes` must have an entry from its current role
+    /// whose targets include 0. `canRemoveParticipant` does not cover this: it excludes the holder itself.
+    pub fn authorize_self_removal(&self, actor_role_index: u32) -> Result<(), RoomPolicyError> {
+        let actor = self
+            .role(actor_role_index)
+            .ok_or(RoomPolicyError::ActorRoleUndefined(actor_role_index))?;
+        if !actor.has(Capability::RemoveSelf) {
+            return Err(RoomPolicyError::RoleChangeDenied(format!(
+                "role {actor_role_index} lacks RemoveSelf, so its holder cannot leave by proposal"
+            )));
+        }
+        let allowed = actor.authorized_role_changes.iter().any(|t| {
+            t.from_role_index == actor_role_index
+                && t.target_role_indexes.contains(&ROLE_NON_PARTICIPANT)
+        });
+        if !allowed {
+            return Err(RoomPolicyError::RoleChangeDenied(format!(
+                "role {actor_role_index} has no authorized_role_changes entry from itself to 0"
+            )));
+        }
+        Ok(())
+    }
+
     /// P3: membership-count constraints. fixed_membership rooms reject any growth; max_clients/max_users
     /// bound the group. `next_clients`/`next_users` are the counts AFTER the proposed change.
     pub fn check_membership_constraints(
@@ -287,6 +313,10 @@ pub fn validate_commit_component_exclusivity(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "room_policy_self_tests.rs"]
+mod self_tests;
 
 #[cfg(test)]
 mod tests {

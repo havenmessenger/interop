@@ -909,7 +909,11 @@ pub(crate) async fn set_room_policy(
     Query(q): Query<RoomQuery>,
     Json(policy): Json<mimi_core::room_policy::RoomPolicy>,
 ) -> Response {
-    match lock(&p).set_room_policy(&q.room, &policy, now_unix()) {
+    let provider = lock(&p);
+    if tracked(&provider, &q.room) {
+        return StatusCode::CONFLICT.into_response();
+    }
+    match provider.set_room_policy(&q.room, &policy, now_unix()) {
         Ok(()) => StatusCode::CREATED.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }
@@ -928,7 +932,11 @@ pub(crate) async fn set_member_role(
     State(p): State<SharedProvider>,
     Query(q): Query<MemberRoleQuery>,
 ) -> Response {
-    match lock(&p).set_member_role(&q.room, &q.member, q.role) {
+    let provider = lock(&p);
+    if tracked(&provider, &q.room) {
+        return StatusCode::CONFLICT.into_response();
+    }
+    match provider.set_member_role(&q.room, &q.member, q.role) {
         Ok(()) => StatusCode::CREATED.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }
@@ -942,6 +950,12 @@ pub(crate) struct ParticipantQuery {
 
 /// Register a participant in a room (R1; the routing/membership list). `?room=&member=`. Hub-of-record
 /// gated; the member's provider authority is derived from its URI. 201 on accept, 400 otherwise.
+/// A room whose ratchet tree the hub keeps: its policy and list are its group's, changed by a Commit, so the operator's
+/// routes that would set them answer 409 for it.
+fn tracked(provider: &crate::Provider, room: &str) -> bool {
+    provider.room_tracking(room).ok().flatten().is_some()
+}
+
 /// Drop a room's ratchet tree (`room_tree`), so its next bundle with a Full GroupInfo and a full tree seeds it again:
 /// the operator's way out of a room stuck on a tree the hub cannot apply Commits to. 204 when the room was tracked, 404
 /// when it was not, 400 for a room this hub does not host.
@@ -960,7 +974,11 @@ pub(crate) async fn add_participant(
     State(p): State<SharedProvider>,
     Query(q): Query<ParticipantQuery>,
 ) -> Response {
-    match lock(&p).add_participant(&q.room, &q.member, now_unix()) {
+    let provider = lock(&p);
+    if tracked(&provider, &q.room) {
+        return StatusCode::CONFLICT.into_response();
+    }
+    match provider.add_participant(&q.room, &q.member, now_unix()) {
         Ok(()) => StatusCode::CREATED.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }

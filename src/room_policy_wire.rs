@@ -6,7 +6,7 @@
 //! tests and vectors. Everything decoded from a peer is bounded before it is allocated, and a value that does not parse
 //! to its last byte, or breaks a rule of the draft that a decoder can check, is refused.
 //!
-//! The hub enforces six capabilities and a handful of base fields (see [`crate::room_policy`]); the rest of a role and of
+//! The hub enforces seven capabilities and a handful of base fields (see [`crate::room_policy`]); the rest of a role and of
 //! the base policy is read for its shape and not kept. The mapping is [`capability_from_wire`] and the fields that are
 //! kept are listed on [`decode_role_data`] and [`decode_base_room_policy`].
 
@@ -37,6 +37,7 @@ const MAX_COMPONENT_IDS: usize = 256;
 /// room-policy-04 §10.2 capability values for the capabilities the hub enforces.
 const CAN_ADD_PARTICIPANT: u16 = 0x0000;
 const CAN_REMOVE_PARTICIPANT: u16 = 0x0001;
+const CAN_REMOVE_SELF: u16 = 0x0006;
 const CAN_BAN: u16 = 0x000a;
 const CAN_KICK: u16 = 0x000c;
 const CAN_CHANGE_USER_ROLE: u16 = 0x000f;
@@ -44,11 +45,12 @@ const CAN_SEND_MESSAGE: u16 = 0x0100;
 
 /// The hub's capability for a registry value, or `None` for a capability it does not enforce. The registry has about
 /// eighty values (uploads, calls, room attributes and more) and is open to additions; those are for clients, and a role
-/// that lists them keeps its place in the list with only the six below carried.
+/// that lists them keeps its place in the list with only the seven below carried.
 pub const fn capability_from_wire(value: u16) -> Option<Capability> {
     match value {
         CAN_ADD_PARTICIPANT => Some(Capability::AddParticipant),
         CAN_REMOVE_PARTICIPANT => Some(Capability::RemoveParticipant),
+        CAN_REMOVE_SELF => Some(Capability::RemoveSelf),
         CAN_BAN => Some(Capability::Ban),
         CAN_KICK => Some(Capability::Kick),
         CAN_CHANGE_USER_ROLE => Some(Capability::ChangeRole),
@@ -62,6 +64,7 @@ pub const fn capability_to_wire(capability: Capability) -> u16 {
     match capability {
         Capability::AddParticipant => CAN_ADD_PARTICIPANT,
         Capability::RemoveParticipant => CAN_REMOVE_PARTICIPANT,
+        Capability::RemoveSelf => CAN_REMOVE_SELF,
         Capability::Ban => CAN_BAN,
         Capability::Kick => CAN_KICK,
         Capability::ChangeRole => CAN_CHANGE_USER_ROLE,

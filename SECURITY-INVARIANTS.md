@@ -21,6 +21,11 @@ and it must apply to the tree. One that does not is refused, changes nothing, an
 provider; the hub never drops a room's checks because a Commit failed them. Only the operator can drop a room's tree
 (`untrackRoom`, loopback only).
 
+Each participant-list change to a tracked room is authorized for the member who proposed it, by the role the room's
+list gives that member and the room's policy (`mimi-hubd/src/role_checks.rs`, room-policy-04 §8.1); a change it does
+not authorize is refused and changes nothing. The policy and list are the group's from its GroupContext, so the
+operator's routes cannot change them for a tracked room. What is not checked yet is in DIV-15.
+
 ## It makes no request to another hub
 
 The hub only answers requests. It has no HTTP client, opens no outbound connection, and reads the keys of peers that sign

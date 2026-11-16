@@ -32,8 +32,9 @@ ratchet tree it keeps (a tracked room), the hub first verifies the Commit agains
 openmls: the sender must be a member whose signature verifies, the Commit must be for the room's
 group and epoch, and it must apply to the tree; one that does not is refused and changes nothing.
 A room is tracked from the first accepted Commit whose bundle carries a Full GroupInfo and a full
-ratchet tree, after checks on who sent it (`../DIVERGENCES.md`, DIV-10); `untrackRoom` on the
-operator's listener drops a room's tree. An untracked room's Commit is read without verifying its
+ratchet tree, after checks on who sent it (`../DIVERGENCES.md`, DIV-10), and takes its policy
+and participant list from the group's GroupContext; each change to a tracked room is then authorized
+for the member who proposed it (DIV-15). `untrackRoom` on the operator's listener drops a room's tree. An untracked room's Commit is read without verifying its
 signature, as RFC 9420's delivery-service model allows.
 `success` means that change was applied. The hub does not store or relay the Commit; another epoch
 than the room's is `wrongEpoch`. A Commit mixing that proposal with a standard MLS proposal (Add/Remove/Update,
@@ -430,9 +431,10 @@ says whether the handle it was given is enrolled.
   group state; a tracked room's is verified against its ratchet tree. The hub does not store or
   relay the Commit.
 - **Who sets a room's policy.** `roomPolicy`, `memberRole` and `addParticipant` are the hub
-  operator's, on a loopback listener with no credential; a peer cannot reach them. A peer's
-  `update` is checked against the room's policy, but who made a role change is not (DIVERGENCES,
-  DIV-15).
+  operator's, on a loopback listener with no credential; a peer cannot reach them, and they answer
+  409 for a tracked room, whose policy and list are its group's. A peer's `update` is checked
+  against the room's policy; who made a change is checked for a tracked room, for its proposer
+  (DIVERGENCES, DIV-15).
 
 The directory endpoint discloses the ciphersuite and join-model restrictions programmatically, so
 a client can detect them without reading source.

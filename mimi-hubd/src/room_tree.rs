@@ -57,10 +57,27 @@ pub struct RoomTracking {
     pub seeded_by: String,
 }
 
+/// `roles_list`'s component id in a GroupContext's app data dictionary (room-policy-04).
+pub const ROLES_LIST_COMPONENT: u16 = 0x0025;
+/// `base_room_policy`'s component id.
+pub const BASE_ROOM_POLICY_COMPONENT: u16 = 0x0027;
+
 /// A Commit verified against a tracked room's group, ready to be merged once the hub has applied it to its own tables.
 pub struct StagedRoomCommit {
     group: PublicGroup,
     staged: StagedCommit,
+    /// The committer's user, by its credential.
+    pub(crate) sender: Option<String>,
+    /// Whether the group had a `roles_list` before this Commit.
+    pub(crate) had_roles_list: bool,
+}
+
+/// One component of a GroupContext's app data dictionary.
+fn app_data(context: &openmls::group::GroupContext, component: u16) -> Option<&[u8]> {
+    context
+        .extensions()
+        .app_data_dictionary()
+        .and_then(|extension| extension.dictionary().get(&component))
 }
 
 /// The user URI a member's credential names: a BasicCredential whose identity is the URI (the reading this hub takes;
@@ -83,6 +100,32 @@ fn member_uri(group: &PublicGroup, leaf: LeafNodeIndex) -> Option<String> {
     group
         .leaf(leaf)
         .and_then(|node| credential_uri(node.credential()))
+}
+
+/// A tracked room's proposals, verified against its tree and not queued yet.
+pub struct VerifiedProposals {
+    group: PublicGroup,
+    queued: Vec<openmls::prelude::QueuedProposal>,
+    /// Each proposal's sender's user, in the order given.
+    pub(crate) senders: Vec<Option<String>>,
+}
+
+impl VerifiedProposals {
+    /// Queue every proposal in the room's group.
+    pub(crate) fn queue(
+        self,
+        groups: &crate::group_store::GroupStore<'_>,
+    ) -> Result<(), UpdateRefusal> {
+        let Self {
+            mut group, queued, ..
+        } = self;
+        for proposal in queued {
+            group
+                .add_proposal(groups, proposal)
+                .map_err(|_| UpdateRefusal::Store)?;
+        }
+        Ok(())
+    }
 }
 
 impl Provider {
@@ -251,30 +294,61 @@ impl Provider {
                 ));
             }
         }
-        Ok(StagedRoomCommit { group, staged })
+        let had_roles_list = app_data(group.group_context(), ROLES_LIST_COMPONENT).is_some();
+        Ok(StagedRoomCommit {
+            group,
+            staged,
+            sender,
+            had_roles_list,
+        })
     }
 
     /// Verify a tracked room's proposals against its tree and queue them in its group for the Commit that will name them.
     /// All are verified before any is queued, so a refused one leaves the group as it was.
+    #[cfg(test)]
     pub(crate) fn queue_tracked_proposals(
         &self,
         room_uri: &str,
         tracking: &RoomTracking,
         messages: &[&[u8]],
     ) -> Result<(), UpdateRefusal> {
+        self.verify_tracked_proposals(room_uri, tracking, messages)?
+            .queue(&self.store.groups())
+    }
+
+    /// Verify a tracked room's proposals against its tree, without queueing them: each one's sender, in order, for the
+    /// caller to authorize before [`VerifiedProposals::queue`].
+    pub(crate) fn verify_tracked_proposals(
+        &self,
+        room_uri: &str,
+        tracking: &RoomTracking,
+        messages: &[&[u8]],
+    ) -> Result<VerifiedProposals, UpdateRefusal> {
         let crypto = OpenMlsRustCrypto::default();
-        let groups = self.store.groups();
-        let mut group = PublicGroup::load(&groups, &GroupId::from_slice(&tracking.group_id))
-            .map_err(|_| UpdateRefusal::Store)?
-            .ok_or(UpdateRefusal::Store)?;
+        let group = PublicGroup::load(
+            &self.store.groups(),
+            &GroupId::from_slice(&tracking.group_id),
+        )
+        .map_err(|_| UpdateRefusal::Store)?
+        .ok_or(UpdateRefusal::Store)?;
         let mut queued = Vec::with_capacity(messages.len());
+        let mut senders = Vec::with_capacity(messages.len());
         for message in messages {
             let processed = MlsMessageIn::tls_deserialize_exact(*message)
                 .ok()
                 .and_then(|message| message.try_into_protocol_message().ok())
                 .and_then(|message| group.process_message(crypto.crypto(), message).ok());
+            let sender = processed
+                .as_ref()
+                .and_then(|processed| match processed.sender() {
+                    Sender::Member(leaf) => member_uri(&group, *leaf),
+                    _ => None,
+                });
             match processed.map(|processed| processed.into_content()) {
-                Some(ProcessedMessageContent::ProposalMessage(proposal)) => queued.push(*proposal),
+                Some(ProcessedMessageContent::ProposalMessage(proposal)) => {
+                    queued.push(*proposal);
+                    senders.push(sender);
+                }
                 _ => {
                     eprintln!(
                         "[mimi-hubd] refused a proposal for {room_uri} (tracked, seeded by {}): it does not verify against the room's tree",
@@ -284,12 +358,11 @@ impl Provider {
                 }
             }
         }
-        for proposal in queued {
-            group
-                .add_proposal(&groups, proposal)
-                .map_err(|_| UpdateRefusal::Store)?;
-        }
-        Ok(())
+        Ok(VerifiedProposals {
+            group,
+            queued,
+            senders,
+        })
     }
 
     /// Merge a staged Commit into the room's group, once the hub has applied it to its own tables.
@@ -297,7 +370,9 @@ impl Provider {
         &self,
         staged: StagedRoomCommit,
     ) -> Result<(), UpdateRefusal> {
-        let StagedRoomCommit { mut group, staged } = staged;
+        let StagedRoomCommit {
+            mut group, staged, ..
+        } = staged;
         group
             .merge_commit(&self.store.groups(), staged)
             .map_err(|_| UpdateRefusal::Store)
@@ -374,6 +449,44 @@ impl Provider {
         if listed.iter().any(|row| !members.contains(&row.member_uri)) {
             return Err(Some("a participant the hub lists is not in its tree"));
         }
+        // The room's policy and list are its GroupContext's from here (room-policy PR #52: a roles_list is set when the
+        // group is created). Read and checked before anything is written.
+        let context = candidate.group_context();
+        let roles = app_data(context, ROLES_LIST_COMPONENT)
+            .map(mimi_core::room_policy_wire::decode_role_data)
+            .transpose()
+            .map_err(|_| Some("its GroupContext's roles_list does not decode"))?;
+        let base = app_data(context, BASE_ROOM_POLICY_COMPONENT)
+            .map(mimi_core::room_policy_wire::decode_base_room_policy)
+            .transpose()
+            .map_err(|_| Some("its GroupContext's base_room_policy does not decode"))?;
+        let policy = match roles {
+            Some(roles) => {
+                let policy = mimi_core::room_policy::RoomPolicy {
+                    base: base.unwrap_or_default(),
+                    roles,
+                };
+                policy
+                    .validate()
+                    .map_err(|_| Some("its GroupContext's room policy is not valid"))?;
+                Some(policy)
+            }
+            None => None,
+        };
+        let list = app_data(context, PARTICIPANT_LIST_COMPONENT)
+            .map(decode_participant_list_data)
+            .transpose()
+            .map_err(|_| Some("its GroupContext's participant list does not decode"))?;
+        if let Some(list) = &list {
+            if list.participants.iter().any(|pair| {
+                provider_of(&pair.user_uri).is_none()
+                    || !members.contains(&mimi_core::uri::canonical(&pair.user_uri))
+            }) {
+                return Err(Some(
+                    "a participant its GroupContext lists is not in its tree or names no provider",
+                ));
+            }
+        }
         let group_id = candidate.group_id().as_slice().to_vec();
         let crypto = OpenMlsRustCrypto::default();
         PublicGroup::from_external(
@@ -387,6 +500,32 @@ impl Provider {
         self.store
             .set_room_tree(room_uri, &group_id, &provider, commit_epoch + 1)
             .map_err(|_| Some("its tracking record could not be stored"))?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs());
+        match &policy {
+            Some(policy) => self
+                .set_room_policy(room_uri, policy, now)
+                .map_err(|_| Some("its room policy could not be stored"))?,
+            None => self
+                .store
+                .clear_room_policy(room_uri)
+                .map_err(|_| Some("its room policy could not be cleared"))?,
+        }
+        if let Some(list) = list {
+            let rows: Vec<crate::store::ParticipantRow> = list
+                .participants
+                .iter()
+                .map(|pair| crate::store::ParticipantRow {
+                    member_uri: mimi_core::uri::canonical(&pair.user_uri),
+                    authority: provider_of(&pair.user_uri).unwrap_or_default(), // checked above
+                    role_index: Some(pair.role_index),
+                })
+                .collect();
+            self.store
+                .replace_participants(room_uri, &rows, now)
+                .map_err(|_| Some("its participant list could not be stored"))?;
+        }
         eprintln!(
             "[mimi-hubd] {room_uri} is tracked from epoch {}, seeded by {provider}",
             commit_epoch + 1

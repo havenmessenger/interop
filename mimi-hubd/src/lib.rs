@@ -35,6 +35,7 @@ pub mod peer;
 pub mod policy;
 pub mod problem;
 pub mod provider_auth;
+pub mod role_checks;
 pub mod room_tree;
 pub mod signature;
 pub mod store;
@@ -183,6 +184,18 @@ pub struct Provider {
     /// What this hub accepts and answers where the drafts leave it to the deployment.
     policy: policy::HubPolicy,
     store: SqliteStore,
+}
+
+/// Whether a Commit's changes add a `roles_list` to a group that has none: refused for a tracked room (room-policy PR #52,
+/// still open: a `roles_list` is set when the group is created).
+pub(crate) fn adds_first_roles_list(
+    had_roles_list: bool,
+    updates: &[mimi_core::commit_wire::DecodedCustomProposal],
+) -> bool {
+    !had_roles_list
+        && updates
+            .iter()
+            .any(|change| change.proposal_type == MIMI_ROLES_LIST_PROPOSAL_TYPE)
 }
 
 impl Provider {
@@ -995,6 +1008,11 @@ impl Provider {
             )?),
             None => None,
         };
+        // A tracked room's changes carried by value are the committer's to make (room-policy-04 §8.1); a change named
+        // by reference was authorized for its own proposer when it was held.
+        if let Some(staged) = &tracked {
+            self.authorize_tracked_commit(room_uri, staged, &commit)?;
+        }
         self.include_held_proposals(room_uri, &mut commit, now_unix)?;
         let epoch = commit.epoch;
         self.apply_decoded_commit(room_uri, &commit, now_unix)?;
@@ -1009,6 +1027,51 @@ impl Provider {
             }
             (None, None) => Ok(()),
         }
+    }
+
+    /// For a tracked room, the checks on what a Commit carries by value that need its committer: a first `roles_list` is
+    /// refused (room-policy PR #52: a `roles_list` is set when the group is created), and each participant-list change is
+    /// authorized for the committer against the room's policy and list as they stand.
+    fn authorize_tracked_commit(
+        &self,
+        room_uri: &str,
+        staged: &crate::room_tree::StagedRoomCommit,
+        commit: &DecodedCommit,
+    ) -> Result<(), UpdateRefusal> {
+        if adds_first_roles_list(staged.had_roles_list, &commit.updates) {
+            return Err(UpdateRefusal::Policy(
+                "a roles_list is set when the room's group is created, not added by a later Commit",
+            ));
+        }
+        let changes: Vec<ParticipantListUpdate> = commit
+            .updates
+            .iter()
+            .filter(|change| change.proposal_type == MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE)
+            .map(|change| {
+                decode_participant_list_update(&change.payload).map(|mut update| {
+                    for added in &mut update.added_participants {
+                        added.user_uri = mimi_core::uri::canonical(&added.user_uri);
+                    }
+                    update
+                })
+            })
+            .collect::<Result<_, _>>()
+            .map_err(|_| UpdateRefusal::Invalid("the participant list update is malformed"))?;
+        if changes.is_empty() {
+            return Ok(());
+        }
+        let committer = staged.sender.clone().ok_or(UpdateRefusal::NotAllowed)?;
+        let policy = self
+            .room_policy(room_uri)
+            .map_err(|_| UpdateRefusal::Store)?;
+        let rows = self
+            .store
+            .list_participant_rows(room_uri)
+            .map_err(|_| UpdateRefusal::Store)?;
+        for change in &changes {
+            crate::role_checks::authorize_change(policy.as_ref(), &rows, &committer, change)?;
+        }
+        Ok(())
     }
 
     /// Read the proposals `commit` names by reference into it, from what this hub holds for the room at the Commit's
@@ -1186,8 +1249,8 @@ impl Provider {
     /// Every role a participant-list change puts a user in is one the room's policy defines (or 0, out of the room):
     /// the policy this Commit ends with when it carries one, else the stored one. A ban into role 1 is therefore refused
     /// while the list does not define role 1 (room-policy PR #51). A room with no policy has no roles to check against
-    /// and is not checked. Who made the change is not checked here: the Commit's sender is a leaf index, and this hub
-    /// keeps no ratchet tree to map it to a member (DIVERGENCES, DIV-15).
+    /// and is not checked. Who made the change is checked only for a room whose ratchet tree the hub keeps, where the
+    /// sender's leaf maps to a member ([`crate::role_checks`]); for any other room it is not (DIVERGENCES, DIV-15).
     fn check_roles_held(
         &self,
         room_uri: &str,
@@ -1380,6 +1443,7 @@ impl Provider {
         // removes learns what the room holds.
         let mut epoch = None;
         let mut change = None;
+        let mut change_at = 0;
         let mut oversized = false;
         let mut held = Vec::new();
         for message in messages {
@@ -1411,6 +1475,7 @@ impl Provider {
                         return Err(NOT_A_LEAVE);
                     }
                     change = Some(update);
+                    change_at = held.len();
                 }
             }
             held.push((proposal.reference, message.clone()));
@@ -1448,13 +1513,25 @@ impl Provider {
                 "a proposal is larger than a leave needs",
             ));
         }
-        // A tracked room's group holds them too, verified against its tree, so the Commit that names them stages.
+        // A tracked room's group holds them too, verified against its tree, so the Commit that names them stages; the
+        // change is authorized for its own proposer, the leaving member (room-policy-04 §8.1.2, canRemoveSelf).
         if let Some(tracking) = self
             .room_tracking(room_uri)
             .map_err(|_| UpdateRefusal::Store)?
         {
             let messages: Vec<&[u8]> = held.iter().map(|(_, message)| message.as_slice()).collect();
-            self.queue_tracked_proposals(room_uri, &tracking, &messages)?;
+            let verified = self.verify_tracked_proposals(room_uri, &tracking, &messages)?;
+            let proposer = verified
+                .senders
+                .get(change_at)
+                .cloned()
+                .flatten()
+                .ok_or(UpdateRefusal::NotAllowed)?;
+            let policy = self
+                .room_policy(room_uri)
+                .map_err(|_| UpdateRefusal::Store)?;
+            crate::role_checks::authorize_change(policy.as_ref(), &rows, &proposer, &change)?;
+            verified.queue(&self.store.groups())?;
         }
         self.store
             .hold_proposals(room_uri, epoch, &held, now_unix)

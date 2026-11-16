@@ -378,13 +378,32 @@ named `banned` is refused: room-policy-04 says the banned role "always has role_
 that it "does not have to exist", and this hub reads that as fixing the name of whatever role holds index 1.
 
 What the hub keeps of them: of a role, its index, its name, its `authorized_role_changes`, and the capabilities
-`canAddParticipant` (`0x0000`), `canRemoveParticipant` (`0x0001`), `canBan` (`0x000a`), `canKick` (`0x000c`),
-`canChangeUserRole` (`0x000f`) and `canSendMessage` (`0x0100`). What it enforces of them on a Commit is narrower:
-every role a participant-list change puts a user in must be one the room's policy defines (or 0, out of the room), so a
-ban into role 1 is refused while the list does not define role 1. **Who made a role change is not checked:** `canBan`,
-`canKick`, `canChangeUserRole`, `canAddParticipant`, `canRemoveParticipant` and the committer's
-`authorized_role_changes` are not enforced on a Commit yet. For an untracked room the Commit's sender is a leaf index the
-hub cannot map to a member; a tracked room's tree maps it, and the check that uses it is the next part to build. A room with no policy is not checked at all.
+`canAddParticipant` (`0x0000`), `canRemoveParticipant` (`0x0001`), `canRemoveSelf` (`0x0006`), `canBan` (`0x000a`),
+`canKick` (`0x000c`), `canChangeUserRole` (`0x000f`) and `canSendMessage` (`0x0100`). On every Commit, each role a
+participant-list change puts a user in must be one the room's policy defines (or 0, out of the room), so a ban into
+role 1 is refused while the list does not define role 1. A room with no policy is not checked at all.
+
+**Who made a change is checked for a tracked room only** (one whose ratchet tree the hub keeps, DIV-10). There the
+sender's leaf maps to a member, and room-policy-04 §8.1 authorizes each change for its proposer: the committer for a
+change the Commit carries by value, and the proposal's own sender for a change held by reference (a leave). The
+proposer must be listed, and its role is the one the room's list gives it, as the list and policy stand before the
+Commit. A change to another user needs the capability its transition needs (`canAddParticipant` from 0,
+`canRemoveParticipant` to 0, `canBan` to 1, `canChangeUserRole` otherwise) and an entry in the proposer's own
+`authorized_role_changes`. Those capabilities exclude the holder itself, so a proposer's own leaving needs
+`canRemoveSelf` and an entry from its role to 0. Any other change to the proposer's own role is `canChangeOwnRole`,
+which works through the Preauthorized users component this hub does not read yet: such a change is refused until that
+is built. Not checked yet: the participant-count constraints, a Remove with no participant-list change (`canKick`,
+`canRemoveOwnClient`), and `canAddOwnClient`. An untracked room's Commit sender is a leaf index the hub cannot map to
+a member, so for it none of this is checked.
+
+A tracked room's policy and list are its group's. When the room is seeded, the GroupContext's `roles_list`,
+`base_room_policy` and `participant_list` replace what the hub stored (a GroupContext with no `roles_list` leaves the
+room with no policy), and every participant it lists must be in the tree. Room-policy PR
+[#52](https://github.com/ietf-wg-mimi/mimi-room-policy/pull/52), still open, sets a `roles_list` when the MLS group is
+created: a Commit that adds a `roles_list` to a group that has none is invalid, and a room with no `roles_list` has no
+role-based restrictions. The hub follows it for tracked rooms and refuses such a Commit; an untracked room still takes
+its first role list by Commit, as below. The operator's `roomPolicy`, `memberRole` and `addParticipant` answer 409 for
+a tracked room.
 `canSendMessage` is enforced where the hub sees the sender, on `submitMessage`, by the sender's role (§8.3). The other capability values (uploads, calls, room attributes
 and the rest of the registry, which is open to additions) are read for their shape and not carried, so a
 role that lists them is accepted. The description and the four participant-count constraints are

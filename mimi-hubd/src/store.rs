@@ -756,6 +756,16 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Forget the room's policy: a room with none is not checked by role.
+    pub fn clear_room_policy(&self, room_uri: &str) -> anyhow::Result<()> {
+        let room_uri = mimi_core::uri::canonical(room_uri);
+        self.conn.execute(
+            "DELETE FROM room_policy WHERE room_uri = ?1",
+            params![room_uri.as_str()],
+        )?;
+        Ok(())
+    }
+
     /// The room's policy JSON, or None (default-permissive, no policy set).
     pub fn room_policy_json(&self, room_uri: &str) -> anyhow::Result<Option<String>> {
         let room_uri = mimi_core::uri::canonical(room_uri);
