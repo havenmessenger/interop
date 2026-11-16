@@ -9,7 +9,7 @@
 # does not apply across a separate crate).
 [package]
 name = "mimi-core"
-version = "0.0.2"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.96.0"
 description = "Pure MIMI/MLS provider logic + content codec (no networking, no FRB)"

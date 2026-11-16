@@ -4,48 +4,69 @@ This project uses 0.x semantic versions: a minor version changes the wire format
 anything else. Each release names the drafts it implements and the divergences from them that remain open; the reasons
 are in [DIVERGENCES.md](DIVERGENCES.md).
 
-## Unreleased
+## 0.1.0 - 2026-11-16
 
-- **API change (mimi-core):** each accept-gate (`mimi_gate_keypackage`, `mimi_gate_welcome`, `mimi_gate_welcome_bare`,
-  `mimi_gate_group_info`, `keypackage_ref`) takes the ciphersuites it accepts as a list, and so do the decoders that
-  gate what they carry (`decode_consent_entry`, `KeyMaterialResponse::decode`, `HandshakeBundle::decode`).
-  `default_mls_ciphersuites()` is every suite the crypto provider implements; a refusal names the accepted suites.
-  `HAVEN_MLS_CIPHERSUITE_U16` is gone; `MLS_128_DHKEMX25519_AES128GCM_SHA256_ED25519` names 0x0001.
+Implements draft-ietf-mimi-protocol-07, draft-ietf-mimi-content-10, draft-ietf-mimi-room-policy-04,
+draft-ietf-mls-extensions-10 and draft-atwood-mimi-provider-auth-00, as 0.0.2 does. The minor version is for the API
+change in mimi-core below.
+
+### API change (mimi-core)
+- Each accept-gate (`mimi_gate_keypackage`, `mimi_gate_welcome`, `mimi_gate_welcome_bare`, `mimi_gate_group_info`,
+  `keypackage_ref`) takes the ciphersuites it accepts as a list, and so do the decoders that gate what they carry
+  (`decode_consent_entry`, `KeyMaterialResponse::decode`, `HandshakeBundle::decode`). `default_mls_ciphersuites()` is
+  every suite the crypto provider implements; a refusal names the accepted suites. `HAVEN_MLS_CIPHERSUITE_U16` is gone;
+  `MLS_128_DHKEMX25519_AES128GCM_SHA256_ED25519` names 0x0001.
+
+### The deployment's settings
 - mimi-hubd reads a policy file named by `MIMI_POLICY` (`policy`): `mls_ciphersuites` (default: every implemented suite;
   the directory advertises exactly the list) and `identifier_discovery` (default `all`: every user the hub can answer
   for, one it has enrolled or holds an unexpired KeyPackage for; `enrolled` keeps it to enrolled users). A named file
   that cannot be read or is not a valid policy stops the start; the hub logs the policy it runs. A deployment that
-  wants the earlier behaviour sets `mls_ciphersuites = [0x0001]` and `identifier_discovery = "enrolled"`.
-- The directory's `unsupported` block no longer lists other ciphersuites, and says the GroupInfo join is not built yet.
-- DIVERGENCES lists only what is not built yet and where the drafts are open: DIV-1 (GroupInfo and external-commit join)
-  is not built yet, and a room's policy will decide when it is; DIV-2 is closed (a setting); DIV-4 is the single-query
-  limit. `0xF7A0` is described as a compatibility carrier to be removed once clients send an AppDataUpdate.
+  wants 0.0.2's behaviour sets `mls_ciphersuites = [0x0001]` and `identifier_discovery = "enrolled"`.
 - `roomPolicy`, `memberRole` and `addParticipant` are the operator's: they are served only on a loopback listener of
   their own, `MIMI_ADMIN_BIND_ADDR` (`admin_bind_addr`), with no client certificate, and the peer listener answers 404
   for them. The hub does not start if that address is not loopback. Unset, there is no such listener.
   `examples/seed_table.sh` sets up its room through it, on the hub's host.
+
+### Protocol
 - `notify` refuses an application message, a Commit or a proposal for a room hosted on another hub with 422 and the
   RFC 9457 problem `remote-room-not-delivered`, instead of answering 201 for a message it does not deliver. A Welcome
-  is still queued and answered 201.
-- A ban into role 1 is refused unless the room's role list defines role 1 (room-policy #51); a list that names role 1
-  without defining it is still valid.
+  is still queued and answered 201. `docs/problems.md` names the problem types mimi-hubd answers with.
 - A Commit's participant-list change is checked against the room's policy: every role it puts a user in must be one
-  the policy defines. Who made a role change is not checked yet (DIVERGENCES, DIV-15).
+  the policy defines. A ban into role 1 is refused unless the room's role list defines role 1 (room-policy #51); a list
+  that names role 1 without defining it is still valid. Who made a role change is not checked yet (DIV-15).
 - An update the room's policy refuses is answered `notAllowed` with the reason, no longer `invalidProposal` with an
   empty list: a role the policy does not define, a role list or base policy that does not validate, a base policy before
   any roles, or a role list beside a participant-list change. Malformed proposals stay `invalidProposal`. The recorded
   answer of vector `up-x6-base-room-policy-before-roles` is now `notAllowed`.
-- DIVERGENCES says that the base policy's membership limits (`fixed_membership` growth, `max_clients`, `max_users`) are
-  kept but not enforced on a Commit.
-- `docs/problems.md` names the problem types mimi-hubd answers with (RFC 9457), starting with
-  `remote-room-not-delivered`.
+- The hub reads and keeps `room_metadata` (`0x0023`, protocol-07 §10) instead of refusing it: a room's name,
+  descriptions, avatar, subject and mood are stored as the last accepted update sent them, within bounds.
+- The directory's `unsupported` block no longer lists other ciphersuites, and says the GroupInfo join is not built yet.
+
+### Operating the hub
 - Every answer from mimi-hubd carries `Server: mimi-hubd/<version>`.
 - Releases are signed: `SHA256SUMS` and a detached signature by the Haven Releases key on each release, signed tags,
   and the public key in `RELEASE-KEY.asc`. The README says how to verify one.
 
-- The hub reads and keeps `room_metadata` (`0x0023`, protocol-07 §10) instead of refusing it: a room's name,
-  descriptions, avatar, subject and mood are stored as the last accepted update sent them, within bounds. A room that
-  sets any of it requires every member to support the component, so its users can now be in such rooms.
+### Documentation
+- `SECURITY-INVARIANTS.md` states the hub's own security properties and the code that holds each.
+  `docs/mimi/CONFORMANCE.md` is this repository's own table, by draft section.
+- DIVERGENCES lists only what is not built yet and where the drafts are open. DIV-2 is closed (a setting). The base
+  policy's membership limits (`fixed_membership` growth, `max_clients`, `max_users`) are kept but not enforced on a
+  Commit (DIV-15). `0xF7A0` is described as a compatibility carrier to be removed once clients send an AppDataUpdate.
+
+### Tooling
+- A joint vector set from the IETF 127 MIMI table, recorded against mimid and this hub
+  (`tests/vectors/joint-ietf127-*.json`), with replay tests.
+
+### Open divergences
+DIV-1 (GroupInfo and external-commit join not built yet), DIV-3 (no assets or OHTTP), DIV-4 (identifierQuery answers a
+single Handle or Nick query), DIV-5 (no relay to other providers), DIV-6 (client identity not bound to the channel),
+DIV-8 (metadata-only abuse reports), DIV-9 (no franking), DIV-10 (no wire route for the operator's routes), DIV-11
+(update fields read as opaque), DIV-12 (a Partial GroupInfo payload carries a length prefix), DIV-13 (an exhausted
+client is answered partialSuccess), DIV-15 (two room-policy components are read; who made a role change is not checked),
+DIV-16 (any client CA may name any provider domain), DIV-17 (content-10 against content-09 peers). See DIVERGENCES.md
+for each.
 
 ## 0.0.2 - 2026-11-15
 

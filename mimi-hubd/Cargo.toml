@@ -3,7 +3,7 @@
 # room-policy logic. See README.md for the quickstart and the current wire-format status.
 [package]
 name = "mimi-hubd"
-version = "0.0.2"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.96.0"
 description = "Reference MIMI hub daemon: mTLS HTTP server + durable state over mimi-core"
