@@ -252,3 +252,51 @@ fn untracking_drops_the_tree() {
     assert!(!p.untrack_room(ROOM).unwrap());
     let _ = (&room.bob, room.tree.tls_serialize_detached());
 }
+
+/// A proposal held for a tracked room is verified against its tree and queued in its group, so the Commit that names it
+/// by reference stages; a proposal that does not verify is refused and nothing is queued. Revert check: queue nothing,
+/// and the referencing Commit does not stage.
+#[test]
+fn a_tracked_rooms_proposal_is_queued_so_the_commit_naming_it_stages() {
+    let p = hub();
+    let mut room = room(&p);
+    seed(&p, &room, &example_peer());
+    let tracking = p.room_tracking(ROOM).unwrap().unwrap();
+    let bob_leaf = room
+        .group
+        .members()
+        .find(|member| member.credential == room.bob.credential.credential)
+        .unwrap()
+        .index;
+    let (proposal, _reference) = room
+        .group
+        .propose_remove_member(&room.alice.provider, &room.alice.signer, bob_leaf)
+        .unwrap();
+    let proposal = proposal.tls_serialize_detached().unwrap();
+
+    let mut tampered = proposal.clone();
+    let middle = tampered.len() / 2;
+    tampered[middle] ^= 0x01;
+    assert!(matches!(
+        p.queue_tracked_proposals(ROOM, &tracking, &[&tampered]),
+        Err(UpdateRefusal::NotAllowed)
+    ));
+
+    p.queue_tracked_proposals(ROOM, &tracking, &[&proposal])
+        .unwrap();
+    let (commit, _welcome, _info) = room
+        .group
+        .commit_to_pending_proposals(&room.alice.provider, &room.alice.signer)
+        .unwrap();
+    let commit = commit.tls_serialize_detached().unwrap();
+    let staged = p.stage_tracked_commit(ROOM, &tracking, &commit, None);
+    assert!(
+        staged.is_ok(),
+        "PLANT-TRACKED-QUEUE: the Commit naming a queued proposal stages"
+    );
+    p.merge_tracked_commit(staged.ok().unwrap()).unwrap();
+    let group = PublicGroup::load(&p.store.groups(), &GroupId::from_slice(GROUP))
+        .unwrap()
+        .unwrap();
+    assert_eq!(group.members().count(), 1);
+}

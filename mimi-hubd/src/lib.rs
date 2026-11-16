@@ -1448,6 +1448,14 @@ impl Provider {
                 "a proposal is larger than a leave needs",
             ));
         }
+        // A tracked room's group holds them too, verified against its tree, so the Commit that names them stages.
+        if let Some(tracking) = self
+            .room_tracking(room_uri)
+            .map_err(|_| UpdateRefusal::Store)?
+        {
+            let messages: Vec<&[u8]> = held.iter().map(|(_, message)| message.as_slice()).collect();
+            self.queue_tracked_proposals(room_uri, &tracking, &messages)?;
+        }
         self.store
             .hold_proposals(room_uri, epoch, &held, now_unix)
             .map_err(|e| match store_refusal(&e) {

@@ -152,11 +152,30 @@ now wired end to end for both custom proposal types.
 `PublicMessage`-wrapped MLS Commit carries a participant-list change, a room-policy change, or one of each (and, since
 the rewrite below, any `Add` and `Remove` proposals beside them). `mimi_core::commit_wire::decode_commit_proposals` reads
 each change's type and payload and the Adds and Removes - independent of openmls's own (crate-private) `Commit` type,
-hand-coded the same way every other MIMI-specific structure in this codebase is - without verifying
-the Commit's signature or holding any group state, matching RFC 9420's own delivery-service trust
-model (the DS is not expected to do either; that is the receiving member's job). Commits on this
-hub's groups already travel as `PublicMessage`, so the proposal bytes are visible on the wire
-without needing that machinery in the first place.
+hand-coded the same way every other MIMI-specific structure in this codebase is. For a room whose ratchet tree the hub
+keeps (the tracked rooms, below) the Commit is also verified against the tree with openmls before anything changes; for
+an untracked room it is not, matching RFC 9420's own delivery-service trust model (the DS is not required to; that is
+the receiving member's job). Commits on this hub's groups travel as `PublicMessage`, so the proposal bytes are visible
+on the wire.
+
+- **Tracked rooms: the hub keeps the room's ratchet tree once a bundle gives it one.** A room is tracked from the first
+  accepted Commit whose bundle carries a Full GroupInfo and a full ratchet tree (ratchet-tree-options `full`). Protocol-07
+  §5.3 lets the client choose what the bundle carries (`full` or `partial` GroupInfo, and any tree representation) and
+  gives the hub no way to ask for these, so a room stays untracked, and behaves as an untracked room, until such a bundle
+  arrives. Seeding is trust on first use: a member that already holds the room's next epoch can seed a tree of its own
+  making. It is narrowed by what the hub checks first: the GroupInfo is for the epoch after the Commit, signed by a
+  member of the tree it comes with; that member's provider is the peer that sent the bundle; and every participant the
+  hub lists for the room is a member of the tree. The hub records the group's id and which provider seeded the room,
+  and logs it.
+- **A tracked room's Commit the tree cannot take is refused, not relayed.** Its sender must be a member whose signature
+  verifies, it must be for the room's group and epoch (`wrongEpoch` naming the room's otherwise), its proposals must
+  apply to the tree, and a Full GroupInfo beside it must describe the group after it. A refused Commit changes nothing
+  and is logged with the room and the sender's provider. Relaying it and dropping the room's tracking instead would let
+  one bad Commit switch the tree's checks off. The cost is that a tree the hub models wrong would stall the room; the
+  operator's `untrackRoom` (on the loopback listener) drops the tree, and the room's next full bundle seeds it again.
+  Proposals held for a member's leave are verified against the tree and queued in the group too, so the Commit that
+  names them stages. The membership tag of a `PublicMessage` is not checked: it needs the epoch's secret, which a
+  delivery service does not hold.
 
 - A `mimiParticipantList` proposal's payload is applied to this room's `room_participants`/
   `member_role` tables. Indices in the payload count the room's participants vector in the order
@@ -186,7 +205,7 @@ without needing that machinery in the first place.
   a leaf index. When the Commit has either, §7.5 is checked against what it says, against the list the room holds now:
   every user the change adds has an `Add` for one of its clients; no `Add` is for a user who is neither listed nor added
   by the change; and a change that removes users has a `Remove` beside it. Otherwise the Commit is `invalidProposal` and
-  nothing changes. Two limits stay: the hub holds no ratchet tree, so a `Remove` is a number and never a user (a `Remove`
+  nothing changes. Two limits stay: for an untracked room the hub holds no ratchet tree, so a `Remove` is a number and never a user (a `Remove`
   with no user removed from the list is read as one device leaving, and an `Add` for a listed user as a second device), and
   the credential-to-user binding is open, so for a `BasicCredential` the identity bytes are read as the user URI (an
   X.509 credential is refused). A Commit with the change alone is read as it always was, so a participant can be listed
@@ -203,8 +222,9 @@ without needing that machinery in the first place.
   `ProposalRef`s in `invalidProposals`; nothing changes. A held `Remove` joins the Commit's `Remove`s and the held change
   becomes one of its changes, and §7.5 is checked as above, so a committer's own participant-list change beside a held one
   is a second participant-list update and is refused.
-  - **Signatures are not verified, and what that costs is bounded by who may ask.** The hub holds no group state, so it
-    verifies neither a proposal's signature nor its membership tag, as for a Commit. A held proposal that the next
+  - **For an untracked room signatures are not verified, and what that costs is bounded by who may ask.** The hub holds
+    no group state for it, so it verifies neither a proposal's signature nor its membership tag, as for a Commit (a
+    tracked room's proposals are verified against its tree, above). A held proposal that the next
     Commit must include would otherwise let any peer have the hub require someone's removal from the participant list.
     So every user the change removes must be one whose provider the peer's mTLS certificate authenticates (no
     certificate, or another provider's user, is `notAllowed`): a provider can have the hub require the removal of its own
@@ -235,10 +255,10 @@ without needing that machinery in the first place.
   - **Open: the peer of a Commit is not bound.** `update` takes a Commit from any peer the transport trusts, whatever
     room it names, as before, so a peer can send a Commit for a room it has no participant in; the leave is bound to the
     removed users' provider, the Commit is not. Binding the peer to a provider of the room on every `update` is the fix.
-- **openmls and this path.** The hub reads a Commit with its own decoder and holds no group state, so none of the
-  group-processing fixes in other openmls revisions (external AppDataUpdate proposals, the order of AppDataUpdate before
-  GroupContextExtensions, an `app_data_dictionary` kept in place on update, a KeyPackage consumed only on a Welcome join) is
-  reached by `mimi-core` or `mimi-hubd`: they build and process MLS groups only in their tests.
+- **openmls and this path.** For a tracked room the hub processes each Commit with openmls's `PublicGroup` (with
+  `extensions-draft`, so AppDataUpdates apply to the GroupContext), at the revision this crate pins. Group-processing
+  fixes in later openmls revisions (external AppDataUpdate proposals, the order of AppDataUpdate before
+  GroupContextExtensions, an `app_data_dictionary` kept in place on update) reach the hub only when the pin moves.
 - **Framing.** The request body is the draft's `UpdateRequest { HandshakeBundle }` and the answer
   is an `UpdateRoomResponse` in a 200: `success` with the hub's acceptance time in milliseconds;
   `notAllowed` for a room this hub does not host, a bundle whose Welcome or GroupInfo is under
@@ -255,12 +275,11 @@ without needing that machinery in the first place.
   means they are held for the next Commit. The hub checks that the room URI is under its own
   domain, not that the room exists, and answers `invalidProposal` or `success` for a room it
   hosts, so a peer on the allowlist can learn a room's participant count from those answers.
-  `wrongEpoch` is answered only to a leave of another epoch than the one the hub learned from
-  the room's latest accepted Commit (above); a Commit is never answered `wrongEpoch`, because the
-  hub holds no group state. A leave past a bound is `notAllowed` saying which bound; it reaches
+  `wrongEpoch` is answered to a leave, or a Commit, of another epoch than the one the hub learned
+  from the room's latest accepted Commit (above). A leave past a bound is `notAllowed` saying which bound; it reaches
   that answer only from the provider of a participant it removes. A SQLite failure is a 500 with no body. The Welcome,
-  `GroupInfoOption` and `RatchetTreeOption` of a Commit bundle are read and suite-gated, and are
-  neither stored nor relayed: `success` means the participant-list or room-policy change was
+  `GroupInfoOption` and `RatchetTreeOption` of a Commit bundle are read and suite-gated; a Full GroupInfo and full tree
+  seed an untracked room, and a Full GroupInfo is checked against a tracked room's group. None of them is relayed: `success` means the participant-list or room-policy change was
   applied, not that the Commit was distributed (§5.3's "will be distributed"). A body that is only
   the Commit, without the bundle around it, is refused.
 - The four room-admin RPCs (`roomPolicy`/`memberRole`/`addParticipant`/`authorizeSender`) remain
@@ -364,8 +383,8 @@ What the hub keeps of them: of a role, its index, its name, its `authorized_role
 every role a participant-list change puts a user in must be one the room's policy defines (or 0, out of the room), so a
 ban into role 1 is refused while the list does not define role 1. **Who made a role change is not checked:** `canBan`,
 `canKick`, `canChangeUserRole`, `canAddParticipant`, `canRemoveParticipant` and the committer's
-`authorized_role_changes` are not enforced on a Commit, because the Commit's sender is a leaf index and this hub keeps
-no ratchet tree to map it to a member. They will be once it keeps one. A room with no policy is not checked at all.
+`authorized_role_changes` are not enforced on a Commit yet. For an untracked room the Commit's sender is a leaf index the
+hub cannot map to a member; a tracked room's tree maps it, and the check that uses it is the next part to build. A room with no policy is not checked at all.
 `canSendMessage` is enforced where the hub sees the sender, on `submitMessage`, by the sender's role (§8.3). The other capability values (uploads, calls, room attributes
 and the rest of the registry, which is open to additions) are read for their shape and not carried, so a
 role that lists them is accepted. The description and the four participant-count constraints are

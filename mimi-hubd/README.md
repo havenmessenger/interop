@@ -27,11 +27,16 @@ protocol-directory`) advertises all eight under `wireEndpoints`, with concrete p
 case: a Commit whose proposal list holds a single proposal changing the room. A participant-list
 change is read from an AppDataUpdate for component `0x0022` or from the private type `0xF7A0`, and a
 room-policy change from an AppDataUpdate for `roles_list` (`0x0025`) or `base_room_policy`
-(`0x0027`). The hub reads that proposal without verifying the Commit's signature or holding live
-MLS group state (RFC 9420's own delivery-service trust model does not expect a DS to do either) and
-applies it to the room's stored participant list or policy.
-`success` means that change was applied. The hub does not store or relay the Commit, and it never
-answers `wrongEpoch`. A Commit mixing that proposal with a standard MLS proposal (Add/Remove/Update,
+(`0x0027`), and applies it to the room's stored participant list or policy. For a room whose
+ratchet tree it keeps (a tracked room), the hub first verifies the Commit against the tree with
+openmls: the sender must be a member whose signature verifies, the Commit must be for the room's
+group and epoch, and it must apply to the tree; one that does not is refused and changes nothing.
+A room is tracked from the first accepted Commit whose bundle carries a Full GroupInfo and a full
+ratchet tree, after checks on who sent it (`../DIVERGENCES.md`, DIV-10); `untrackRoom` on the
+operator's listener drops a room's tree. An untracked room's Commit is read without verifying its
+signature, as RFC 9420's delivery-service model allows.
+`success` means that change was applied. The hub does not store or relay the Commit; another epoch
+than the room's is `wrongEpoch`. A Commit mixing that proposal with a standard MLS proposal (Add/Remove/Update,
 ...) in the same proposal list is refused - full general Commit processing is out of scope for this
 reference hub. `groupInfo` (§5.6) is not built yet (DIV-1): it is the external-commit join
 endpoint, and framing it without the accept-path behind it would wire-format half of a
@@ -283,7 +288,7 @@ the file - see [`debian/mimi-hubd.toml.example`](debian/mimi-hubd.toml.example) 
 | `MIMI_DB_PATH` | `db_path` | no | `/var/lib/mimi/provider.db` | SQLite file path for durable state. This binary-level default is unchanged by packaging - the shipped `.toml.example` template recommends `/var/lib/mimi-hubd/hub.db` instead (matching the systemd unit's `StateDirectory=`), but that is the template's choice, not a change to this daemon's own default. |
 | `MIMI_PUBLIC_BASE_URL` | `public_base_url` | no | `https://{MIMI_PROVIDER_DOMAIN}` | The `https://` URL the directory's endpoint URLs start at, for a hub behind a reverse proxy, on a port other than 443, or on a dedicated host. Identifiers keep using `MIMI_PROVIDER_DOMAIN`. One trailing `/` is dropped; a query, fragment or non-`https` URL is a hard error at startup. |
 | `MIMI_DIRECTORY_BIND_ADDR` | `directory_bind_addr` | no | none | A second listener, plain HTTP and with no client certificate, that answers `GET /.well-known/mimi-protocol-directory` and nothing else. It is meant to sit behind whatever terminates TLS for the public name. Unset means there is no such listener. |
-| `MIMI_ADMIN_BIND_ADDR` | `admin_bind_addr` | no | none | The operator's listener: plain HTTP with no client certificate, serving `roomPolicy`, `memberRole` and `addParticipant` and nothing else. It must be a loopback `ip:port` (127.0.0.0/8 or `::1`); any other address stops the hub at start. Unset means there is no such listener, and no request can change a room's policy, roles or participants except a peer's `update`. |
+| `MIMI_ADMIN_BIND_ADDR` | `admin_bind_addr` | no | none | The operator's listener: plain HTTP with no client certificate, serving `roomPolicy`, `memberRole`, `addParticipant` and `untrackRoom` and nothing else. It must be a loopback `ip:port` (127.0.0.0/8 or `::1`); any other address stops the hub at start. Unset means there is no such listener, and no request can change a room's policy, roles or participants except a peer's `update`. |
 | `MIMI_POLICY` | `policy` | no | none | A TOML file of the deployment's choices, below. Unset means the drafts' defaults. A named file the hub cannot read, or one that is not a valid policy, stops the start. |
 | `MIMI_PEER_KEYS` | `peer_keys` | no | none | Path of a JSON file of peers' DNS-published signing keys, `{"<keyid>._mimi.<domain>": "<base64 Ed25519 public key>"}`, an empty value for a revoked key. Re-read when it changes. Without it, no signature verifies and only a client certificate admits a peer. |
 | `MIMI_ACTIVITY_LOG` | `activity_log` | no | off | `1` prints one line per request on the peer-facing listener to stderr: `[mimi-activity] method=POST route=/mimi/pl/update/:room_id status=200`. The route is the template the request matched (`route=unmatched` when none did), so no path, query string, header, certificate or body appears in it. Any other value, or none, leaves it off. The directory-only listener is not logged. |
@@ -356,6 +361,7 @@ not MIMI routes; a peer changes a room's roster or policy through `update`.
 | POST | `/mimi/v1/roomPolicy?room=` | Set a room's RBAC policy. |
 | POST | `/mimi/v1/memberRole?room=&member=&role=` | Assign a member's role in a room. |
 | POST | `/mimi/v1/addParticipant?room=&member=` | Register a room participant. |
+| POST | `/mimi/v1/untrackRoom?room=` | Drop the room's ratchet tree; its next bundle with a Full GroupInfo and a full tree seeds it again. |
 
 ### How user and room URIs compare
 
@@ -420,9 +426,9 @@ says whether the handle it was given is enrolled.
 - **Assets / OHTTP (§5.10).** v1 is messaging-only.
 - **General `update` (§5.3) Commit processing.** Only a Commit whose proposal list holds exactly
   one participant-list or room-policy proposal is applied - a Commit mixing it with a standard MLS
-  proposal in the same list is refused. This hub does not hold live MLS group state or verify a
-  Commit's signature (matching RFC 9420's own delivery-service trust model), and it does not store
-  or relay the Commit.
+  proposal in the same list is refused. An untracked room's Commit is not verified against any
+  group state; a tracked room's is verified against its ratchet tree. The hub does not store or
+  relay the Commit.
 - **Who sets a room's policy.** `roomPolicy`, `memberRole` and `addParticipant` are the hub
   operator's, on a loopback listener with no credential; a peer cannot reach them. A peer's
   `update` is checked against the room's policy, but who made a role change is not (DIVERGENCES,

@@ -9,7 +9,17 @@ Application messages reach the hub as MLS `PrivateMessage`s and leave it unchang
 under a routing key (`mimi-hubd/src/store.rs`, the `messages` and `welcomes` tables) and bounds only their size and
 number. The hub is not a member of any group and holds no group secret. The only MLS content it reads is what MLS sends in
 the clear for a delivery service: a Commit's proposals in a `PublicMessage` (participant-list and room-policy changes,
-`src/commit_wire.rs`) and the outer fields of a handshake message. A Commit wrapped in a `PrivateMessage` is refused.
+`src/commit_wire.rs`) and the outer fields of a handshake message. A Commit wrapped in a `PrivateMessage` is refused. For
+a room whose ratchet tree it keeps, the hub holds that room's public group state (the tree and GroupContext, as
+openmls's `PublicGroup`; `mimi-hubd/src/room_tree.rs`, `group_store.rs`): public keys and hashes, no epoch secret.
+
+## A tracked room's Commits are verified against its tree
+
+Once a room's tree is seeded (DIV-10 says from what, and what the seed is trusted for), every Commit for it is verified
+before anything changes: its sender must be a member whose signature verifies, it must be for the room's group and epoch,
+and it must apply to the tree. One that does not is refused, changes nothing, and is logged with the room and the sender's
+provider; the hub never drops a room's checks because a Commit failed them. Only the operator can drop a room's tree
+(`untrackRoom`, loopback only).
 
 ## It makes no request to another hub
 

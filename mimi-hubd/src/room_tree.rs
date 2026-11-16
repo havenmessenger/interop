@@ -94,6 +94,7 @@ impl Provider {
     /// Stop keeping the room's tree: its group state and tracking record go, and its next bundle with a Full GroupInfo
     /// and a full tree seeds it again. The operator's way out of a room stuck on a tree the hub cannot apply Commits to.
     pub fn untrack_room(&self, room_uri: &str) -> anyhow::Result<bool> {
+        self.assert_hub_of_record(room_uri)?;
         let Some(tracking) = self.store.room_tree(room_uri)? else {
             return Ok(false);
         };
@@ -251,6 +252,44 @@ impl Provider {
             }
         }
         Ok(StagedRoomCommit { group, staged })
+    }
+
+    /// Verify a tracked room's proposals against its tree and queue them in its group for the Commit that will name them.
+    /// All are verified before any is queued, so a refused one leaves the group as it was.
+    pub(crate) fn queue_tracked_proposals(
+        &self,
+        room_uri: &str,
+        tracking: &RoomTracking,
+        messages: &[&[u8]],
+    ) -> Result<(), UpdateRefusal> {
+        let crypto = OpenMlsRustCrypto::default();
+        let groups = self.store.groups();
+        let mut group = PublicGroup::load(&groups, &GroupId::from_slice(&tracking.group_id))
+            .map_err(|_| UpdateRefusal::Store)?
+            .ok_or(UpdateRefusal::Store)?;
+        let mut queued = Vec::with_capacity(messages.len());
+        for message in messages {
+            let processed = MlsMessageIn::tls_deserialize_exact(*message)
+                .ok()
+                .and_then(|message| message.try_into_protocol_message().ok())
+                .and_then(|message| group.process_message(crypto.crypto(), message).ok());
+            match processed.map(|processed| processed.into_content()) {
+                Some(ProcessedMessageContent::ProposalMessage(proposal)) => queued.push(*proposal),
+                _ => {
+                    eprintln!(
+                        "[mimi-hubd] refused a proposal for {room_uri} (tracked, seeded by {}): it does not verify against the room's tree",
+                        tracking.seeded_by
+                    );
+                    return Err(UpdateRefusal::NotAllowed);
+                }
+            }
+        }
+        for proposal in queued {
+            group
+                .add_proposal(&groups, proposal)
+                .map_err(|_| UpdateRefusal::Store)?;
+        }
+        Ok(())
     }
 
     /// Merge a staged Commit into the room's group, once the hub has applied it to its own tables.

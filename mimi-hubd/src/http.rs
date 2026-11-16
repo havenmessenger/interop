@@ -942,6 +942,20 @@ pub(crate) struct ParticipantQuery {
 
 /// Register a participant in a room (R1; the routing/membership list). `?room=&member=`. Hub-of-record
 /// gated; the member's provider authority is derived from its URI. 201 on accept, 400 otherwise.
+/// Drop a room's ratchet tree (`room_tree`), so its next bundle with a Full GroupInfo and a full tree seeds it again:
+/// the operator's way out of a room stuck on a tree the hub cannot apply Commits to. 204 when the room was tracked, 404
+/// when it was not, 400 for a room this hub does not host.
+pub(crate) async fn untrack_room(
+    State(p): State<SharedProvider>,
+    Query(q): Query<RoomQuery>,
+) -> Response {
+    match lock(&p).untrack_room(&q.room) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
 pub(crate) async fn add_participant(
     State(p): State<SharedProvider>,
     Query(q): Query<ParticipantQuery>,
@@ -1008,6 +1022,9 @@ mod update_role_tests;
 #[cfg(test)]
 #[path = "http_update_tests.rs"]
 mod update_tests;
+#[cfg(test)]
+#[path = "http_update_tracked_tests.rs"]
+mod update_tracked_tests;
 
 #[cfg(test)]
 #[path = "http_room_policy_tests.rs"]

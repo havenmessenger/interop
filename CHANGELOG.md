@@ -4,6 +4,14 @@ This project uses 0.x semantic versions: a minor version changes the wire format
 anything else. Each release names the drafts it implements and the divergences from them that remain open; the reasons
 are in [DIVERGENCES.md](DIVERGENCES.md).
 
+## Unreleased
+
+- mimi-hubd keeps a room's ratchet tree once a Commit's bundle gives it one (a Full GroupInfo and a full ratchet tree),
+  after checking who sent it; a tracked room's Commits are verified against the tree with openmls and refused when they
+  do not apply, and its held proposals are queued in the group. The hub records which provider seeded each room and
+  logs every Commit the tree refuses. The operator's listener gains `untrackRoom`. mimi-hubd depends on openmls with
+  `extensions-draft`.
+
 ## 0.1.0 - 2026-11-16
 
 Implements draft-ietf-mimi-protocol-07, draft-ietf-mimi-content-10, draft-ietf-mimi-room-policy-04,

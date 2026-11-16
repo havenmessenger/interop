@@ -46,7 +46,7 @@ mechanism and a client calls it.
 | R1 | 5.3, 7.5 | Participant-list changes as an AppDataUpdate (`mimiParticipantList`) | Implemented | `src/commit_wire.rs`, `src/participant_list.rs`; also read from the `0xF7A0` compatibility carrier (DIV-15) |
 | R2 | 5.3, 7.5 | Removing an active user together with the MLS Remove | Client | The library's update codec; the client builds the Commit |
 | R3 | 5.3 | Hub refuses a removed participant's messages, Commits and proposals (except Remove and SelfRemove) | Implemented | `Provider::authorize_sender` on `submitMessage` |
-| W4 | 5.3 | `update` (HandshakeBundle) wire codec | Partly | One room-changing proposal per Commit, with or without Add and Remove (DIV-10); the Commit is not stored or relayed |
+| W4 | 5.3 | `update` (HandshakeBundle) wire codec | Partly | One room-changing proposal per Commit, with or without Add and Remove (DIV-10); a tracked room's Commit is verified against its ratchet tree; the Commit is not stored or relayed |
 | W11 | 5.3 | A room-policy change is an AppDataUpdate for a room-policy component | Implemented | `roles_list` and `base_room_policy` (DIV-15) |
 
 ## Messages and fan-out (protocol-07 §5.4, §5.5)
@@ -125,7 +125,7 @@ mechanism and a client calls it.
 | P1 | 3 | One role at a time; role 0 no-role, role 1 banned | Implemented | `src/room_policy.rs`; a ban into role 1 needs role 1 defined |
 | P2 | 3, 8.6 | A role-list change is not in the same Commit as a participant-list change | Implemented | `check_changes` |
 | P3 | 5 | Fixed membership, `max_clients`, `max_users` | Partly | Kept, not enforced on a Commit (DIV-15) |
-| P4 | 8.1 | Who may make a role change (`authorized_role_changes`, `canBan`, ...) | Not built yet | A Commit's sender is a leaf index and the hub keeps no ratchet tree (DIV-15) |
+| P4 | 8.1 | Who may make a role change (`authorized_role_changes`, `canBan`, ...) | Not built yet | A tracked room's tree maps the sender to a member; the check is next (DIV-15) |
 | P5 | 8.3 | Hub enforces `canSendMessage` | Implemented | `authorize_sender`, by the sender's role |
 | P6 | 9 | One stored policy is the authority at each check | Implemented | `room_policy` table |
 

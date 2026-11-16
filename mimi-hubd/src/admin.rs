@@ -8,6 +8,7 @@
 //!   POST /mimi/v1/roomPolicy?room=                  (P1-P6, set a room's RBAC policy)
 //!   POST /mimi/v1/memberRole?room=&member=&role=    (P1, assign a member's role)
 //!   POST /mimi/v1/addParticipant?room=&member=      (R1, register a room participant)
+//!   POST /mimi/v1/untrackRoom?room=                 (drop a room's ratchet tree; its next full bundle seeds it again)
 //!
 //! The listener is safe without credentials only while nothing a peer sends can make the hub connect to it. The hub
 //! makes no requests to other hubs; see DIVERGENCES.md for what an outbound request will have to refuse.
@@ -17,7 +18,7 @@ use std::net::SocketAddr;
 use axum::{routing::post, Router};
 
 use crate::http::{
-    add_participant, server_header, set_member_role, set_room_policy, SharedProvider,
+    add_participant, server_header, set_member_role, set_room_policy, untrack_room, SharedProvider,
 };
 
 /// The operator's routes and nothing else, for the loopback listener [`admin_bind_addr`] accepts.
@@ -26,6 +27,7 @@ pub fn build_admin_router(provider: SharedProvider) -> Router {
         .route("/mimi/v1/roomPolicy", post(set_room_policy))
         .route("/mimi/v1/memberRole", post(set_member_role))
         .route("/mimi/v1/addParticipant", post(add_participant))
+        .route("/mimi/v1/untrackRoom", post(untrack_room))
         .with_state(provider)
         .layer(axum::middleware::map_response(server_header))
 }

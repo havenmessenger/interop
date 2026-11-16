@@ -155,3 +155,38 @@ fn an_address_other_hosts_can_reach_is_refused() {
         );
     }
 }
+
+/// `untrackRoom` is the operator's: the peer router does not have it, and on the operator's listener it answers 404 for a
+/// room the hub does not track and 400 for one it does not host. Revert check: mount it on `build_router`, and a peer
+/// reaches it.
+#[tokio::test]
+async fn untrack_room_is_on_the_operator_listener_only() {
+    let shared = provider();
+    let uri = format!("/mimi/v1/untrackRoom?room={ROOM}");
+    // A room this hub does not host: the handler would answer 400, so a 404 here is the route not being there.
+    assert_eq!(
+        send(
+            build_router(shared.clone()),
+            Method::POST,
+            "/mimi/v1/untrackRoom?room=mimi://other.example/r/x",
+            None
+        )
+        .await,
+        StatusCode::NOT_FOUND,
+        "PLANT-ADMIN-UNTRACK: a peer reached untrackRoom"
+    );
+    assert_eq!(
+        send(build_admin_router(shared.clone()), Method::POST, &uri, None).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(
+            build_admin_router(shared),
+            Method::POST,
+            "/mimi/v1/untrackRoom?room=mimi://other.example/r/x",
+            None
+        )
+        .await,
+        StatusCode::BAD_REQUEST
+    );
+}
