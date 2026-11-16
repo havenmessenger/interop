@@ -26,7 +26,7 @@ async fn a_problem_is_answered_with_its_status_media_type_and_body() {
 #[test]
 fn every_problem_anchor_is_on_the_problems_page() {
     let page = include_str!("../../docs/problems.md");
-    for problem in [&NO_LOCAL_MEMBER] {
+    for problem in ALL {
         assert!(
             page.contains(&format!("## {}\n", problem.anchor)),
             "docs/problems.md has no heading for {}",

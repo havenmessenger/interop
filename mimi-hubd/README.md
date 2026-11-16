@@ -92,16 +92,17 @@ $ curl -s --cacert ca-cert.pem --cert client-cert.pem --key client-key.pem \
 {"type":"https://github.com/havenmessenger/interop/blob/main/docs/problems.md#no-local-member","title":"Not delivered: no member of the room here","status":404,"detail":"No user of this provider is a member of the room: no Welcome for it has named one."}
 HTTP_STATUS=404
 
-# The same body for a room hosted by another provider: this certificate is not that provider's.
+# The same body for a room on a hub this certificate is not: only a room's hub sends a notify for it.
 $ curl -s --cacert ca-cert.pem --cert client-cert.pem --key client-key.pem \
     -X POST --data-binary @notify.bin \
     https://localhost:8443/mimi/pl/notify/mimi%3A%2F%2Fother.example%2Fr%2Fdemo -w '\nHTTP_STATUS=%{http_code}\n'
+{"type":"https://github.com/havenmessenger/interop/blob/main/docs/problems.md#not-the-rooms-hub","title":"Not from the room's hub","status":403,"detail":"Only the hub that hosts a room sends a notify for it, and the request's provider is not that hub."}
 HTTP_STATUS=403
 
 $ curl -s --cacert ca-cert.pem --cert client-cert.pem --key client-key.pem \
     -X POST --data-binary @idq.bin \
     https://localhost:8443/mimi/pl/identifierQuery -o idq_resp.bin -w 'HTTP_STATUS=%{http_code}\n'
-HTTP_STATUS=404
+HTTP_STATUS=200
 $ xxd -p idq_resp.bin
 01000000
 ```

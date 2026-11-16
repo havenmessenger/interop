@@ -58,7 +58,7 @@ pub fn hub_signer_from_seed(seed: &[u8], domain: &str) -> anyhow::Result<HubSign
 fn answer(room: &str, code: GroupInfoCode) -> Response {
     match group_info_response(room.as_bytes(), code, None) {
         Ok(bytes) => (StatusCode::OK, bytes).into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(_) => crate::problem::INTERNAL_ERROR.response(),
     }
 }
 
@@ -74,11 +74,11 @@ pub async fn group_info_wire(
     let room = mimi_core::uri::canonical(&room_id);
     if provider.assert_hub_of_record(&room).is_err() {
         eprintln!("[mimi-hubd] groupInfo: 404 (not a room this hub hosts)");
-        return StatusCode::NOT_FOUND.into_response();
+        return crate::problem::ROOM_NOT_HOSTED.response();
     }
     let Ok(request) = GroupInfoRequest::decode(&body) else {
         eprintln!("[mimi-hubd] groupInfo: 400 (not a GroupInfoRequest)");
-        return StatusCode::BAD_REQUEST.into_response();
+        return crate::problem::MALFORMED_REQUEST.response();
     };
     let refuse = |why: &str| {
         eprintln!("[mimi-hubd] groupInfo: notAuthorized ({why})");

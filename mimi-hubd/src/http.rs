@@ -26,7 +26,9 @@
 //!   POST /mimi/pl/identifierQuery                   (§5.8, IdentifierResponse; DIV-4 no-oracle)
 //!   POST /mimi/pl/reportAbuse/:room_id              (§5.9, DIV-8 metadata-only - no AbusiveMessage)
 //!   POST /mimi/pl/update/:room_id                   (§4.3.2, DIV-10 - single custom proposal only)
-//! `groupInfo` (§5.6, DIV-1's external-commit join) is not built. Most wire-route path segments
+//!   POST /mimi/pl/groupInfo/:room_id                (§5.6, external-commit join; DIV-1)
+//! Every refusal (4xx or 5xx) carries an RFC 9457 problem body (`crate::problem`, `docs/problems.md`). Most wire-route
+//! path segments
 //! still play the same opaque routing-key role the JSON
 //! lane's query params already play (framing change, not a routing-model change); `submitMessage`
 //! is the one exception - its path segment is the room the message targets, sender-authorized
@@ -74,6 +76,7 @@ pub fn build_router(provider: SharedProvider) -> Router {
         .route("/mimi/v1/authorizeSender", post(authorize_sender)) // M2/R3/P5, may this member send?
         .merge(wire_router())
         .with_state(provider)
+        .layer(axum::middleware::map_response(crate::problem::fallback))
         .layer(axum::middleware::map_response(server_header))
 }
 
@@ -96,6 +99,7 @@ pub fn build_directory_router(provider: SharedProvider) -> Router {
     Router::new()
         .route("/.well-known/mimi-protocol-directory", get(directory))
         .with_state(provider)
+        .layer(axum::middleware::map_response(crate::problem::fallback))
         .layer(axum::middleware::map_response(server_header))
 }
 
@@ -144,7 +148,7 @@ async fn check_from_header(request: Request, next: Next) -> Response {
         let authenticated =
             matches!((named, peer), (Some(domain), Some(peer)) if peer.authenticates(&domain));
         if !authenticated {
-            return StatusCode::FORBIDDEN.into_response();
+            return crate::problem::NOT_AUTHENTICATED.response();
         }
     }
     next.run(request).await
@@ -155,8 +159,7 @@ async fn check_from_header(request: Request, next: Next) -> Response {
 pub const WIRE_MEDIA_TYPE: &str = "application/mimi-protocol";
 
 /// Labels a successful wire answer that carries a body. An answer with no body (a bare status) carries no type, and an
-/// error keeps the plain description its handler gave it, which is text for a person reading a log, not a protocol
-/// structure.
+/// error carries a problem body (`crate::problem`), which keeps its own type.
 async fn label_wire_body(mut response: Response) -> Response {
     use axum::body::HttpBody as _;
     let has_body = response.body().size_hint().exact() != Some(0);
@@ -190,8 +193,8 @@ async fn key_material(State(p): State<SharedProvider>, Query(q): Query<UserQuery
     let now = now_unix();
     match lock(&p).serve_key_material(&q.user, now) {
         Ok(Some(bytes)) => (StatusCode::OK, bytes).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Ok(None) => crate::problem::NOT_FOUND.response(),
+        Err(_) => crate::problem::INTERNAL_ERROR.response(),
     }
 }
 
@@ -225,7 +228,7 @@ async fn key_material_wire(
     };
     let req = match KeyMaterialRequest::decode(&body) {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(_) => return crate::problem::MALFORMED_REQUEST.response(),
     };
     log_key_material_identity_claim(&req.requesting_user.0, req.requester_credential_identity());
     let now = now_unix();
@@ -243,14 +246,14 @@ async fn key_material_wire(
             };
             return match answer.encode() {
                 Ok(bytes) => (StatusCode::OK, bytes).into_response(),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                Err(_) => crate::problem::INTERNAL_ERROR.response(),
             };
         }
         crate::key_material_proxy::KeyMaterialRoute::Unavailable => {
             eprintln!(
                 "[mimi-hubd] keyMaterial: 502 (another provider's user, and no outbound client)"
             );
-            return StatusCode::BAD_GATEWAY.into_response();
+            return crate::problem::UPSTREAM_FAILED.response();
         }
         crate::key_material_proxy::KeyMaterialRoute::Forward { domain, access } => {
             let forwarded = crate::key_material_proxy::forward_key_material(
@@ -282,7 +285,7 @@ async fn key_material_wire(
                     eprintln!(
                         "[mimi-hubd] keyMaterial: 502, forwarding to {domain} failed ({why})"
                     );
-                    StatusCode::BAD_GATEWAY.into_response()
+                    crate::problem::UPSTREAM_FAILED.response()
                 }
             };
         }
@@ -330,7 +333,7 @@ async fn key_material_wire(
             }
         }
         Err(_) => {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return crate::problem::INTERNAL_ERROR.response();
         }
     };
     // The answer only: which user was asked for is a peer's choice and stays out of the line.
@@ -349,7 +352,7 @@ async fn key_material_wire(
     );
     match outcome.encode() {
         Ok(bytes) => (StatusCode::OK, bytes).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(_) => crate::problem::INTERNAL_ERROR.response(),
     }
 }
 
@@ -404,7 +407,7 @@ async fn ingest_keypackage(
         Some(user) => {
             if !g.may_publish_for(&user, peer) {
                 eprintln!("[mimi-hubd] keyMaterial/ingest: refused (another provider's user, not that provider's certificate)");
-                return StatusCode::FORBIDDEN.into_response();
+                return crate::problem::NOT_PERMITTED.response();
             }
             g.publish_key_package(&user, &body, now_unix())
         }
@@ -412,7 +415,7 @@ async fn ingest_keypackage(
     };
     match r {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(_) => crate::problem::MATERIAL_NOT_ACCEPTED.response(),
     }
 }
 
@@ -440,7 +443,7 @@ async fn ingest_welcome(
     );
     match r {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(_) => crate::problem::MATERIAL_NOT_ACCEPTED.response(),
     }
 }
 
@@ -448,8 +451,8 @@ async fn ingest_welcome(
 async fn fetch_welcome(State(p): State<SharedProvider>, Query(q): Query<UserQuery>) -> Response {
     match lock(&p).fetch_welcome(&q.user) {
         Ok(Some(bytes)) => (StatusCode::OK, bytes).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Ok(None) => crate::problem::NOT_FOUND.response(),
+        Err(_) => crate::problem::INTERNAL_ERROR.response(),
     }
 }
 
@@ -462,18 +465,18 @@ async fn submit_message(
     body: Bytes,
 ) -> Response {
     let Some(rcpt) = k.recipient else {
-        return (StatusCode::BAD_REQUEST, "missing ?recipient=").into_response();
+        return crate::problem::MALFORMED_REQUEST.response();
     };
     match lock(&p).submit_message(&rcpt, &body, now_unix()) {
         Ok(()) => StatusCode::CREATED.into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(_) => crate::problem::MESSAGE_NOT_QUEUED.response(),
     }
 }
 
 /// §5.4 wire twin of [`submit_message`]: TLS-PL `SubmitMessageRequest` in, TLS-PL
 /// `SubmitMessageResponse` out. The `appMessage` bytes are stored as opaque as the JSON lane's raw
 /// body (`Provider::submit_message` never inspects them); this handler only unwraps the
-/// spec envelope to reach the same bytes. An undecodable request gets a plain 400 (there is no
+/// spec envelope to reach the same bytes. An undecodable request gets a 400 `malformed-request` problem (there is no
 /// valid Protocol/statusCode to answer in-band with); once decoded, the outcome always travels in
 /// a 200 body per the draft's own response-in-body shape for this endpoint (unlike consent, which
 /// signals outcome via the bare HTTP status line).
@@ -495,7 +498,7 @@ async fn submit_message_wire(
 ) -> Response {
     let req = match SubmitMessageRequest::decode(&body) {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(_) => return crate::problem::MALFORMED_REQUEST.response(),
     };
     let sending_uri = &req.sending_uri.0;
     let g = lock(&p);
@@ -523,8 +526,8 @@ async fn submit_message_wire(
 async fn fetch_message(State(p): State<SharedProvider>, Query(q): Query<UserQuery>) -> Response {
     match lock(&p).fetch_message(&q.user) {
         Ok(Some(bytes)) => (StatusCode::OK, bytes).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Ok(None) => crate::problem::NOT_FOUND.response(),
+        Err(_) => crate::problem::INTERNAL_ERROR.response(),
     }
 }
 
@@ -539,13 +542,13 @@ async fn notify(
     Query(q): Query<NotifyQuery>,
     peer: Option<Extension<PeerCert>>,
     body: Bytes,
-) -> StatusCode {
+) -> Response {
     let Some(room) = q.room else {
-        return StatusCode::BAD_REQUEST;
+        return crate::problem::MALFORMED_REQUEST.response();
     };
     match verify_notify_source(&room, peer.as_ref()) {
         Ok(source) => accept_notify(&p, &source, &body),
-        Err(status) => status,
+        Err(problem) => problem.response(),
     }
 }
 
@@ -559,19 +562,21 @@ struct NotifyQuery {
 fn verify_notify_source(
     room_uri: &str,
     peer: Option<&Extension<PeerCert>>,
-) -> Result<VerifiedNotifySource, StatusCode> {
+) -> Result<VerifiedNotifySource, &'static crate::problem::ProblemType> {
     let identity = peer.and_then(|Extension(PeerCert(identity))| identity.as_ref());
     VerifiedNotifySource::verify(room_uri, identity).map_err(|refusal| match refusal {
-        NotifyRefusal::NotARoom => StatusCode::BAD_REQUEST,
-        NotifyRefusal::NotFromTheHub => StatusCode::FORBIDDEN,
+        NotifyRefusal::NotARoom => &crate::problem::MALFORMED_REQUEST,
+        NotifyRefusal::NotFromTheHub => &crate::problem::NOT_THE_ROOMS_HUB,
     })
 }
 
 /// Record a notify body whose source has been verified.
-fn accept_notify(p: &SharedProvider, source: &VerifiedNotifySource, body: &[u8]) -> StatusCode {
+fn accept_notify(p: &SharedProvider, source: &VerifiedNotifySource, body: &[u8]) -> Response {
     match lock(p).submit_notify(source, body, now_unix()) {
-        Ok(NotifyOutcome::Process | NotifyOutcome::DuplicateIgnored) => StatusCode::CREATED,
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        Ok(NotifyOutcome::Process | NotifyOutcome::DuplicateIgnored) => {
+            StatusCode::CREATED.into_response()
+        }
+        Err(_) => crate::problem::INTERNAL_ERROR.response(),
     }
 }
 
@@ -595,16 +600,16 @@ async fn notify_wire(
 ) -> Response {
     let source = match verify_notify_source(&room_id, peer.as_ref()) {
         Ok(source) => source,
-        Err(status) => {
+        Err(problem) => {
             eprintln!(
                 "[mimi-hubd] notify: {}",
-                if status == StatusCode::FORBIDDEN {
+                if problem.status == StatusCode::FORBIDDEN {
                     "refused (the peer's certificate is not the room's hub)"
                 } else {
                     "refused (the path is not a room URI)"
                 }
             );
-            return status.into_response();
+            return problem.response();
         }
     };
     let fanout = match mimi_core::protocol_wire::FanoutMessage::decode(&body) {
@@ -612,7 +617,7 @@ async fn notify_wire(
         Err(error) => {
             // The decoder's own words: a field of the message and a codec value, never a URI or a user.
             eprintln!("[mimi-hubd] notify: refused (not a FanoutMessage: {error})");
-            return StatusCode::BAD_REQUEST.into_response();
+            return crate::problem::MALFORMED_REQUEST.response();
         }
     };
     let outcome = lock(&p).deliver_followed(&source, &room_id, &body, &fanout, now_unix());
@@ -629,7 +634,7 @@ async fn notify_wire(
             eprintln!("[mimi-hubd] notify: 404 (no member of the room here)");
             crate::problem::NO_LOCAL_MEMBER.response()
         }
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(_) => crate::problem::INTERNAL_ERROR.response(),
     }
 }
 
@@ -640,15 +645,15 @@ struct IdentifierQueryReq {
 
 /// identifierQuery (DIV-4): 200 for opt-in enrollees, 404 otherwise. CRITICAL: the 404 for a
 /// non-enrolled-but-real user MUST be byte-identical to the 404 for a non-existent user, so we
-/// return a bare StatusCode with no distinguishing body either way. A store error also maps to 404
+/// return the one `not-found` problem body either way, the same bytes as any other 404. A store error also maps to 404
 /// (fail-closed: never reveal more than "not found").
 async fn identifier_query(
     State(p): State<SharedProvider>,
     Json(req): Json<IdentifierQueryReq>,
-) -> StatusCode {
+) -> Response {
     match lock(&p).identifier_query(&req.username, now_unix()) {
-        Ok(IdentifierQueryResult::Found) => StatusCode::OK,
-        Ok(IdentifierQueryResult::NotFound) | Err(_) => StatusCode::NOT_FOUND,
+        Ok(IdentifierQueryResult::Found) => StatusCode::OK.into_response(),
+        Ok(IdentifierQueryResult::NotFound) | Err(_) => crate::problem::NOT_FOUND.response(),
     }
 }
 
@@ -713,7 +718,7 @@ fn identifier_answer(found: Option<String>) -> Response {
             bytes,
         )
             .into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(_) => crate::problem::INTERNAL_ERROR.response(),
     }
 }
 
@@ -727,13 +732,13 @@ async fn report_abuse_wire(
     State(p): State<SharedProvider>,
     Path(room_id): Path<String>,
     body: Bytes,
-) -> StatusCode {
+) -> Response {
     let Ok(report) = AbuseReport::decode(&body) else {
-        return StatusCode::BAD_REQUEST;
+        return crate::problem::MALFORMED_REQUEST.response();
     };
     match lock(&p).process_report_abuse(&room_id, &report, now_unix()) {
-        Ok(()) => StatusCode::CREATED,
-        Err(_) => StatusCode::BAD_REQUEST,
+        Ok(()) => StatusCode::CREATED.into_response(),
+        Err(_) => crate::problem::MALFORMED_REQUEST.response(),
     }
 }
 
@@ -749,8 +754,8 @@ async fn report_abuse_wire(
 /// §3.5): they are held for the next Commit, which must include them by reference, and the peer's certificate bounds
 /// what they may remove (see `Provider::hold_leave_proposals`). `wrongEpoch` is answered to a Commit or proposals of
 /// another epoch than the one the hub learned from the room's latest accepted Commit, so a replayed Commit changes
-/// nothing; a room the hub has seen no Commit for takes the first at its own epoch. A store failure is a 500 with no
-/// body.
+/// nothing; a room the hub has seen no Commit for takes the first at its own epoch. A store failure is a 500 `internal-error`
+/// problem.
 async fn update_wire(
     State(p): State<SharedProvider>,
     Path(room_id): Path<String>,
@@ -791,7 +796,7 @@ async fn update_wire(
             }
         }
         Err(crate::UpdateRefusal::Store) => {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return crate::problem::INTERNAL_ERROR.response();
         }
     };
     log_update_answer(&answer, || {
@@ -799,7 +804,7 @@ async fn update_wire(
     });
     match answer.encode() {
         Ok(bytes) => (StatusCode::OK, bytes).into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(_) => crate::problem::INTERNAL_ERROR.response(),
     }
 }
 
@@ -891,12 +896,12 @@ async fn request_consent_wire(
     Path(_target_domain): Path<String>,
     peer: Option<Extension<PeerCert>>,
     body: Bytes,
-) -> StatusCode {
+) -> Response {
     if !operation_is_one_of(
         &body,
         &[ConsentOperation::Request, ConsentOperation::Cancel],
     ) {
-        return StatusCode::UNPROCESSABLE_ENTITY;
+        return crate::problem::WRONG_OPERATION.response();
     }
     let peer = peer
         .as_ref()
@@ -907,7 +912,7 @@ async fn request_consent_wire(
     {
         let _ = provider.process_request_consent(&entry, peer, now_unix());
     }
-    StatusCode::ACCEPTED
+    StatusCode::ACCEPTED.into_response()
 }
 
 /// §5.7 C2 wire twin of [`update_consent`]. Same shape and privacy rule as
@@ -917,9 +922,9 @@ async fn update_consent_wire(
     State(p): State<SharedProvider>,
     Path(_requester_domain): Path<String>,
     body: Bytes,
-) -> StatusCode {
+) -> Response {
     if !operation_is_one_of(&body, &[ConsentOperation::Grant, ConsentOperation::Revoke]) {
-        return StatusCode::UNPROCESSABLE_ENTITY;
+        return crate::problem::WRONG_OPERATION.response();
     }
     let provider = lock(&p);
     if let Ok(entry) =
@@ -927,7 +932,7 @@ async fn update_consent_wire(
     {
         let _ = provider.process_update_consent(&entry, now_unix());
     }
-    StatusCode::ACCEPTED
+    StatusCode::ACCEPTED.into_response()
 }
 
 /// False only when the entry's first byte, its `consentOperation`, is present and not one of `allowed`. An empty body
@@ -956,11 +961,11 @@ pub(crate) async fn set_room_policy(
 ) -> Response {
     let provider = lock(&p);
     if tracked(&provider, &q.room) {
-        return StatusCode::CONFLICT.into_response();
+        return crate::problem::ROOM_IS_TRACKED.response();
     }
     match provider.set_room_policy(&q.room, &policy, now_unix()) {
         Ok(()) => StatusCode::CREATED.into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(_) => crate::problem::MALFORMED_REQUEST.response(),
     }
 }
 
@@ -979,11 +984,11 @@ pub(crate) async fn set_member_role(
 ) -> Response {
     let provider = lock(&p);
     if tracked(&provider, &q.room) {
-        return StatusCode::CONFLICT.into_response();
+        return crate::problem::ROOM_IS_TRACKED.response();
     }
     match provider.set_member_role(&q.room, &q.member, q.role) {
         Ok(()) => StatusCode::CREATED.into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(_) => crate::problem::MALFORMED_REQUEST.response(),
     }
 }
 
@@ -1010,8 +1015,8 @@ pub(crate) async fn untrack_room(
 ) -> Response {
     match lock(&p).untrack_room(&q.room) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Ok(false) => crate::problem::NOT_FOUND.response(),
+        Err(_) => crate::problem::MALFORMED_REQUEST.response(),
     }
 }
 
@@ -1021,11 +1026,11 @@ pub(crate) async fn add_participant(
 ) -> Response {
     let provider = lock(&p);
     if tracked(&provider, &q.room) {
-        return StatusCode::CONFLICT.into_response();
+        return crate::problem::ROOM_IS_TRACKED.response();
     }
     match provider.add_participant(&q.room, &q.member, now_unix()) {
         Ok(()) => StatusCode::CREATED.into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(_) => crate::problem::MALFORMED_REQUEST.response(),
     }
 }
 
@@ -1036,7 +1041,7 @@ struct SenderQuery {
 }
 
 /// Authorize a message sender (M2 active-participant + R3 removed-block + P5 canSendMessage when a policy
-/// is set). `?room=&sender=`. 200 = may send, 403 = blocked (with the reason), 400 on a bad room. This is
+/// is set). `?room=&sender=`. 200 = may send, 403 = blocked (`sender-not-allowed`), 400 on a bad room. This is
 /// the live hub gate a client calls to check policy enforcement before sending.
 async fn authorize_sender(
     State(p): State<SharedProvider>,
@@ -1048,9 +1053,9 @@ async fn authorize_sender(
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("not the hub-of-record") || msg.contains("not a room") {
-                (StatusCode::BAD_REQUEST, msg).into_response()
+                crate::problem::MALFORMED_REQUEST.response()
             } else {
-                (StatusCode::FORBIDDEN, msg).into_response()
+                crate::problem::SENDER_NOT_ALLOWED.response()
             }
         }
     }
@@ -1112,6 +1117,9 @@ mod notify_tests;
 #[cfg(test)]
 #[path = "http_notify_welcome_tests.rs"]
 mod notify_welcome_tests;
+#[cfg(test)]
+#[path = "http_problem_tests.rs"]
+mod problem_tests;
 #[cfg(test)]
 #[path = "http_publish_tests.rs"]
 mod publish_tests;

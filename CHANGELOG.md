@@ -6,6 +6,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- Every refusal mimi-hubd answers with an HTTP error status carries an RFC 9457 problem body
+  (`application/problem+json`) on each of its listeners: a type named by its anchor in `docs/problems.md` for each
+  condition a peer can act on, and `http-error` for any other status. Error bodies were empty or text written for a
+  log; the text is gone from the answers, and no problem body names a user, a client or a room.
 - mimi-hubd keeps a room's ratchet tree once a Commit's bundle gives it one (a Full GroupInfo and a full ratchet tree),
   after checking who sent it; a tracked room's Commits are verified against the tree with openmls and refused when they
   do not apply, and its held proposals are queued in the group. The hub records which provider seeded each room and

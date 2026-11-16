@@ -16,9 +16,8 @@ use std::time::SystemTime;
 
 use axum::body::Body;
 use axum::extract::Request;
-use axum::http::StatusCode;
 use axum::middleware::Next;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::Router;
 
 use crate::peer::{PeerCert, PeerIdentity};
@@ -60,7 +59,9 @@ pub fn with_provider_auth_settings(router: Router, auth: Arc<ProviderAuth>) -> R
                 async move { gate(&auth, request, next).await }
             },
         ))
-        // A refusal by the gate itself is answered from outside the router, so it gets the Server header here too.
+        // A refusal by the gate itself is answered from outside the router, so it gets the Server header and a problem
+        // body here too.
+        .layer(axum::middleware::map_response(crate::problem::fallback))
         .layer(axum::middleware::map_response(crate::http::server_header))
 }
 
@@ -90,13 +91,13 @@ async fn gate(auth: &ProviderAuth, request: Request, next: Next) -> Response {
                 request.method(),
                 request.uri().path()
             );
-            return StatusCode::FORBIDDEN.into_response();
+            return crate::problem::NOT_AUTHENTICATED.response();
         }
         return next.run(request).await;
     }
     let (mut parts, body) = request.into_parts();
     let Ok(body) = axum::body::to_bytes(body, MAX_SIGNED_BODY).await else {
-        return StatusCode::FORBIDDEN.into_response();
+        return crate::problem::NOT_AUTHENTICATED.response();
     };
     // Decided before anything is awaited, so no borrow of the request crosses an await.
     let verdict = {
@@ -165,7 +166,7 @@ async fn gate(auth: &ProviderAuth, request: Request, next: Next) -> Response {
                 parts.method,
                 parts.uri.path()
             );
-            StatusCode::FORBIDDEN.into_response()
+            crate::problem::NOT_AUTHENTICATED.response()
         }
     }
 }

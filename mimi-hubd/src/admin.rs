@@ -19,7 +19,6 @@
 use std::net::SocketAddr;
 
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{
     routing::{get, post},
@@ -41,6 +40,7 @@ pub fn build_admin_router(provider: SharedProvider) -> Router {
         .route("/mimi/v1/outbox", get(outbox))
         .route("/mimi/v1/dropOutbox", post(drop_outbox))
         .with_state(provider)
+        .layer(axum::middleware::map_response(crate::problem::fallback))
         .layer(axum::middleware::map_response(server_header))
 }
 
@@ -54,7 +54,7 @@ fn lock(provider: &SharedProvider) -> std::sync::MutexGuard<'_, crate::Provider>
 async fn outbox(State(provider): State<SharedProvider>) -> Response {
     match lock(&provider).store.outbox_queues() {
         Ok(queues) => Json(queues).into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(_) => crate::problem::INTERNAL_ERROR.response(),
     }
 }
 
@@ -80,7 +80,7 @@ async fn drop_outbox(
             );
             Json(serde_json::json!({ "dropped": dropped })).into_response()
         }
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(_) => crate::problem::INTERNAL_ERROR.response(),
     }
 }
 
