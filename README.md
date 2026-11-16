@@ -38,8 +38,8 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
   [`DIVERGENCES.md`](DIVERGENCES.md).
 - **Fed back to the working group.** Interactions this implementation surfaces are raised on
   the IETF mls/mimi lists as they are found.
-- **Security invariants indexed.** [`SECURITY-INVARIANTS.md`](SECURITY-INVARIANTS.md) maps
-  each cross-cutting invariant to where the code enforces it.
+- **Security properties stated.** [`SECURITY-INVARIANTS.md`](SECURITY-INVARIANTS.md) says what
+  the hub guarantees and where the code holds each property.
 - **Standalone.** Apache-2.0, no submodules, no services needed to build and run the tests.
 
 ## See it run
@@ -107,6 +107,5 @@ git tag -v <tag>
 interop layer is permissive.
 
 ## Security
-See [`SECURITY.md`](SECURITY.md) - please use coordinated disclosure. The invariants this code
-enforces (and where each is checked) are tracked in
-[`SECURITY-INVARIANTS.md`](SECURITY-INVARIANTS.md).
+See [`SECURITY.md`](SECURITY.md) - please use coordinated disclosure. The hub's security
+properties, and where the code holds each, are in [`SECURITY-INVARIANTS.md`](SECURITY-INVARIANTS.md).

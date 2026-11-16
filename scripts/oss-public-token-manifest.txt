@@ -1,6 +1,6 @@
 # Allowlist for guard 5 (check_public_comment_hygiene.py): letter+digit tokens that are
 # legitimate, self-resolving public identifiers in THIS repo - conformance-row IDs defined in a
-# public doc (SECURITY-INVARIANTS.md / DIVERGENCES.md / cited against an RFC/draft section), not
+# public doc (docs/mimi/CONFORMANCE.md / DIVERGENCES.md / cited against an RFC/draft section), not
 # an internal review/finding tag. One token per line, addable without a code change. Comments (#)
 # allowed. If you add a real conformance row, add its ID here in the same commit.
 

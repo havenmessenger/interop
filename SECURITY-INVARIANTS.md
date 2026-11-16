@@ -1,74 +1,59 @@
-# Security Invariants
+# Security properties of mimi-hubd
 
-<!-- AUTO-GENERATED - DO NOT EDIT BY HAND. Generated from and kept in sync with this crate's
-     design invariants. -->
+What the reference hub guarantees, and where the code holds each one. What it does not do yet is in
+[`DIVERGENCES.md`](DIVERGENCES.md); how to report a problem is in [`SECURITY.md`](SECURITY.md).
 
-This file resolves the `// WHY: INV-*` references cited in this repo's source. Only
-invariants cited in this repo are included. Each entry states a design invariant, the
-reason it holds, and the change-control it is under (pre-commit checks and code review).
+## It relays ciphertext and holds no key that opens an application message
 
-## `INV-CSP-003` - Inbound email HTML is sanitized before any DOM render
+Application messages reach the hub as MLS `PrivateMessage`s and leave it unchanged: the store keeps them as opaque bytes
+under a routing key (`mimi-hubd/src/store.rs`, the `messages` and `welcomes` tables) and bounds only their size and
+number. The hub is not a member of any group and holds no group secret. The only MLS content it reads is what MLS sends in
+the clear for a delivery service: a Commit's proposals in a `PublicMessage` (participant-list and room-policy changes,
+`src/commit_wire.rs`) and the outer fields of a handshake message. A Commit wrapped in a `PrivateMessage` is refused.
 
-**Severity:** critical · **Change control:** security review required
+## It makes no request to another hub
 
-Email bodies are untrusted input. Every inbound HTML body passes through the sanitizer
-before it reaches a renderer; unsanitized user-supplied HTML is never handed to a DOM.
+The hub only answers requests. It has no HTTP client, opens no outbound connection, and reads the keys of peers that sign
+requests from a file a job on the host keeps current (`MIMI_PEER_KEYS`). So nothing a peer sends can make the hub connect
+anywhere, its own listeners included. Delivery to other hubs is not built yet (DIV-5); when it is, each outbound request
+is https with the hub's client certificate and refuses a loopback, link-local or unspecified destination before
+connecting.
 
-## `INV-MIMI-001` - The MIMI provider runs isolated: no production user secrets, opted-in users only, ciphertext-only transit
+## Every peer request is from an authenticated provider
 
-**Severity:** high · **Change control:** security review required
+The peer listener requires a client certificate from the configured CA bundle, or a request signed with a key the
+provider publishes in DNS (`mimi-hubd/src/provider_auth.rs`, `signature.rs`: a signature older than 300 s or more than
+60 s ahead is refused). Only the directory document is served without either. Which provider a certificate names, and
+what any CA in the bundle can name, is in DIV-16.
 
-The MIMI provider holds no production user secrets beyond the narrow seam it needs
-within its own provider, and can reach only users who opted into federation.
-Cross-provider traffic crosses intermediate infrastructure as ciphertext; TLS terminates
-only at the provider itself.
+## The operator's routes listen on loopback only
 
-## `INV-MIMI-002` - In MIMI federation the client is the cryptographic endpoint; no server-side component can decrypt messages
+`roomPolicy`, `memberRole` and `addParticipant` change a room's policy, roles and participants. They are not served to
+peers: only on the listener `MIMI_ADMIN_BIND_ADDR` names, and the hub does not start if that address is not 127.0.0.0/8
+or `::1` (`mimi-hubd/src/admin.rs`). Unset, there is no such listener.
 
-**Severity:** high · **Change control:** security review required
+## It accepts only the ciphersuites its policy names
 
-MLS keys live in the client. The hub and any relay on the path carry ciphertext they
-cannot decrypt. No provider- or relay-side component holds message-decryption
-capability.
+A KeyPackage, Welcome or GroupInfo from another provider is refused before any decoder or openmls touches it when its
+ciphersuite is not in the accepted list: the suite is read from its fixed wire position first (`src/gate.rs`). The list
+is `mls_ciphersuites` in the policy file, by default every suite the crypto provider implements; the directory advertises
+exactly it. A policy file that cannot be read or is not valid stops the start.
 
-## `INV-MIMI-003` - The MIMI lane and the native messaging lane are separate; cross-provider MLS cannot alter the native wire format
+## Hostile input fails closed
 
-**Severity:** high · **Change control:** security review required
+Every decoder bounds what it reads before it allocates: run lengths and element counts (`src/protocol_wire.rs`, 1024
+elements and 1 MiB per run, 16 query elements), CBOR nesting (`src/content.rs`, depth 4 in content, recursion 64), and a
+decoder that can panic on malformed input runs behind `catch_unwind` so a bad object is a refusal, not a crash.
 
-Cross-provider (MIMI) messaging runs on its own lane with its own endpoints.
-Haven-to-Haven messaging keeps its existing wire format, unchanged by MIMI work, and a
-change on the MIMI side is not reachable from the native send or receive path. The two
-lanes evolve independently, which is what lets the MIMI lane track moving IETF drafts
-without putting the native protocol at risk.
+## Its store has bounds
 
-## `INV-MLS-001a` - External commits (RFC 9420 external-commit join) are disabled in every lane, permanently
+Per recipient, 32 pending Welcomes and 256 pending messages, each at most 64 KiB, for 24 hours. Per user, the newest 64
+KeyPackages, each kept 30 days. At most 1024 rooms, 256 participants a room, 65,536 consent records and 65,536 abuse
+reports. Proposals held for a member's leave: 4 KiB each, 64 KiB and one more than the room's participants a room, for 15
+minutes. A routing key is at most 256 bytes and a URI at most 512. The constants are in `mimi-hubd/src/store.rs` and
+`mimi-hubd/src/lib.rs`.
 
-**Severity:** high · **Change control:** security review required
+## `identifierQuery` says found or not found, and nothing else
 
-Members join a group only by processing a Welcome addressed to their validated
-KeyPackage, and membership changes are member-signed commits. No code path constructs or
-accepts an RFC 9420 external commit, in either the native or the MIMI lane. This follows
-the External-Operations TreeKEM analysis (eprint 2025/229): external joins let an
-adversary holding a compromised long-term secret re-enter a group at any time, a strictly
-larger surface than member-driven adds. The refusal is structural and negative-tested.
-
-## `INV-MLS-001b` - External proposals are refused in the native lane; the MIMI lane accepts only a pre-configured hub's Remove proposals, each requiring an explicit member commit
-
-**Severity:** high · **Change control:** security review required
-
-RFC 9420 external proposals (Sender::External) are refused in native messaging. The MIMI
-lane accepts exactly one narrow case: a Remove proposal from the group's single
-allowlisted hub credential - and even then the proposal is inert until an existing member
-explicitly includes it in a commit. Nothing is auto-committed. Both the refusals and the
-narrow acceptance path are negative-tested.
-
-## `INV-MLS-002` - The MLS ciphersuite is pinned two-sided to 0x0001: generation uses only it, and inbound objects under any other suite are rejected before openmls
-
-**Severity:** high · **Change control:** security review required
-
-Haven generates MLS objects only under suite 0x0001
-(MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519) and rejects any inbound MLS object
-carrying a different suite before it reaches openmls. A suite change is a wire-format
-event: it goes through one policy seam rather than scattered constants, and is gated by
-known-answer tests. This is also the crypto-agility seam - adding a post-quantum suite is
-a change to configuration and vectors, not a rewrite.
+A user the hub answers for (the policy's `identifier_discovery`) is `success`; every other answer is the same `notFound`,
+byte for byte, whether the user is outside the setting, does not exist, or the request could not be read (DIV-4).
