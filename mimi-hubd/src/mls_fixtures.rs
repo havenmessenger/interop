@@ -105,7 +105,7 @@ impl Member {
 }
 
 /// The capabilities every fixture leaf advertises: the suite, the app data dictionary, AppDataUpdate, basic credentials.
-fn capabilities() -> Capabilities {
+pub(crate) fn capabilities() -> Capabilities {
     Capabilities::new(
         None,
         Some(&[SUITE]),
@@ -204,6 +204,48 @@ pub(crate) fn app_data_commit(
         .unwrap()
         .into_contents();
     commit.tls_serialize_detached().unwrap()
+}
+
+/// An external Commit `joiner` makes to join the group described by `group_info` (bare, as a bundle carries it) and
+/// `tree`: the Commit as MLSMessage bytes, and the joiner's group after it.
+pub(crate) fn external_commit(
+    group_info: &[u8],
+    tree: RatchetTreeIn,
+    joiner: &Member,
+) -> (Vec<u8>, MlsGroup) {
+    use openmls::prelude::tls_codec::Deserialize as _;
+    let info =
+        openmls::messages::group_info::VerifiableGroupInfo::tls_deserialize_exact(group_info)
+            .unwrap();
+    let (group, bundle) = MlsGroup::external_commit_builder()
+        .with_ratchet_tree(tree)
+        .with_config(
+            MlsGroupJoinConfig::builder()
+                .wire_format_policy(PURE_PLAINTEXT_WIRE_FORMAT_POLICY)
+                .build(),
+        )
+        .build_group(&joiner.provider, info, joiner.credential.clone())
+        .unwrap()
+        .leaf_node_parameters(
+            LeafNodeParameters::builder()
+                .with_capabilities(capabilities())
+                .build(),
+        )
+        .load_psks(joiner.provider.storage())
+        .unwrap()
+        .build(
+            joiner.provider.rand(),
+            joiner.provider.crypto(),
+            &joiner.signer,
+            |_| true,
+        )
+        .unwrap()
+        .finalize(&joiner.provider)
+        .unwrap();
+    (
+        bundle.into_commit().tls_serialize_detached().unwrap(),
+        group,
+    )
 }
 
 /// The group's current GroupInfo, signed by `by`, without the ratchet tree in it, as the bare `GroupInfo` a bundle's

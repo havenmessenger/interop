@@ -31,6 +31,8 @@
 //!                          (MIMI_CLIENT_CA only), the roots a peer's server certificate may chain to
 //!   MIMI_CLIENT_CERT       optional, with MIMI_CLIENT_KEY; PEM paths of the certificate and key outbound requests
 //!   MIMI_CLIENT_KEY        present, when MIMI_SERVER_CERT cannot serve (it needs the clientAuth extended key usage)
+//!   MIMI_HUB_MLS_KEY       optional; a file holding the hub's own MLS signing key (base64 32-byte Ed25519 seed),
+//!                          which signs groupInfo answers; without it every groupInfo request is answered notAuthorized
 //!   MIMI_PEERS             optional; a TOML file of "<peer domain>" = "https://<base>", for a peer whose directory
 //!                          is not at https://<domain>; a base outside the peer's domain stops the start
 //!
@@ -172,11 +174,24 @@ async fn main() -> anyhow::Result<()> {
         client: Arc::new(outbound),
         directories: Arc::new(mimi_hubd::peer_directory::Directories::new(peer_bases)),
     });
-    let shared = Arc::new(Mutex::new(
-        provider
-            .with_outbox_waker(wake.clone())
-            .with_peer_access(access.clone()),
-    ));
+    let mut provider = provider
+        .with_outbox_waker(wake.clone())
+        .with_peer_access(access.clone());
+    // The hub's own MLS key, which signs a GroupInfoResponse as its hub_sender; without it groupInfo answers
+    // notAuthorized.
+    if let Some(path) = resolved["MIMI_HUB_MLS_KEY"].as_deref() {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("MIMI_HUB_MLS_KEY {path}: {e}"))?;
+        let seed = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, text.trim())
+            .map_err(|_| anyhow::anyhow!("MIMI_HUB_MLS_KEY {path} does not hold a base64 seed"))?;
+        provider = provider.with_hub_signer(Arc::new(
+            mimi_hubd::group_info_endpoint::hub_signer_from_seed(&seed, &domain)?,
+        ));
+        eprintln!("[mimi-hubd] groupInfo answers are signed with the hub's MLS key");
+    } else {
+        eprintln!("[mimi-hubd] no MIMI_HUB_MLS_KEY: groupInfo requests are answered notAuthorized");
+    }
+    let shared = Arc::new(Mutex::new(provider));
     let outbox = mimi_hubd::outbox::OutboxWorker::new(
         shared.clone(),
         access.client.clone(),

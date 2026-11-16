@@ -65,8 +65,10 @@ mechanism and a client calls it.
 
 | ID | § | Requirement | Status | Where |
 |---|---|---|---|---|
-| G1 | 5.6 | Hub checks the joiner's authorization before returning GroupInfo | Not built yet | DIV-1 |
-| G2 | 5.6 | GroupInfoResponse encrypted and signed by the hub | Not built yet | DIV-1 |
+| G1 | 5.6 | Hub checks the joiner's authorization before returning GroupInfo | Implemented | Signature, the credential's provider, and who may join (`canAddOwnClient`, `canOpenJoin`); joining codes and preauthorization not built (DIV-1) |
+| G2 | 5.6 | GroupInfoResponse encrypted and signed by the hub | Implemented | `EncryptWithLabel` to the request's key, signed by `MIMI_HUB_MLS_KEY` as `hub_sender` (DIV-1) |
+| G3 | 5.6 | An external Commit is accepted where the room allows it | Implemented | Tracked rooms; refused while proposals are held (no `externalProposals` staple, DIV-1) |
+| G4 | 5.6 | The room's operational policy (room-policy-04 §7.1) is kept and `external_commit_allowed` enforced | Implemented | Other fields kept, not enforced; changes need `canChangeMlsOperationalPolicies` (DIV-18) |
 
 ## Consent (protocol-07 §5.7)
 

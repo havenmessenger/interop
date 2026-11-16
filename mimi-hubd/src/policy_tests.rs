@@ -23,6 +23,7 @@ fn each_field_is_read() {
         mls_ciphersuites = [0x0001]
         identifier_discovery = "enrolled"
         require_nonce_on_key_material = true
+        external_commit_when_unset = "deny"
         "#,
     )
     .unwrap();
@@ -32,7 +33,7 @@ fn each_field_is_read() {
     assert_eq!(policy.identifier_discovery, Discovery::Enrolled);
     assert_eq!(
         policy.describe(),
-        "mls_ciphersuites=0x0001 identifier_discovery=enrolled require_nonce_on_key_material=true"
+        "mls_ciphersuites=0x0001 identifier_discovery=enrolled require_nonce_on_key_material=true external_commit_when_unset=deny"
     );
 }
 

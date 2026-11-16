@@ -32,6 +32,8 @@ const MLS_PROTOCOL_VERSION_MLS10: u16 = 1;
 const MLS_WIRE_FORMAT_PUBLIC_MESSAGE: u16 = 1;
 const MLS_WIRE_FORMAT_PRIVATE_MESSAGE: u16 = 2;
 const MLS_SENDER_TYPE_MEMBER: u8 = 1;
+/// RFC 9420 `SenderType.new_member_commit`: an external Commit's sender, which names no leaf.
+const MLS_SENDER_TYPE_NEW_MEMBER_COMMIT: u8 = 4;
 const MLS_CONTENT_TYPE_COMMIT: u8 = 3;
 /// `ProposalOrRef`'s discriminant for an inline (by-value) proposal, as opposed to a by-reference `proposal_ref`
 /// (discriminant 2) naming a proposal sent earlier in its own message.
@@ -207,10 +209,11 @@ pub(crate) fn normalize_app_data_updates(bytes: &[u8]) -> Result<Option<Normaliz
     let (_group_id, rest) = read_opaque_vec(rest, "FramedContent.group_id")?;
     let (_epoch, rest) = read_u64(rest, "FramedContent.epoch")?;
     let (sender_type, rest) = read_u8(rest, "Sender.sender_type")?;
-    if sender_type != MLS_SENDER_TYPE_MEMBER {
-        return Ok(None);
-    }
-    let (_leaf_index, rest) = read_u32(rest, "Sender.leaf_index")?;
+    let rest = match sender_type {
+        MLS_SENDER_TYPE_MEMBER => read_u32(rest, "Sender.leaf_index")?.1,
+        MLS_SENDER_TYPE_NEW_MEMBER_COMMIT => rest,
+        _ => return Ok(None),
+    };
     let (_authenticated_data, rest) = read_opaque_vec(rest, "FramedContent.authenticated_data")?;
     let (content_type, window_at) = read_u8(rest, "FramedContent.content_type")?;
     if content_type == MLS_CONTENT_TYPE_PROPOSAL {
@@ -364,6 +367,9 @@ const fn change_type_of(component: u16) -> Option<u16> {
         crate::room_metadata::ROOM_METADATA_COMPONENT_ID => {
             Some(crate::room_metadata::MIMI_ROOM_METADATA_PROPOSAL_TYPE)
         }
+        crate::operational_parameters::OPERATIONAL_POLICY_COMPONENT_ID => {
+            Some(crate::operational_parameters::MIMI_OPERATIONAL_POLICY_PROPOSAL_TYPE)
+        }
         _ => None,
     }
 }
@@ -467,6 +473,7 @@ pub fn decode_single_custom_proposal_commit(
 /// The proposal type of an `Add` and of a `Remove` (RFC 9420 §12.1.1 and §12.1.3).
 const MLS_PROPOSAL_TYPE_ADD: u16 = 0x0001;
 const MLS_PROPOSAL_TYPE_REMOVE: u16 = 0x0003;
+const MLS_PROPOSAL_TYPE_EXTERNAL_INIT: u16 = 0x0006;
 
 /// A client a Commit adds: the identity bytes of the credential in its KeyPackage, and the KeyPackage as sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -490,11 +497,14 @@ pub struct DecodedCommit {
     pub removes: Vec<u32>,
     /// Each `ProposalRef`, in order.
     pub references: Vec<Vec<u8>>,
+    /// An external Commit (sender `new_member_commit`): its joiner is not yet a member, and it carries one
+    /// `ExternalInit`.
+    pub external: bool,
 }
 
 /// The epoch and the `Commit.proposals` window of a member-sent `PublicMessage` Commit, read through the rewrite of its
 /// AppDataUpdates and checked whole by openmls's own decoder.
-fn proposals_window(bytes: &[u8]) -> Result<(u64, Vec<u8>), WireError> {
+fn proposals_window(bytes: &[u8]) -> Result<(u64, Vec<u8>, bool), WireError> {
     let normalized = normalize_app_data_updates(bytes)?;
     let bytes = normalized.as_ref().map_or(bytes, |n| n.bytes.as_slice());
     require_complete_public_message_commit(bytes)?;
@@ -515,15 +525,18 @@ fn proposals_window(bytes: &[u8]) -> Result<(u64, Vec<u8>), WireError> {
     let (_group_id, rest) = read_opaque_vec(rest, "FramedContent.group_id")?;
     let (epoch, rest) = read_u64(rest, "FramedContent.epoch")?;
     let (sender_type, rest) = read_u8(rest, "Sender.sender_type")?;
-    if sender_type != MLS_SENDER_TYPE_MEMBER {
-        return Err(WireError::Codec {
-            what: "Sender.sender_type",
-            detail: format!(
-                "unsupported sender type {sender_type} (only member-sent Commits are read)"
-            ),
-        });
-    }
-    let (_leaf_index, rest) = read_u32(rest, "Sender.leaf_index")?;
+    let (rest, external) = match sender_type {
+        MLS_SENDER_TYPE_MEMBER => (read_u32(rest, "Sender.leaf_index")?.1, false),
+        MLS_SENDER_TYPE_NEW_MEMBER_COMMIT => (rest, true),
+        _ => {
+            return Err(WireError::Codec {
+                what: "Sender.sender_type",
+                detail: format!(
+                    "unsupported sender type {sender_type} (a member's Commit or an external one)"
+                ),
+            })
+        }
+    };
     let (_authenticated_data, rest) = read_opaque_vec(rest, "FramedContent.authenticated_data")?;
     let (content_type, rest) = read_u8(rest, "FramedContent.content_type")?;
     if content_type != MLS_CONTENT_TYPE_COMMIT {
@@ -533,7 +546,7 @@ fn proposals_window(bytes: &[u8]) -> Result<(u64, Vec<u8>), WireError> {
         });
     }
     let (window, _rest) = read_opaque_vec(rest, "Commit.proposals")?;
-    Ok((epoch, window))
+    Ok((epoch, window, external))
 }
 
 /// Read a Commit that proposes participant-list and room-policy changes by value, in a combination [`check_changes`]
@@ -547,7 +560,8 @@ fn proposals_window(bytes: &[u8]) -> Result<(u64, Vec<u8>), WireError> {
 /// the Commit carries a change at all is the caller's to decide once its references are resolved. No signature or
 /// membership is verified here, and no group state is held.
 pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError> {
-    let (epoch, window) = proposals_window(bytes)?;
+    let (epoch, window, external) = proposals_window(bytes)?;
+    let mut external_inits = 0usize;
     let budget = crate::protocol_wire::MAX_RUN_ELEMENTS;
     let mut updates: Vec<DecodedCustomProposal> = Vec::new();
     let mut adds = Vec::new();
@@ -621,6 +635,11 @@ pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError>
                 removes.push(leaf);
                 at = tail;
             }
+            MLS_PROPOSAL_TYPE_EXTERNAL_INIT if external => {
+                let (_kem_output, tail) = read_opaque_vec(body, "ExternalInit.kem_output")?;
+                external_inits += 1;
+                at = tail;
+            }
             _ => {
                 let (payload, tail) = read_opaque_vec(body, "Proposal.custom_payload")?;
                 if !is_a_change_this_crate_reads(proposal_type) {
@@ -639,6 +658,14 @@ pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError>
             }
         }
     }
+    if external && external_inits != 1 {
+        return Err(WireError::Codec {
+            what: "Commit.proposals",
+            detail: format!(
+                "an external Commit carries one ExternalInit, this one {external_inits}"
+            ),
+        });
+    }
     check_changes(&updates).map_err(|why| WireError::Codec {
         what: "Commit.proposals",
         detail: why.into(),
@@ -649,6 +676,7 @@ pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError>
         adds,
         removes,
         references,
+        external,
     })
 }
 
@@ -692,10 +720,12 @@ pub fn check_changes(changes: &[DecodedCustomProposal]) -> Result<(), &'static s
     let roles_list = count(crate::room_policy::MIMI_ROLES_LIST_PROPOSAL_TYPE);
     let base_room_policy = count(crate::room_policy::MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE);
     let room_metadata = count(crate::room_metadata::MIMI_ROOM_METADATA_PROPOSAL_TYPE);
+    let operational_policy =
+        count(crate::operational_parameters::MIMI_OPERATIONAL_POLICY_PROPOSAL_TYPE);
     if participant_list > 1 {
         return Err(TWO_PARTICIPANT_LIST_UPDATES);
     }
-    if roles_list > 1 || base_room_policy > 1 || room_metadata > 1 {
+    if roles_list > 1 || base_room_policy > 1 || room_metadata > 1 || operational_policy > 1 {
         return Err(TWO_POLICY_CHANGES_OF_ONE_KIND);
     }
     if roles_list == 1 && participant_list == 1 {
@@ -844,6 +874,7 @@ const fn is_a_change_this_crate_reads(proposal_type: u16) -> bool {
         || proposal_type == crate::room_policy::MIMI_ROLES_LIST_PROPOSAL_TYPE
         || proposal_type == crate::room_policy::MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE
         || proposal_type == crate::room_metadata::MIMI_ROOM_METADATA_PROPOSAL_TYPE
+        || proposal_type == crate::operational_parameters::MIMI_OPERATIONAL_POLICY_PROPOSAL_TYPE
 }
 
 fn read_u32<'a>(bytes: &'a [u8], what: &'static str) -> Result<(u32, &'a [u8]), WireError> {

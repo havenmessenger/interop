@@ -49,6 +49,17 @@ in `From`, and the proof must authenticate that domain. A signature's nonce is r
 use by the same key is refused; the policy can require a nonce on keyMaterial (`require_nonce_on_key_material`).
 Which provider a certificate names, and what any CA in the bundle can name, is in DIV-16.
 
+## An external join is checked against the room's tree, its policy and the joiner's role
+
+A client can join a room by external Commit only where the hub keeps the room's ratchet tree, so the Commit is verified
+against it like any other; only where the room's operational policy allows it (or, with no such policy, the hub's
+`external_commit_when_unset`); only for a joiner the room's roles admit (`canAddOwnClient` for a listed user's new
+client, `canOpenJoin` on role 0 for an unlisted one, `mimi-hubd/src/external_join.rs`); never while proposals are held
+for the epoch; and changing nothing but the joiner's own entry in the list. A GroupInfo is kept and served
+(`group_info_endpoint.rs`) only for such a room, encrypted to the requester's key and signed with the hub's own MLS key
+(`MIMI_HUB_MLS_KEY`), which signs nothing else. A change to the room's operational policy needs
+`canChangeMlsOperationalPolicies`. Who may change the roles or the base policy is not checked yet (DIV-15).
+
 ## The operator's routes listen on loopback only
 
 `roomPolicy`, `memberRole` and `addParticipant` change a room's policy, roles and participants. They are not served to

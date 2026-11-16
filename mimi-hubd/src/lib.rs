@@ -25,8 +25,10 @@
 pub mod activity;
 pub mod admin;
 pub mod enroll;
+pub mod external_join;
 pub mod fanout;
 pub mod follower;
+pub mod group_info_endpoint;
 pub mod group_store;
 pub mod http;
 pub mod identifier_search;
@@ -195,6 +197,8 @@ pub struct Provider {
     outbox_waker: Option<std::sync::Arc<tokio::sync::Notify>>,
     /// The outbound client and directory cache, for requests the hub makes while answering one (`key_material_proxy`).
     peer_access: Option<std::sync::Arc<peer_directory::PeerAccess>>,
+    /// The hub's own MLS key and credential, which sign a GroupInfoResponse as its `hub_sender` (`group_info_endpoint`).
+    hub_signer: Option<std::sync::Arc<mimi_core::group_info_wire::HubSigner>>,
 }
 
 /// One line for what a fan-out queued, or why it could not: the change it follows was stored either way.
@@ -232,6 +236,7 @@ impl Provider {
             store: SqliteStore::open(db_path)?,
             outbox_waker: None,
             peer_access: None,
+            hub_signer: None,
         })
     }
 
@@ -244,6 +249,7 @@ impl Provider {
             store: SqliteStore::in_memory()?,
             outbox_waker: None,
             peer_access: None,
+            hub_signer: None,
         })
     }
 
@@ -341,10 +347,11 @@ impl Provider {
                 "requestConsent": "/mimi/pl/requestConsent/{targetDomain}",
                 "updateConsent": "/mimi/pl/updateConsent/{requesterDomain}",
                 "reportAbuse": "/mimi/pl/reportAbuse/{roomId}",
-                "update": "/mimi/pl/update/{roomId}"
+                "update": "/mimi/pl/update/{roomId}",
+                "groupInfo": "/mimi/pl/groupInfo/{roomId}"
             },
             "unsupported": {
-                "groupInfo_external_commit_join": "DIV-1: not built yet; joins are add-driven",
+                "groupInfo_joining_code": "DIV-1: a GroupInfoRequest with a joining code is refused; preauthorized users are not read",
                 "assets_ohttp": "DIV-3: v1 is messaging-only",
                 "update_wire_endpoint_mixed_commits": "DIV-10: a Commit is applied when it carries a participant-list change, a room-policy change, or one of each (a role list never beside a participant-list change, room-policy-04 §3), alone or with Add and Remove proposals beside it; proposals by reference are accepted only when they are the ones this hub holds for a member's leave. A second change of one kind, a role list beside a participant-list change, a Commit with no change, any other proposal type and any other proposal by reference are refused",
                 "reportAbuse_with_abusive_messages": "DIV-9: a report attaching an AbusiveMessage is refused (its Frank cannot yet be verified) - metadata-only reports are accepted"
@@ -363,6 +370,7 @@ impl Provider {
             ("updateConsent", "/mimi/pl/updateConsent/{requesterDomain}"),
             ("reportAbuse", "/mimi/pl/reportAbuse/{roomId}"),
             ("update", "/mimi/pl/update/{roomId}"),
+            ("groupInfo", "/mimi/pl/groupInfo/{roomId}"),
         ] {
             doc[key] = serde_json::Value::String(format!("{base}{path}"));
         }
@@ -1048,19 +1056,30 @@ impl Provider {
             )?),
             None => None,
         };
+        // An external Commit is verified against the room's tree, which only a tracked room has.
+        if commit.external && tracked.is_none() {
+            return Err(UpdateRefusal::Policy(
+                "an external Commit to a room whose ratchet tree this hub does not keep",
+            ));
+        }
         // A tracked room's changes carried by value are the committer's to make (room-policy-04 §8.1); a change named
         // by reference was authorized for its own proposer when it was held.
         if let Some(staged) = &tracked {
-            self.authorize_tracked_commit(room_uri, staged, &commit)?;
+            self.authorize_tracked_commit(room_uri, staged, &commit, now_unix)?;
         }
         self.include_held_proposals(room_uri, &mut commit, now_unix)?;
         let epoch = commit.epoch;
-        self.apply_decoded_commit(room_uri, &commit, now_unix)?;
+        let joiner = tracked.as_ref().and_then(|staged| staged.joiner.clone());
+        self.apply_decoded_commit(room_uri, &commit, joiner.as_deref(), now_unix)?;
         self.store
             .commit_accepted_at(room_uri, epoch)
             .map_err(|_| UpdateRefusal::Store)?;
         match (tracked, bundle) {
-            (Some(staged), _) => self.merge_tracked_commit(staged),
+            (Some(staged), _) => {
+                self.merge_tracked_commit(staged)?;
+                self.keep_group_info_after(room_uri, epoch + 1, bundle.map(|(info, _)| info));
+                Ok(())
+            }
             (None, Some((group_info, ratchet_tree))) => {
                 self.seed_room_tree(room_uri, epoch, peer, group_info, ratchet_tree);
                 Ok(())
@@ -1077,7 +1096,76 @@ impl Provider {
         room_uri: &str,
         staged: &crate::room_tree::StagedRoomCommit,
         commit: &DecodedCommit,
+        now_unix: u64,
     ) -> Result<(), UpdateRefusal> {
+        // An external Commit (protocol-07 §5.6): the room must allow one, nothing may be held for the epoch (no proposal
+        // would be lost, since this hub staples none), it may change the list only to add its joiner, and the joiner
+        // must be one who may join that way (`external_join.rs`).
+        if let Some(joiner) = &staged.joiner {
+            if commit
+                .updates
+                .iter()
+                .any(|change| change.proposal_type != MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE)
+            {
+                return Err(UpdateRefusal::Policy(
+                    "an external Commit may change nothing but its joiner's place in the participant list",
+                ));
+            }
+            if !commit.references.is_empty()
+                || !self
+                    .store
+                    .held_proposals(room_uri, commit.epoch, now_unix)
+                    .map_err(|_| UpdateRefusal::Store)?
+                    .is_empty()
+            {
+                return Err(UpdateRefusal::Policy(
+                    "external Commits are refused while proposals are held for the epoch",
+                ));
+            }
+            let change = commit
+                .updates
+                .iter()
+                .find(|change| change.proposal_type == MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE)
+                .map(|change| {
+                    decode_participant_list_update(&change.payload).map(|mut update| {
+                        for added in &mut update.added_participants {
+                            added.user_uri = mimi_core::uri::canonical(&added.user_uri);
+                        }
+                        update
+                    })
+                })
+                .transpose()
+                .map_err(|_| UpdateRefusal::Invalid("the participant list update is malformed"))?;
+            return self.authorize_external_join(room_uri, joiner, change.as_ref());
+        }
+        // A change to the room's operational policy needs canChangeMlsOperationalPolicies (listed "(reserved)" in
+        // room-policy-04; read as the draft's own capability for it), in a room that has roles.
+        if commit.updates.iter().any(|change| {
+            change.proposal_type
+                == mimi_core::operational_parameters::MIMI_OPERATIONAL_POLICY_PROPOSAL_TYPE
+        }) {
+            if let Some(policy) = self
+                .room_policy(room_uri)
+                .map_err(|_| UpdateRefusal::Store)?
+                .filter(|policy| !policy.roles.is_empty())
+            {
+                let committer = staged.sender.clone().ok_or(UpdateRefusal::NotAllowed)?;
+                let role = self
+                    .store
+                    .list_participant_rows(room_uri)
+                    .map_err(|_| UpdateRefusal::Store)?
+                    .into_iter()
+                    .find(|row| row.member_uri == committer)
+                    .and_then(|row| row.role_index);
+                if !role.and_then(|role| policy.role(role)).is_some_and(|role| {
+                    role.has(mimi_core::room_policy::Capability::ChangeMlsOperationalPolicies)
+                }) {
+                    return Err(UpdateRefusal::Policy(
+                        "the committer's role may not change the room's operational policy",
+                    ));
+                }
+            }
+        }
         if adds_first_roles_list(staged.had_roles_list, &commit.updates) {
             return Err(UpdateRefusal::Policy(
                 "a roles_list is set when the room's group is created, not added by a later Commit",
@@ -1179,13 +1267,19 @@ impl Provider {
         &self,
         room_uri: &str,
         commit: &DecodedCommit,
+        joiner: Option<&str>,
         now_unix: u64,
     ) -> Result<(), UpdateRefusal> {
+        // An external Commit by a listed user's new client changes nothing here; any other Commit carries a change.
         if commit.updates.is_empty() {
-            return Err(UpdateRefusal::Invalid(
-                "the Commit carries no participant-list, room-policy or room-metadata change",
-            ));
+            return match joiner {
+                Some(_) => Ok(()),
+                None => Err(UpdateRefusal::Invalid(
+                    "the Commit carries no participant-list, room-policy or room-metadata change",
+                )),
+            };
         }
+        let mut operational = None;
         let mut participants = None;
         let mut roles = None;
         let mut base = None;
@@ -1214,6 +1308,13 @@ impl Provider {
                         UpdateRefusal::Invalid("the base room policy is malformed")
                     })?);
                 }
+                mimi_core::operational_parameters::MIMI_OPERATIONAL_POLICY_PROPOSAL_TYPE => {
+                    mimi_core::operational_parameters::decode_operational_parameters(
+                        &change.payload,
+                    )
+                    .map_err(|_| UpdateRefusal::Invalid("the operational policy is malformed"))?;
+                    operational = Some(change.payload.clone());
+                }
                 mimi_core::room_metadata::MIMI_ROOM_METADATA_PROPOSAL_TYPE => {
                     // Display data (protocol-07 §10): read with bounds, kept as sent, and enforced on nothing. It names
                     // its own room, so a value naming another room is refused.
@@ -1240,6 +1341,7 @@ impl Provider {
         self.check_commit_against_list(
             room_uri,
             commit,
+            joiner,
             participants
                 .as_ref()
                 .unwrap_or(&ParticipantListUpdate::default()),
@@ -1276,6 +1378,9 @@ impl Provider {
         }
         if let Some(policy) = policy {
             self.store_room_policy(room_uri, policy, now_unix)?;
+        }
+        if let Some(operational) = operational {
+            self.set_operational_policy(room_uri, &operational)?;
         }
         match metadata {
             Some(metadata) => self
@@ -1344,6 +1449,7 @@ impl Provider {
         &self,
         room_uri: &str,
         commit: &DecodedCommit,
+        joiner: Option<&str>,
         update: &ParticipantListUpdate,
     ) -> Result<(), UpdateRefusal> {
         const MISMATCH: UpdateRefusal =
@@ -1351,7 +1457,7 @@ impl Provider {
         self.assert_hub_of_record(room_uri)
             .map_err(|_| UpdateRefusal::NotAllowed)?;
         // A Commit with the change alone is read as it always was: a participant can be listed before any client is added.
-        if commit.adds.is_empty() && commit.removes.is_empty() {
+        if commit.adds.is_empty() && commit.removes.is_empty() && joiner.is_none() {
             return Ok(());
         }
         let rows = self
@@ -1377,9 +1483,12 @@ impl Provider {
             return Err(MISMATCH);
         }
         for added in &update.added_participants {
-            if !commit.adds.iter().any(|add| {
-                canonical_identity(&add.identity).is_some_and(|uri| uri == added.user_uri)
-            }) {
+            // An external Commit's joiner arrives by its ExternalInit, not by an Add.
+            if joiner != Some(added.user_uri.as_str())
+                && !commit.adds.iter().any(|add| {
+                    canonical_identity(&add.identity).is_some_and(|uri| uri == added.user_uri)
+                })
+            {
                 return Err(MISMATCH);
             }
         }
@@ -2112,7 +2221,7 @@ mod tests {
             dir["mls_ciphersuites"],
             serde_json::json!(mimi_core::gate::default_mls_ciphersuites())
         );
-        assert!(dir["unsupported"]["groupInfo_external_commit_join"].is_string());
+        assert!(dir["unsupported"]["groupInfo_joining_code"].is_string());
         assert!(dir["unsupported"]["assets_ohttp"].is_string());
     }
 
@@ -2135,9 +2244,8 @@ mod tests {
         );
         assert_eq!(wire["reportAbuse"], "/mimi/pl/reportAbuse/{roomId}");
         assert_eq!(wire["update"], "/mimi/pl/update/{roomId}");
-        // groupInfo/download and the 4 admin endpoints have no wire route yet: the
-        // directory must not claim one exists.
-        assert!(wire.get("groupInfo").is_none());
+        assert_eq!(wire["groupInfo"], "/mimi/pl/groupInfo/{roomId}");
+        // download and the 4 admin endpoints have no wire route: the directory must not claim one exists.
         assert!(wire.get("roomPolicy").is_none());
         assert!(dir["unsupported"]["update_wire_endpoint_mixed_commits"].is_string());
         assert!(dir["unsupported"]["reportAbuse_with_abusive_messages"].is_string());
@@ -2213,9 +2321,12 @@ mod tests {
             dir["update"],
             "https://havenmessenger.com/mimi/pl/update/{roomId}"
         );
-        // the two draft keys nothing here serves must NOT appear at the top level - advertise
+        assert_eq!(
+            dir["groupInfo"],
+            "https://havenmessenger.com/mimi/pl/groupInfo/{roomId}"
+        );
+        // the draft key nothing here serves must NOT appear at the top level - advertise
         // only what's actually wire-routed.
-        assert!(dir.get("groupInfo").is_none());
         assert!(dir.get("proxyDownload").is_none());
     }
 

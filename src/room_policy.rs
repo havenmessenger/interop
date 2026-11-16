@@ -59,6 +59,13 @@ pub enum Capability {
     ChangeRole,
     Kick,
     Ban,
+    /// `canAddOwnClient`: the holder, a listed participant, may add a client of its own (by an external Commit too).
+    AddOwnClient,
+    /// `canOpenJoin`: on role 0, any user may join the room unlisted, into the role the join names.
+    OpenJoin,
+    /// `canChangeMlsOperationalPolicies`: the holder may change the room's `mls_operational_policy`. Listed "(reserved)"
+    /// in room-policy-04; read here as the draft's own capability for that change.
+    ChangeMlsOperationalPolicies,
 }
 
 /// room-policy-04 §8.1 `SingleSourceRoleChangeTargets` - from one role, which target roles a change may

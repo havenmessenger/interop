@@ -104,10 +104,14 @@ fn each_enforced_capability_has_its_registry_value_and_the_others_are_dropped() 
     for (value, capability) in [
         (0x0000u16, Capability::AddParticipant),
         (0x0001, Capability::RemoveParticipant),
+        (0x0002, Capability::AddOwnClient),
+        (0x0004, Capability::OpenJoin),
+        (0x0006, Capability::RemoveSelf),
         (0x000a, Capability::Ban),
         (0x000c, Capability::Kick),
         (0x000f, Capability::ChangeRole),
         (0x0100, Capability::SendMessage),
+        (0x0600, Capability::ChangeMlsOperationalPolicies),
     ] {
         assert_eq!(capability_from_wire(value), Some(capability));
         assert_eq!(capability_to_wire(capability), value);
@@ -119,7 +123,10 @@ fn each_enforced_capability_has_its_registry_value_and_the_others_are_dropped() 
     let body = hex(&role);
     let wrapped = [run(&body)].concat();
     let roles = decode_role_data(&wrapped).unwrap();
-    assert_eq!(roles[0].capabilities, vec![Capability::SendMessage]);
+    assert_eq!(
+        roles[0].capabilities,
+        vec![Capability::AddOwnClient, Capability::SendMessage]
+    );
 }
 
 fn refused(bytes: &[u8]) -> String {

@@ -70,6 +70,8 @@ pub struct StagedRoomCommit {
     pub(crate) sender: Option<String>,
     /// Whether the group had a `roles_list` before this Commit.
     pub(crate) had_roles_list: bool,
+    /// For an external Commit, the joiner's user, by the credential of the leaf its update path adds.
+    pub(crate) joiner: Option<String>,
 }
 
 /// One component of a GroupContext's app data dictionary.
@@ -129,6 +131,18 @@ impl VerifiedProposals {
 }
 
 impl Provider {
+    /// The tracked room's ratchet tree, as a `full` RatchetTreeOption.
+    pub(crate) fn tree_option(&self, tracking: &RoomTracking) -> Option<Vec<u8>> {
+        let group = PublicGroup::load(
+            &self.store.groups(),
+            &GroupId::from_slice(&tracking.group_id),
+        )
+        .ok()
+        .flatten()?;
+        let tree = group.export_ratchet_tree().tls_serialize_detached().ok()?;
+        Some([&[RATCHET_TREE_FULL][..], &tree].concat())
+    }
+
     /// The room's tracking record, when the hub keeps its tree.
     pub fn room_tracking(&self, room_uri: &str) -> anyhow::Result<Option<RoomTracking>> {
         self.store.room_tree(room_uri)
@@ -207,8 +221,10 @@ impl Provider {
                     UpdateRefusal::NotAllowed,
                 )
             })?;
-        let sender = match processed.sender() {
-            Sender::Member(leaf) => member_uri(&group, *leaf),
+        let (sender, external) = match processed.sender() {
+            Sender::Member(leaf) => (member_uri(&group, *leaf), false),
+            // An external Commit: its joiner is named by the leaf its update path adds, once staged.
+            Sender::NewMemberCommit => (None, true),
             _ => {
                 return Err(refused(
                     "the sender is not a member",
@@ -294,12 +310,24 @@ impl Provider {
                 ));
             }
         }
+        let joiner = external
+            .then(|| staged.update_path_leaf_node())
+            .flatten()
+            .and_then(|leaf| credential_uri(leaf.credential()));
+        if external && joiner.is_none() {
+            return Err(refused(
+                "an external Commit whose joiner names no user",
+                None,
+                UpdateRefusal::NotAllowed,
+            ));
+        }
         let had_roles_list = app_data(group.group_context(), ROLES_LIST_COMPONENT).is_some();
         Ok(StagedRoomCommit {
             group,
             staged,
             sender,
             had_roles_list,
+            joiner,
         })
     }
 
@@ -473,6 +501,16 @@ impl Provider {
             }
             None => None,
         };
+        let operational = app_data(
+            context,
+            mimi_core::operational_parameters::OPERATIONAL_POLICY_COMPONENT_ID,
+        )
+        .map(|bytes| {
+            mimi_core::operational_parameters::decode_operational_parameters(bytes)
+                .map(|_| bytes.to_vec())
+        })
+        .transpose()
+        .map_err(|_| Some("its GroupContext's operational policy does not decode"))?;
         let list = app_data(context, PARTICIPANT_LIST_COMPONENT)
             .map(decode_participant_list_data)
             .transpose()
@@ -526,6 +564,12 @@ impl Provider {
                 .replace_participants(room_uri, &rows, now)
                 .map_err(|_| Some("its participant list could not be stored"))?;
         }
+        match &operational {
+            Some(data) => self.store.set_operational_policy(room_uri, data),
+            None => self.store.clear_operational_policy(room_uri),
+        }
+        .map_err(|_| Some("its operational policy could not be stored"))?;
+        self.keep_group_info_after(room_uri, commit_epoch + 1, Some(group_info));
         eprintln!(
             "[mimi-hubd] {room_uri} is tracked from epoch {}, seeded by {provider}",
             commit_epoch + 1

@@ -14,14 +14,36 @@ from the draft on a point where the draft is silent or the pinned MLS library fa
 strict implementation of the affected endpoints will not interoperate with this hub on those
 points until they close.
 
-## DIV-1 - GroupInfo / external-commit join: not built yet
+## DIV-1 - GroupInfo and external-commit join: built for rooms whose tree the hub keeps
 
-Cross-provider group membership is add-driven today: an existing member adds the new participant
-via Commit + Welcome (§5.2). The §5.6 `groupInfo` endpoint and accepting an external commit
-(self-join via `join_by_external_commit` against an exported `GroupInfo`) are not built yet. When
-they are, a room's own policy decides whether it takes one (`external_commit_allowed` in its
-operational parameters), and MLS's default applies where the room says nothing. A GroupInfo a
-Commit bundle carries is already gated on its ciphersuite.
+A client can join a room by external Commit (protocol-07 §5.6), as the drafts describe and as mimid does it
+(`mimi-hubd/src/external_join.rs`, `group_info_endpoint.rs`):
+
+- **Whether the room allows it**: its `mls_operational_policy` component's `external_commit_allowed` (DIV-18). A room
+  with no such component follows MLS, where an external join is possible; a deployment can refuse those rooms instead
+  (`external_commit_when_unset = "deny"` in the hub policy).
+- **Who may join**: a listed participant whose role holds `canAddOwnClient` (a new client of its user), or an unlisted
+  user when role 0 holds `canOpenJoin`, whose external Commit then adds that user, and only that user, to the
+  participant list. A room with no roles has no role checks (room-policy PR #52). Preauthorized users are not read and
+  joining codes are refused: not built yet.
+- **`POST /groupInfo/{roomId}`**: the request's `SignWithLabel` must verify, its BasicCredential must name a user of
+  the provider the request's proof authenticates, and the user must be one who may join. The answer is the room's last
+  Full GroupInfo, its tree as a `full` RatchetTreeOption and the proposals held for the epoch with the time each was
+  accepted, `EncryptWithLabel`ed to the request's key with the room ID as context, and signed by the hub's own MLS key
+  (`MIMI_HUB_MLS_KEY`) as `hub_sender`, credential `mimi://<hub domain>`. Every refusal is `notAuthorized`, the code
+  §5.6 has; a room this hub does not host is `404`, as mimid answers `noSuchRoom`. A hub with no MLS key answers every
+  request `notAuthorized`. Mark's proposed `externalJoinNotAllowed` code is not used until a draft defines it.
+- **The GroupInfo kept** is the Full one the room's last accepted Commit (or the bundle that seeded it) carried, and
+  only while the room allows external Commits. After a Commit with a Partial GroupInfo or none, none is kept until the
+  next Full one: a Partial one is not completed from the tree (DIV-12).
+- **An external Commit on `update`** is verified against the room's tree like any other (openmls `PublicGroup`), and is
+  refused (`notAllowed`, with the reason) when the room does not allow it, when its joiner may not join, when it changes
+  anything but its joiner's own entry in the list, when proposals are held for the epoch, or when the hub keeps no tree
+  for the room (an untracked room refuses every external Commit, since nothing could verify it).
+- **No `externalProposals` staple**: §5.5 lets the hub re-issue, as its own external proposals, the held proposals an
+  external Commit invalidates. That needs the hub listed in each group's `external_senders`, which groups do not do, so
+  this hub refuses an external Commit while proposals are held instead, as mimid does, and its `externalProposals` is
+  always empty.
 
 ## DIV-2 - CLOSED: the accepted ciphersuites are a setting
 
@@ -359,6 +381,21 @@ of `update`'s codec: no live accept-path exists yet. The wire vectors fill it wi
 (see DIV-12), not filler bytes, so a decoder that reads it is not thrown by them. A `Full` `GroupInfoOption` is read raw and
 suite-gated; a `Partial` one stays an opaque length-prefixed blob (DIV-12).
 
+## DIV-18 - the operational policy component: kept, two flags enforced
+
+`mls_operational_policy` (`0x0024`, room-policy-04 §7.1, `OperationalParameters`) is read whole
+(`mimi-core/src/operational_parameters.rs`) and kept per room whose tree the hub keeps: from the GroupContext when the
+room is seeded, and from an AppDataUpdate in a Commit. Where -04 leaves a type undefined it is read as MLS defines the
+name: `WireFormats` as a `WireFormat` (`uint16`), `ContentType` as MLS's (`uint8`), `ComponentID` as mls-extensions-10
+has it (`uint16`), `MediaType` as its §6.2.2 struct, and `unit64` as `uint64`. `PendingProposalPolicy`'s `extension` arm
+names no enum value, so only `unspecified`, `immediate_commit` and `random_delay` are read.
+
+Enforced: `external_commit_allowed` (DIV-1). `external_proposal_allowed` can only narrow what the hub takes, since it
+accepts no external proposal from a peer (INV-MLS-001b); it is kept and not otherwise acted on. Every other field is
+kept and not enforced. A change to the component needs the proposer's role to hold `canChangeMlsOperationalPolicies`
+(`0x0600`), which -04 lists as reserved: this hub reads it as the draft's own capability for the change, pending the
+draft's answer, and a room with no roles has no role checks (room-policy PR #52).
+
 ## DIV-12 - a `Partial` `GroupInfoOption` payload carries a length prefix
 
 §5.3 writes the `GroupInfoOption` payload raw: a `GroupInfo` for `full`, a `PartialGroupInfo`
@@ -400,7 +437,7 @@ own or a wider `noCompatibleMaterial`. This crate reads that other form: a test 
 `noCompatibleMaterial` with every client `keyMaterialExhausted` (one client, or several) and checks it
 is read and written back unchanged. The hub still sends `partialSuccess`, until the issue is settled.
 
-## DIV-15 - two room-policy components are read; the other eleven are refused
+## DIV-15 - three room-policy components are read; the other ten are refused
 
 `update` reads a participant-list change from either of two carriers: an AppDataUpdate
 (mls-extensions-10 §4.7, proposal type `0x0008` as its §7.2.1 suggests) addressed to
@@ -429,10 +466,17 @@ named `banned` is refused: room-policy-04 says the banned role "always has role_
 that it "does not have to exist", and this hub reads that as fixing the name of whatever role holds index 1.
 
 What the hub keeps of them: of a role, its index, its name, its `authorized_role_changes`, and the capabilities
-`canAddParticipant` (`0x0000`), `canRemoveParticipant` (`0x0001`), `canRemoveSelf` (`0x0006`), `canBan` (`0x000a`),
-`canKick` (`0x000c`), `canChangeUserRole` (`0x000f`) and `canSendMessage` (`0x0100`). On every Commit, each role a
+`canAddParticipant` (`0x0000`), `canRemoveParticipant` (`0x0001`), `canAddOwnClient` (`0x0002`), `canOpenJoin`
+(`0x0004`), `canRemoveSelf` (`0x0006`), `canBan` (`0x000a`), `canKick` (`0x000c`), `canChangeUserRole` (`0x000f`),
+`canSendMessage` (`0x0100`) and `canChangeMlsOperationalPolicies` (`0x0600`, DIV-18). On every Commit, each role a
 participant-list change puts a user in must be one the room's policy defines (or 0, out of the room), so a ban into
 role 1 is refused while the list does not define role 1. A room with no policy is not checked at all.
+
+**Not checked yet, and it matters: who may change the roles or the base policy.** On a tracked room, any participant
+can propose a Commit that replaces the `roles_list` or the `base_room_policy`; the change is validated and applied,
+and its proposer's role is not consulted. Room-policy-04 has `canChangeRoleDefinitions` (`0x0503`) and
+`canChangeRoomMembershipStyle` (`0x0502`) for these; checking them for the proposer is the next part to build. A change
+to the operational policy is checked (DIV-18).
 
 **Who made a change is checked for a tracked room only** (one whose ratchet tree the hub keeps, DIV-10). There the
 sender's leaf maps to a member, and room-policy-04 §8.1 authorizes each change for its proposer: the committer for a
@@ -474,9 +518,9 @@ in all, 1 KiB a text, 4 KiB a description, 16 descriptions, UTF-8 without NUL, a
 this room is stored as sent, replacing the last one, alone or beside the changes above. It is display data and the hub
 enforces nothing from it; who may change it is not checked, since no capability for it is kept.
 
-The other eleven components are refused as an unrecognized proposal type, as are a removal of any component and an
-AppSync proposal, so a sender is told
-the change was not applied and never that it was: `mls_operational_policy` (`0x0024`), `preauth_list`
+`mls_operational_policy` (`0x0024`) is read and kept (DIV-18). The other ten components are refused as an unrecognized
+proposal type, as are a removal of any component and an AppSync proposal, so a sender is told
+the change was not applied and never that it was: `preauth_list`
 (`0x0026`), `status_notification_policy` (`0x0028`), `join_link_policy` (`0x0029`), `join_links`
 (`0x002a`), `link_preview_policy` (`0x002b`), `asset_policy` (`0x002c`), `logging_policy` (`0x002d`),
 `chat_history_policy` (`0x002e`), `bot_policy` (`0x002f`) and `message_expiration_policy` (`0x0030`).

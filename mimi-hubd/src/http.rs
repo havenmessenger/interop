@@ -122,6 +122,10 @@ fn wire_router() -> Router<SharedProvider> {
         )
         .route("/mimi/pl/reportAbuse/:room_id", post(report_abuse_wire))
         .route("/mimi/pl/update/:room_id", post(update_wire))
+        .route(
+            "/mimi/pl/groupInfo/:room_id",
+            post(crate::group_info_endpoint::group_info_wire),
+        )
         .layer(axum::middleware::map_response(label_wire_body))
         .layer(axum::middleware::from_fn(check_from_header))
 }

@@ -13,9 +13,9 @@ flow, the room-policy RBAC, the ciphersuite restriction) faithfully, but its req
 are not the TLS presentation-language framing `draft-ietf-mimi-protocol` defines.
 
 **`/mimi/pl/*`** is the draft's actual wire framing (TLS presentation language, RFC 8446 §3), routed
-for eight endpoints: `submitMessage` (§5.4), `requestConsent`/`updateConsent` (§5.7), `keyMaterial`
-(§5.2), `notify` inbound-receive (§5.5), `identifierQuery` (§5.8), `reportAbuse` (§5.9), and
-`update` (§5.3, bounded - see below). Every wire route decodes the same bytes a strict protocol-07
+for nine endpoints: `submitMessage` (§5.4), `requestConsent`/`updateConsent` (§5.7), `keyMaterial`
+(§5.2), `notify` inbound-receive (§5.5), `identifierQuery` (§5.8), `reportAbuse` (§5.9), `groupInfo` (§5.6, for an
+external join; DIV-1), and `update` (§5.3, bounded - see below). Every wire route decodes the same bytes a strict protocol-07
 client would send and calls the identical business logic the JSON lane calls, so state written
 through one lane is readable through the other (proven below for `keyMaterial`). The path segment
 on the request/consent/keyMaterial/update/reportAbuse routes plays the same opaque routing-key role
@@ -300,6 +300,7 @@ the file - see [`debian/mimi-hubd.toml.example`](debian/mimi-hubd.toml.example) 
 | `MIMI_CLIENT_CERT` | `client_cert` | no | `MIMI_SERVER_CERT`, for a hub that does not sign | PEM path of the certificate outbound requests present, with `MIMI_CLIENT_KEY`. With a signing key set and this unset, no client certificate is presented. Set both or neither. |
 | `MIMI_SIGNING_KEY` | `signing_key` | no | none | Path of a file holding the provider's request-signing key, a base64 32-byte Ed25519 seed (for example `head -c 32 /dev/urandom` encoded as base64), mode 0600, never in a repository. With it, every outbound request is signed. Set with `MIMI_SIGNING_SELECTOR`. |
 | `MIMI_SIGNING_SELECTOR` | `signing_selector` | no | none | The key's DNS selector: its public half is the TXT record `v=MIMI1; k=ed25519; p=...` at `<selector>._mimi.<MIMI_PROVIDER_DOMAIN>`. |
+| `MIMI_HUB_MLS_KEY` | `hub_mls_key` | no | none | Path of a file holding the hub's own MLS signing key, a base64 32-byte Ed25519 seed, mode 0600, kept apart from `MIMI_SIGNING_KEY`. It signs `groupInfo` answers as the hub's `hub_sender` (credential `mimi://<MIMI_PROVIDER_DOMAIN>`). Unset, every `groupInfo` request is answered `notAuthorized`. |
 | `MIMI_CLIENT_KEY` | `client_key` | no | `MIMI_SERVER_KEY` | PEM path of that certificate's key. |
 | `MIMI_PEERS` | `peers` | no | none | A TOML file of `"<peer domain>" = "https://<base>"`, for a peer whose directory is not at `https://<domain>` (mimid serves it at its configured base, such as `https://mimi.a.example`). A base outside the peer's domain stops the start. |
 
@@ -326,6 +327,9 @@ identifier_discovery = "enrolled"
 # Refuse a signed keyMaterial request that carries no nonce (default false: provider-auth -00 has no nonce). A
 # repeated nonce is always refused.
 require_nonce_on_key_material = true
+# An external Commit to a room whose operational policy says nothing: "allow" (default, as MLS: subject to who may
+# join) or "deny".
+external_commit_when_unset = "allow"
 ```
 
 A key the hub does not know, an empty suite list, or a suite the crypto provider does not implement stops the start,

@@ -34,6 +34,7 @@ const KNOWN_KEYS: &[&str] = &[
     "peers",
     "signing_key",
     "signing_selector",
+    "hub_mls_key",
 ];
 
 /// The settings this daemon takes from env vars, also loadable from a TOML file. Field names match the env var suffix in lowercase (`MIMI_PROVIDER_DOMAIN` ->
@@ -71,6 +72,8 @@ pub struct ConfigFile {
     /// The file holding the provider's request-signing key (a base64 32-byte Ed25519 seed), with its DNS selector.
     pub signing_key: Option<String>,
     pub signing_selector: Option<String>,
+    /// The file holding the hub's own MLS signing key (a base64 32-byte Ed25519 seed), which signs GroupInfoResponses.
+    pub hub_mls_key: Option<String>,
 }
 
 impl ConfigFile {
@@ -120,6 +123,7 @@ impl ConfigFile {
             "peers" => self.peers.as_ref(),
             "signing_key" => self.signing_key.as_ref(),
             "signing_selector" => self.signing_selector.as_ref(),
+            "hub_mls_key" => self.hub_mls_key.as_ref(),
             _ => None,
         }
     }
@@ -309,6 +313,11 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
     m.insert(
         "MIMI_SIGNING_SELECTOR",
         resolve("MIMI_SIGNING_SELECTOR", "signing_selector", file, None),
+    );
+    // No default: without it the hub answers every groupInfo request notAuthorized.
+    m.insert(
+        "MIMI_HUB_MLS_KEY",
+        resolve("MIMI_HUB_MLS_KEY", "hub_mls_key", file, None),
     );
     m
 }

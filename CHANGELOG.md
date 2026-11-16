@@ -41,6 +41,13 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   presents a client certificate only when `MIMI_CLIENT_CERT` names one. Inbound, `From` is required on every peer
   request and must name a domain its proof authenticates; a signature's nonce is refused the second time within its
   window; the policy setting `require_nonce_on_key_material` refuses a signed keyMaterial request without one.
+- A client can join a room by external Commit where the room allows it (protocol-07 §5.6): mimi-hubd keeps each
+  tracked room's `mls_operational_policy` (mimi-core reads the whole component) and its last Full GroupInfo, serves
+  `POST /groupInfo/{roomId}` (the answer encrypted to the requester and signed with the hub's own MLS key,
+  `MIMI_HUB_MLS_KEY`), and accepts an external Commit from a joiner the room's roles admit (`canAddOwnClient`,
+  `canOpenJoin`), never while proposals are held. A change to the operational policy needs
+  `canChangeMlsOperationalPolicies`. The hub policy gains `external_commit_when_unset`. mimi-core reads an external
+  Commit (`new_member_commit`, its `ExternalInit`) and gains the groupInfo wire types.
 
 ## 0.1.0 - 2026-11-16
 

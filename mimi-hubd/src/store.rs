@@ -21,6 +21,8 @@ pub enum KeyClaim {
     NoneCompatible,
 }
 
+#[path = "store_external.rs"]
+mod external;
 #[path = "store_follow.rs"]
 mod follow;
 #[path = "store_outbox.rs"]
@@ -322,6 +324,7 @@ impl SqliteStore {
         conn.execute_batch(SCHEMA)?;
         conn.execute_batch(outbox::SCHEMA)?;
         conn.execute_batch(follow::SCHEMA)?;
+        conn.execute_batch(external::SCHEMA)?;
         // Migration (L1): notify_seen gained `seen_at` after its initial release, needed to sweep
         // an otherwise permanently-growing dedup ledger. `CREATE TABLE IF NOT EXISTS` above is a
         // no-op against a pre-existing DB missing the column, so add it explicitly; ignore only the

@@ -11,6 +11,9 @@
 //! # Refuse a signed keyMaterial request that carries no nonce. Default false: draft-atwood-mimi-provider-auth-00 has no
 //! # nonce. A repeated nonce is refused whatever this says.
 //! require_nonce_on_key_material = true
+//! # An external Commit to a room whose operational policy says nothing (no mls_operational_policy component):
+//! # "allow" (default, as MLS: subject to who may join) or "deny".
+//! external_commit_when_unset = "allow"
 //! ```
 //!
 //! A named file the hub cannot read, a key it does not know, an empty suite list or a suite the crypto provider does not
@@ -31,6 +34,17 @@ pub enum Discovery {
     Enrolled,
 }
 
+/// What an external Commit to a room with no `mls_operational_policy` component meets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExternalCommitWhenUnset {
+    /// As MLS: an external join is possible, subject to who may join.
+    #[default]
+    Allow,
+    /// Refused, as if the room's policy said `external_commit_allowed = false`.
+    Deny,
+}
+
 /// The deployment's choices; [`Default`] is the drafts' behaviour.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -40,6 +54,7 @@ pub struct HubPolicy {
     pub identifier_discovery: Discovery,
     /// Refuse a signed keyMaterial request with no `nonce`: a replayed one would take another KeyPackage.
     pub require_nonce_on_key_material: bool,
+    pub external_commit_when_unset: ExternalCommitWhenUnset,
 }
 
 impl Default for HubPolicy {
@@ -48,6 +63,7 @@ impl Default for HubPolicy {
             mls_ciphersuites: mimi_core::gate::default_mls_ciphersuites(),
             identifier_discovery: Discovery::default(),
             require_nonce_on_key_material: false,
+            external_commit_when_unset: ExternalCommitWhenUnset::default(),
         }
     }
 }
@@ -94,9 +110,13 @@ impl HubPolicy {
             Discovery::Enrolled => "enrolled",
         };
         format!(
-            "mls_ciphersuites={} identifier_discovery={discovery} require_nonce_on_key_material={}",
+            "mls_ciphersuites={} identifier_discovery={discovery} require_nonce_on_key_material={} external_commit_when_unset={}",
             hex_list(&self.mls_ciphersuites),
-            self.require_nonce_on_key_material
+            self.require_nonce_on_key_material,
+            match self.external_commit_when_unset {
+                ExternalCommitWhenUnset::Allow => "allow",
+                ExternalCommitWhenUnset::Deny => "deny",
+            }
         )
     }
 }

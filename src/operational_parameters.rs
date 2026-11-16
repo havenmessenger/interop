@@ -9,6 +9,11 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The `mls_operational_policy` component's ID (room-policy-04 §10.1.1; suggested, not yet registered).
+pub const OPERATIONAL_POLICY_COMPONENT_ID: u16 = 0x0024;
+/// The private proposal type an AppDataUpdate for this component is read as, like the other room-policy components.
+pub const MIMI_OPERATIONAL_POLICY_PROPOSAL_TYPE: u16 = 0xF7A6;
+
 use crate::room_policy::RoomPolicyError;
 use crate::room_policy_wire::{put_run, refuse, Reader};
 
