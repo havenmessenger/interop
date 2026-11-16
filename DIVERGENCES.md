@@ -401,8 +401,9 @@ A tracked room's policy and list are its group's. When the room is seeded, the G
 room with no policy), and every participant it lists must be in the tree. Room-policy PR
 [#52](https://github.com/ietf-wg-mimi/mimi-room-policy/pull/52), still open, sets a `roles_list` when the MLS group is
 created: a Commit that adds a `roles_list` to a group that has none is invalid, and a room with no `roles_list` has no
-role-based restrictions. The hub follows it for tracked rooms and refuses such a Commit; an untracked room still takes
-its first role list by Commit, as below. The operator's `roomPolicy`, `memberRole` and `addParticipant` answer 409 for
+role-based restrictions. Room-policy-04 as written does not say whether a first `roles_list` may arrive by Commit;
+this reading is the PR's, not -04's. The hub follows it for tracked rooms and refuses such a Commit; an untracked room
+still takes its first role list by Commit, as below. The operator's `roomPolicy`, `memberRole` and `addParticipant` answer 409 for
 a tracked room.
 `canSendMessage` is enforced where the hub sees the sender, on `submitMessage`, by the sender's role (§8.3). The other capability values (uploads, calls, room attributes
 and the rest of the registry, which is open to additions) are read for their shape and not carried, so a
