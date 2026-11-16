@@ -25,8 +25,11 @@
 pub mod activity;
 pub mod admin;
 pub mod enroll;
+pub mod group_store;
 pub mod http;
 pub mod identifier_search;
+#[cfg(test)]
+mod mls_fixtures;
 pub mod notify_source;
 pub mod peer;
 pub mod policy;

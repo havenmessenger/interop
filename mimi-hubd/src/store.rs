@@ -25,6 +25,13 @@ pub struct SqliteStore {
     conn: Connection,
 }
 
+impl SqliteStore {
+    /// The store's public MLS group state, as openmls reads and writes it.
+    pub fn groups(&self) -> crate::group_store::GroupStore<'_> {
+        crate::group_store::GroupStore::new(&self.conn)
+    }
+}
+
 const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS keypackages (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -165,6 +172,25 @@ CREATE TABLE IF NOT EXISTS pending_proposals (
 CREATE TABLE IF NOT EXISTS room_epoch (
     room_uri TEXT PRIMARY KEY,
     epoch    INTEGER NOT NULL
+);
+
+-- A room's public MLS group state, as openmls's PublicGroup writes it (group_store.rs): the ratchet tree, the
+-- GroupContext, the interim transcript hash and the confirmation tag, one row each, keyed by the group's id as openmls
+-- serializes it. Public state only: nothing here opens a message.
+CREATE TABLE IF NOT EXISTS mls_public_group (
+    group_id BLOB NOT NULL,
+    label    TEXT NOT NULL,
+    value    BLOB NOT NULL,
+    PRIMARY KEY (group_id, label)
+);
+
+-- Proposals a room's PublicGroup holds for its next Commit, in the order they were queued.
+CREATE TABLE IF NOT EXISTS mls_public_proposal (
+    group_id     BLOB NOT NULL,
+    proposal_ref BLOB NOT NULL,
+    proposal     BLOB NOT NULL,
+    seq          INTEGER NOT NULL,
+    PRIMARY KEY (group_id, proposal_ref)
 );
 ";
 
