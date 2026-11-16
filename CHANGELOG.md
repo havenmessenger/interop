@@ -6,6 +6,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `roomPolicy`, `memberRole` and `addParticipant` are the operator's: they are served only on a loopback listener of
+  their own, `MIMI_ADMIN_BIND_ADDR` (`admin_bind_addr`), with no client certificate, and the peer listener answers 404
+  for them. The hub does not start if that address is not loopback. Unset, there is no such listener.
+  `examples/seed_table.sh` sets up its room through it, on the hub's host.
 - `notify` refuses an application message, a Commit or a proposal for a room hosted on another hub with 422 and the
   RFC 9457 problem `remote-room-not-delivered`, instead of answering 201 for a message it does not deliver. A Welcome
   is still queued and answered 201.

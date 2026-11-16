@@ -21,6 +21,7 @@ const KNOWN_KEYS: &[&str] = &[
     "server_key",
     "client_ca",
     "directory_bind_addr",
+    "admin_bind_addr",
     "public_base_url",
     "activity_log",
     "peer_keys",
@@ -38,6 +39,8 @@ pub struct ConfigFile {
     pub client_ca: Option<String>,
     /// Where the directory-only listener binds. Unset means there is none.
     pub directory_bind_addr: Option<String>,
+    /// Where the operator's listener binds, a loopback address only. Unset means there is none.
+    pub admin_bind_addr: Option<String>,
     pub public_base_url: Option<String>,
     /// `1` turns on the activity line (see `activity.rs`). Anything else, or no value, leaves it off.
     pub activity_log: Option<String>,
@@ -78,6 +81,7 @@ impl ConfigFile {
             "server_key" => self.server_key.as_ref(),
             "client_ca" => self.client_ca.as_ref(),
             "directory_bind_addr" => self.directory_bind_addr.as_ref(),
+            "admin_bind_addr" => self.admin_bind_addr.as_ref(),
             "public_base_url" => self.public_base_url.as_ref(),
             "activity_log" => self.activity_log.as_ref(),
             "peer_keys" => self.peer_keys.as_ref(),
@@ -218,6 +222,11 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
             None,
         ),
     );
+    // No default: the operator's listener exists only where an operator asks for it, and only on loopback.
+    m.insert(
+        "MIMI_ADMIN_BIND_ADDR",
+        resolve("MIMI_ADMIN_BIND_ADDR", "admin_bind_addr", file, None),
+    );
     m.insert(
         "MIMI_PUBLIC_BASE_URL",
         resolve("MIMI_PUBLIC_BASE_URL", "public_base_url", file, None),
@@ -248,6 +257,7 @@ mod tests {
             "MIMI_SERVER_KEY",
             "MIMI_CLIENT_CA",
             "MIMI_DIRECTORY_BIND_ADDR",
+            "MIMI_ADMIN_BIND_ADDR",
             "MIMI_PUBLIC_BASE_URL",
             "MIMI_ACTIVITY_LOG",
         ] {
@@ -314,6 +324,27 @@ mod tests {
         assert_eq!(
             resolve_all(Some(&file))["MIMI_DIRECTORY_BIND_ADDR"].as_deref(),
             Some("192.0.2.2:8448")
+        );
+    }
+
+    #[test]
+    fn the_operator_listener_exists_only_where_it_is_asked_for() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_env();
+        assert_eq!(resolve_all(None)["MIMI_ADMIN_BIND_ADDR"], None);
+        std::env::set_var("MIMI_ADMIN_BIND_ADDR", "127.0.0.1:8445");
+        assert_eq!(
+            resolve_all(None)["MIMI_ADMIN_BIND_ADDR"].as_deref(),
+            Some("127.0.0.1:8445")
+        );
+        clear_env();
+        let file = ConfigFile {
+            admin_bind_addr: Some("[::1]:8445".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_all(Some(&file))["MIMI_ADMIN_BIND_ADDR"].as_deref(),
+            Some("[::1]:8445")
         );
     }
 

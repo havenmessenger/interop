@@ -11,10 +11,10 @@
 //!   POST /mimi/v1/identifierQuery                  (opt-in only; DIV-4, leak-free)
 //!   POST /mimi/v1/requestConsent                   (§5.7 C1, always 201, privacy)
 //!   POST /mimi/v1/updateConsent                    (§5.7 C2, always 201, privacy)
-//!   POST /mimi/v1/roomPolicy?room=                  (P1-P6, set a room's RBAC policy)
-//!   POST /mimi/v1/memberRole?room=&member=&role=    (P1, assign a member's role)
-//!   POST /mimi/v1/addParticipant?room=&member=      (R1, register a room participant)
 //!   POST /mimi/v1/authorizeSender?room=&sender=     (M2/R3/P5, 200 allow / 403 blocked)
+//!
+//! The operator's own routes (`roomPolicy`, `memberRole`, `addParticipant`) are not mounted here: they are served on a
+//! loopback listener of their own ([`crate::admin`]).
 //!
 //! Wire lane (protocol-07 §5 TLS presentation language, alongside the JSON compat lane above; a
 //! foreign implementation speaking the draft's actual wire format hits these instead):
@@ -71,9 +71,6 @@ pub fn build_router(provider: SharedProvider) -> Router {
         .route("/mimi/v1/identifierQuery", post(identifier_query))
         .route("/mimi/v1/requestConsent", post(request_consent)) // §5.7 C1, always 201 (privacy)
         .route("/mimi/v1/updateConsent", post(update_consent)) // §5.7 C2, always 201 (privacy)
-        .route("/mimi/v1/roomPolicy", post(set_room_policy)) // P1-P6, hub sets a room's RBAC policy
-        .route("/mimi/v1/memberRole", post(set_member_role)) // P1, assign a member's role in a room
-        .route("/mimi/v1/addParticipant", post(add_participant)) // R1, register a room participant
         .route("/mimi/v1/authorizeSender", post(authorize_sender)) // M2/R3/P5, may this member send?
         .merge(wire_router())
         .with_state(provider)
@@ -889,25 +886,19 @@ fn operation_is_one_of(body: &[u8], allowed: &[ConsentOperation]) -> bool {
         .is_none_or(|byte| allowed.iter().any(|op| u8::from(*op) == *byte))
 }
 
-// 🔴 SECURITY SCOPE (reference hub) - the mutating policy/membership endpoints below
-// (roomPolicy/memberRole/addParticipant) are gated by (1) mTLS peer-trust (only an allowlisted peer
-// presenting a cert signed by the configured CA can reach the hub at all; it is not public) and
-// (2) hub-of-record (a hub may only mutate rooms whose URI authority is its own domain). They do
-// not yet verify a per-caller room-admin principal: within the trusted peer set, any caller may
-// administer this hub's rooms. This matches the rest of the reference implementation
-// (publish_key_package / relay_welcome etc. also trust the mTLS peer with no user-auth layer).
-// Production hardening needed before these carry real user data: bind an authenticated principal
-// (mTLS-derived identity, not the client-asserted From header) and require it to hold an admin role
-// for `q.room` per the RoomPolicy before mutating.
+// The operator's routes below (roomPolicy/memberRole/addParticipant) set what a room allows. No peer reaches them:
+// they are mounted only by `crate::admin::build_admin_router`, which the daemon serves on a loopback address with no
+// client certificate, so the caller is the hub's operator on the hub's host. Each still checks that the room is one
+// this hub hosts.
 #[derive(Deserialize)]
-struct RoomQuery {
+pub(crate) struct RoomQuery {
     room: String,
 }
 
 /// Set a room's RBAC policy (P1-P6). `?room=<uri>` + JSON RoomPolicy body. Hub-of-record gated +
 /// validated (P1/P3 well-formedness) before storage. 201 on accept, 400 on a malformed/invalid policy or
 /// a room we don't host.
-async fn set_room_policy(
+pub(crate) async fn set_room_policy(
     State(p): State<SharedProvider>,
     Query(q): Query<RoomQuery>,
     Json(policy): Json<mimi_core::room_policy::RoomPolicy>,
@@ -919,7 +910,7 @@ async fn set_room_policy(
 }
 
 #[derive(Deserialize)]
-struct MemberRoleQuery {
+pub(crate) struct MemberRoleQuery {
     room: String,
     member: String,
     role: u32,
@@ -927,7 +918,7 @@ struct MemberRoleQuery {
 
 /// Assign a member's role in a room (P1: one role per member). `?room=&member=&role=`. Hub-of-record
 /// gated. 201 on accept, 400 if we don't host the room.
-async fn set_member_role(
+pub(crate) async fn set_member_role(
     State(p): State<SharedProvider>,
     Query(q): Query<MemberRoleQuery>,
 ) -> Response {
@@ -938,14 +929,14 @@ async fn set_member_role(
 }
 
 #[derive(Deserialize)]
-struct ParticipantQuery {
+pub(crate) struct ParticipantQuery {
     room: String,
     member: String,
 }
 
 /// Register a participant in a room (R1; the routing/membership list). `?room=&member=`. Hub-of-record
 /// gated; the member's provider authority is derived from its URI. 201 on accept, 400 otherwise.
-async fn add_participant(
+pub(crate) async fn add_participant(
     State(p): State<SharedProvider>,
     Query(q): Query<ParticipantQuery>,
 ) -> Response {
@@ -1205,7 +1196,8 @@ mod tests {
         let p = Arc::new(Mutex::new(
             Provider::in_memory("mimi.havenmessenger.com").unwrap(),
         ));
-        let router = build_router(p.clone());
+        // The operator's routes and a peer's question, as one router for the test.
+        let router = build_router(p.clone()).merge(crate::admin::build_admin_router(p.clone()));
         let room = "mimi://mimi.havenmessenger.com/r/x";
         let alice = "mimi://mimi.havenmessenger.com/u/alice";
         // set a minimal valid policy (member role 3 with SendMessage)
@@ -1283,7 +1275,8 @@ mod tests {
         let p = Arc::new(Mutex::new(
             Provider::in_memory("mimi.havenmessenger.com").unwrap(),
         ));
-        let router = build_router(p.clone());
+        // The operator's routes and a peer's question, as one router for the test.
+        let router = build_router(p.clone()).merge(crate::admin::build_admin_router(p.clone()));
         let room = "mimi://mimi.havenmessenger.com/r/x";
         let alice = "mimi://mimi.havenmessenger.com/u/alice";
         let mallory = "mimi://mimi.havenmessenger.com/u/mallory";

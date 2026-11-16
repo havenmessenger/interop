@@ -23,6 +23,7 @@
 //! assets+OHTTP §5.10 (DIV-3).
 
 pub mod activity;
+pub mod admin;
 pub mod enroll;
 pub mod http;
 pub mod identifier_search;

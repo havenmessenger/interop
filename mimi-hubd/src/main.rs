@@ -16,6 +16,8 @@
 //!                          (mTLS peer-trust allowlist; see README.md for how to generate one)
 //!   MIMI_ACTIVITY_LOG      optional; 1 prints one line per peer request (method, route template, status); off otherwise
 //!   MIMI_DIRECTORY_BIND_ADDR  optional; a second listener, plain HTTP, that serves the directory document only
+//!   MIMI_ADMIN_BIND_ADDR   optional; the operator's listener, plain HTTP on a loopback address only (127.0.0.0/8 or
+//!                          ::1), serving roomPolicy, memberRole and addParticipant; any other address stops the start
 //!   MIMI_PEER_KEYS         optional; JSON file of DNS-published peer keys ("<keyid>._mimi.<domain>": base64), kept
 //!                          current by a job on the host; without it only a client certificate admits a peer
 //!
@@ -36,6 +38,7 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use mimi_hubd::{
     activity::{enabled as activity_enabled, with_activity_log},
+    admin::{admin_bind_addr, build_admin_router},
     enroll::enroll_handle,
     http::{build_directory_router, build_router},
     tls, Provider,
@@ -112,6 +115,12 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("[mimi-hubd] client CA in the bundle: sha256={fingerprint}");
     }
     let tls_config = tls::build_mtls_server_config(&server_cert, &server_key, &client_ca)?;
+    // The operator's address is checked before any state is opened, like the certificates: a hub asked to serve its
+    // operator's routes beyond loopback does not start.
+    let admin_addr = resolved["MIMI_ADMIN_BIND_ADDR"]
+        .as_deref()
+        .map(admin_bind_addr)
+        .transpose()?;
 
     let mut provider = Provider::open(&domain, &db_path)?;
     if let Some(url) = &resolved["MIMI_PUBLIC_BASE_URL"] {
@@ -130,6 +139,20 @@ async fn main() -> anyhow::Result<()> {
         activity_enabled(resolved["MIMI_ACTIVITY_LOG"].as_deref()),
         Arc::new(|line| eprintln!("{line}")),
     );
+
+    // The operator's listener, when asked for: loopback only, no client certificate, the three operator routes.
+    if let Some(addr) = admin_addr {
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        let admin = build_admin_router(shared.clone());
+        eprintln!(
+            "[mimi-hubd] operator routes (loopback, no client certificate) listening on {addr}"
+        );
+        tokio::spawn(async move {
+            if let Err(error) = axum::serve(listener, admin).await {
+                eprintln!("[mimi-hubd] operator listener stopped: {error}");
+            }
+        });
+    }
 
     // The directory-only listener, when asked for. Plain HTTP, no client certificate: it answers one GET with the
     // directory document and nothing else, and is meant to sit behind whatever terminates TLS for the public name.
