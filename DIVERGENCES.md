@@ -470,15 +470,16 @@ that it "does not have to exist", and this hub reads that as fixing the name of 
 What the hub keeps of them: of a role, its index, its name, its `authorized_role_changes`, and the capabilities
 `canAddParticipant` (`0x0000`), `canRemoveParticipant` (`0x0001`), `canAddOwnClient` (`0x0002`), `canOpenJoin`
 (`0x0004`), `canRemoveSelf` (`0x0006`), `canBan` (`0x000a`), `canKick` (`0x000c`), `canChangeUserRole` (`0x000f`),
-`canSendMessage` (`0x0100`) and `canChangeMlsOperationalPolicies` (`0x0600`, DIV-18). On every Commit, each role a
+`canSendMessage` (`0x0100`), `canChangeRoomMembershipStyle` (`0x0502`), `canChangeRoleDefinitions` (`0x0503`) and
+`canChangeMlsOperationalPolicies` (`0x0600`, DIV-18). On every Commit, each role a
 participant-list change puts a user in must be one the room's policy defines (or 0, out of the room), so a ban into
 role 1 is refused while the list does not define role 1. A room with no policy is not checked at all.
 
-**Not checked yet, and it matters: who may change the roles or the base policy.** On a tracked room, any participant
-can propose a Commit that replaces the `roles_list` or the `base_room_policy`; the change is validated and applied,
-and its proposer's role is not consulted. Room-policy-04 has `canChangeRoleDefinitions` (`0x0503`) and
-`canChangeRoomMembershipStyle` (`0x0502`) for these; checking them for the proposer is the next part to build. A change
-to the operational policy is checked (DIV-18).
+**Who may change the room's policy**, on a tracked room: a change to the `roles_list` needs the proposer's role to hold
+`canChangeRoleDefinitions` (`0x0503`), to the `base_room_policy` `canChangeRoomMembershipStyle` (`0x0502`), and to the
+operational policy `canChangeMlsOperationalPolicies` (`0x0600`, DIV-18) (room-policy-04 §8.6). These changes arrive by
+value, so the proposer is the committer. A room with no roles has no role checks, and its first `roles_list` by Commit
+is refused (room-policy PR #52, below). On an untracked room the proposer is not known, so none of this is checked.
 
 **Who made a change is checked for a tracked room only** (one whose ratchet tree the hub keeps, DIV-10). There the
 sender's leaf maps to a member, and room-policy-04 §8.1 authorizes each change for its proposer: the committer for a

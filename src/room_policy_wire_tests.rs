@@ -111,6 +111,8 @@ fn each_enforced_capability_has_its_registry_value_and_the_others_are_dropped() 
         (0x000c, Capability::Kick),
         (0x000f, Capability::ChangeRole),
         (0x0100, Capability::SendMessage),
+        (0x0502, Capability::ChangeRoomMembershipStyle),
+        (0x0503, Capability::ChangeRoleDefinitions),
         (0x0600, Capability::ChangeMlsOperationalPolicies),
     ] {
         assert_eq!(capability_from_wire(value), Some(capability));

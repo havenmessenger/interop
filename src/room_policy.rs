@@ -66,6 +66,10 @@ pub enum Capability {
     /// `canChangeMlsOperationalPolicies`: the holder may change the room's `mls_operational_policy`. Listed "(reserved)"
     /// in room-policy-04; read here as the draft's own capability for that change.
     ChangeMlsOperationalPolicies,
+    /// `canChangeRoomMembershipStyle`: the holder may change the room's `base_room_policy`.
+    ChangeRoomMembershipStyle,
+    /// `canChangeRoleDefinitions`: the holder may change the room's `roles_list`.
+    ChangeRoleDefinitions,
 }
 
 /// room-policy-04 §8.1 `SingleSourceRoleChangeTargets` - from one role, which target roles a change may

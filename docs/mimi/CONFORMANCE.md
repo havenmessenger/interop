@@ -128,6 +128,7 @@ mechanism and a client calls it.
 | P2 | 3, 8.6 | A role-list change is not in the same Commit as a participant-list change | Implemented | `check_changes` |
 | P3 | 5 | Fixed membership, `max_clients`, `max_users` | Partly | Kept, not enforced on a Commit (DIV-15) |
 | P4 | 8.1 | Who may make a role change (`authorized_role_changes`, `canBan`, ...) | Implemented for tracked rooms | Each change authorized for its proposer, `canRemoveSelf` for one's own leave; `canChangeOwnRole`, counts and Removes without a list change not built yet; untracked rooms not checked (DIV-15) |
+| P7 | 8.6 | Who may change the room's roles, base policy and operational policy | Implemented for tracked rooms | `canChangeRoleDefinitions`, `canChangeRoomMembershipStyle`, `canChangeMlsOperationalPolicies` for the proposer (DIV-15, DIV-18) |
 | P5 | 8.3 | Hub enforces `canSendMessage` | Implemented | `authorize_sender`, by the sender's role |
 | P6 | 9 | One stored policy is the authority at each check | Implemented | `room_policy` table |
 

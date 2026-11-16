@@ -45,6 +45,7 @@ P3
 P4
 P5
 P6
+P7
 
 # virtual-clients / replay-guard conformance rows
 R1

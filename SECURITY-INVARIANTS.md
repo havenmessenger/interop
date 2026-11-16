@@ -59,7 +59,8 @@ client, `canOpenJoin` on role 0 for an unlisted one, `mimi-hubd/src/external_joi
 for the epoch; and changing nothing but the joiner's own entry in the list. A GroupInfo is kept and served
 (`group_info_endpoint.rs`) only for such a room, encrypted to the requester's key and signed with the hub's own MLS key
 (`MIMI_HUB_MLS_KEY`), which signs nothing else. A change to the room's operational policy needs
-`canChangeMlsOperationalPolicies`. Who may change the roles or the base policy is not checked yet (DIV-15).
+`canChangeMlsOperationalPolicies`, to its roles `canChangeRoleDefinitions`, and to its base policy
+`canChangeRoomMembershipStyle`, in the proposer's role (DIV-15).
 
 ## The operator's routes listen on loopback only
 

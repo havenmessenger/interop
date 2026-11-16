@@ -58,6 +58,8 @@ fn roles(member_may_leave: bool) -> Vec<Role> {
                 Capability::RemoveParticipant,
                 Capability::ChangeRole,
                 Capability::RemoveSelf,
+                Capability::ChangeRoleDefinitions,
+                Capability::ChangeRoomMembershipStyle,
             ],
             &[(0, &[MEMBER]), (MEMBER, &[0, ADMIN]), (ADMIN, &[0])],
         ),
@@ -383,4 +385,65 @@ async fn the_operators_routes_refuse_a_tracked_room() {
         .await,
         StatusCode::CREATED
     );
+}
+
+/// Replacing the roles needs canChangeRoleDefinitions, and the base policy canChangeRoomMembershipStyle, in the
+/// committer's role: Bob (a member, holding neither) is refused both, and Alice (an admin, holding both) makes both.
+/// Revert check: skip the capability check, and Bob replaces the room's roles.
+#[test]
+fn a_policy_change_needs_its_capability() {
+    use mimi_core::room_policy::BaseRoomPolicy;
+    use mimi_core::room_policy_wire::encode_base_room_policy;
+    let p = Provider::in_memory("example.com").unwrap();
+    let mut room = tracked_room(&p, Some(&roles(true)));
+    let narrower = encode_role_data(&roles(false));
+    let bobs = app_data_commit(
+        &mut room.bob_group,
+        &room.bob,
+        &[(ROLES_LIST_COMPONENT, narrower.clone(), narrower.clone())],
+    );
+    assert!(
+        matches!(apply(&p, &bobs), Err(UpdateRefusal::Policy(_))),
+        "PLANT-ROLES-CAPABILITY: a member replaced the room's roles"
+    );
+    assert_eq!(
+        p.room_policy(ROOM).unwrap().map(|policy| policy.roles),
+        Some(roles(true))
+    );
+    room.bob_group
+        .clear_pending_commit(room.bob.provider.storage())
+        .unwrap();
+
+    let base = encode_base_room_policy(
+        &BaseRoomPolicy {
+            discoverable: true,
+            ..BaseRoomPolicy::default()
+        },
+        None,
+    );
+    let bobs_base = app_data_commit(
+        &mut room.bob_group,
+        &room.bob,
+        &[(
+            crate::room_tree::BASE_ROOM_POLICY_COMPONENT,
+            base.clone(),
+            base.clone(),
+        )],
+    );
+    assert!(
+        matches!(apply(&p, &bobs_base), Err(UpdateRefusal::Policy(_))),
+        "PLANT-BASE-CAPABILITY: a member changed the room's base policy"
+    );
+
+    let alices = app_data_commit(
+        &mut room.group,
+        &room.alice,
+        &[(
+            crate::room_tree::BASE_ROOM_POLICY_COMPONENT,
+            base.clone(),
+            base,
+        )],
+    );
+    apply(&p, &alices).unwrap();
+    assert!(p.room_policy(ROOM).unwrap().unwrap().base.discoverable);
 }

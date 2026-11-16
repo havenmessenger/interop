@@ -201,6 +201,25 @@ pub struct Provider {
     hub_signer: Option<std::sync::Arc<mimi_core::group_info_wire::HubSigner>>,
 }
 
+/// The capability each room-policy component's change needs (room-policy-04 §8.6), with the refusal that names it.
+const POLICY_CHANGE_CAPABILITIES: [(u16, mimi_core::room_policy::Capability, &str); 3] = [
+    (
+        MIMI_ROLES_LIST_PROPOSAL_TYPE,
+        mimi_core::room_policy::Capability::ChangeRoleDefinitions,
+        "the committer's role may not change the room's roles (canChangeRoleDefinitions)",
+    ),
+    (
+        MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE,
+        mimi_core::room_policy::Capability::ChangeRoomMembershipStyle,
+        "the committer's role may not change the room's base policy (canChangeRoomMembershipStyle)",
+    ),
+    (
+        mimi_core::operational_parameters::MIMI_OPERATIONAL_POLICY_PROPOSAL_TYPE,
+        mimi_core::room_policy::Capability::ChangeMlsOperationalPolicies,
+        "the committer's role may not change the room's operational policy (canChangeMlsOperationalPolicies)",
+    ),
+];
+
 /// One line for what a fan-out queued, or why it could not: the change it follows was stored either way.
 pub(crate) fn log_fanout(what: &str, room_uri: &str, report: anyhow::Result<fanout::FanoutReport>) {
     match report {
@@ -1104,6 +1123,39 @@ impl Provider {
         }
     }
 
+    /// Whether the committer's role holds `capability`, in a room that has roles; a room with none has no role checks.
+    fn committer_role_holds(
+        &self,
+        room_uri: &str,
+        staged: &crate::room_tree::StagedRoomCommit,
+        capability: mimi_core::room_policy::Capability,
+        refusal: &'static str,
+    ) -> Result<(), UpdateRefusal> {
+        let Some(policy) = self
+            .room_policy(room_uri)
+            .map_err(|_| UpdateRefusal::Store)?
+            .filter(|policy| !policy.roles.is_empty())
+        else {
+            return Ok(());
+        };
+        let committer = staged.sender.clone().ok_or(UpdateRefusal::NotAllowed)?;
+        let role = self
+            .store
+            .list_participant_rows(room_uri)
+            .map_err(|_| UpdateRefusal::Store)?
+            .into_iter()
+            .find(|row| row.member_uri == committer)
+            .and_then(|row| row.role_index);
+        if role
+            .and_then(|role| policy.role(role))
+            .is_some_and(|role| role.has(capability))
+        {
+            Ok(())
+        } else {
+            Err(UpdateRefusal::Policy(refusal))
+        }
+    }
+
     /// For a tracked room, the checks on what a Commit carries by value that need its committer: a first `roles_list` is
     /// refused (room-policy PR #52: a `roles_list` is set when the group is created), and each participant-list change is
     /// authorized for the committer against the room's policy and list as they stand.
@@ -1154,38 +1206,23 @@ impl Provider {
                 .map_err(|_| UpdateRefusal::Invalid("the participant list update is malformed"))?;
             return self.authorize_external_join(room_uri, joiner, change.as_ref());
         }
-        // A change to the room's operational policy needs canChangeMlsOperationalPolicies (listed "(reserved)" in
-        // room-policy-04; read as the draft's own capability for it), in a room that has roles.
-        if commit.updates.iter().any(|change| {
-            change.proposal_type
-                == mimi_core::operational_parameters::MIMI_OPERATIONAL_POLICY_PROPOSAL_TYPE
-        }) {
-            if let Some(policy) = self
-                .room_policy(room_uri)
-                .map_err(|_| UpdateRefusal::Store)?
-                .filter(|policy| !policy.roles.is_empty())
-            {
-                let committer = staged.sender.clone().ok_or(UpdateRefusal::NotAllowed)?;
-                let role = self
-                    .store
-                    .list_participant_rows(room_uri)
-                    .map_err(|_| UpdateRefusal::Store)?
-                    .into_iter()
-                    .find(|row| row.member_uri == committer)
-                    .and_then(|row| row.role_index);
-                if !role.and_then(|role| policy.role(role)).is_some_and(|role| {
-                    role.has(mimi_core::room_policy::Capability::ChangeMlsOperationalPolicies)
-                }) {
-                    return Err(UpdateRefusal::Policy(
-                        "the committer's role may not change the room's operational policy",
-                    ));
-                }
-            }
-        }
         if adds_first_roles_list(staged.had_roles_list, &commit.updates) {
             return Err(UpdateRefusal::Policy(
                 "a roles_list is set when the room's group is created, not added by a later Commit",
             ));
+        }
+        // A change to a room-policy component needs its capability in the committer's role (room-policy-04 §8.6, the
+        // proposer of a change carried by value), in a room that has roles: `canChangeRoleDefinitions` for the
+        // roles_list, `canChangeRoomMembershipStyle` for the base policy, and `canChangeMlsOperationalPolicies` (listed
+        // "(reserved)" in -04, read as the draft's own capability) for the operational policy.
+        for (kind, capability, refusal) in POLICY_CHANGE_CAPABILITIES {
+            if commit
+                .updates
+                .iter()
+                .any(|change| change.proposal_type == kind)
+            {
+                self.committer_role_holds(room_uri, staged, capability, refusal)?;
+            }
         }
         let changes: Vec<ParticipantListUpdate> = commit
             .updates

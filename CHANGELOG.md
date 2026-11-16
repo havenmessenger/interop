@@ -48,6 +48,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   `canOpenJoin`), never while proposals are held. A change to the operational policy needs
   `canChangeMlsOperationalPolicies`. The hub policy gains `external_commit_when_unset`. mimi-core reads an external
   Commit (`new_member_commit`, its `ExternalInit`) and gains the groupInfo wire types.
+- For a tracked room, a change to the `roles_list` needs `canChangeRoleDefinitions` and a change to the
+  `base_room_policy` `canChangeRoomMembershipStyle`, in the committer's role (room-policy-04 §8.6); until now any
+  participant could make them.
 
 ## 0.1.0 - 2026-11-16
 
