@@ -1,9 +1,9 @@
 diff --git a/openmls/src/components/vc_derivation_info.rs b/openmls/src/components/vc_derivation_info.rs
-index 4af5a88..a6b80b9 100644
+index e33173a1e..f812b210a 100644
 --- a/openmls/src/components/vc_derivation_info.rs
 +++ b/openmls/src/components/vc_derivation_info.rs
-@@ -1941,3 +1941,176 @@ mod tests {
-         assert_eq!(base, sibling_id);
+@@ -3136,3 +3136,176 @@ mod tests {
+         assert_eq!(log.newest().map(|entry| entry.epoch_id.clone()), Some(new));
      }
  }
 +
