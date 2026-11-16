@@ -51,7 +51,7 @@ async fn ask(router: Router, required: RequiredCapabilitiesExtension) -> KeyMate
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    KeyMaterialResponse::decode(&bytes).unwrap()
+    KeyMaterialResponse::decode(&bytes, &[0x0001]).unwrap()
 }
 
 #[tokio::test]
@@ -119,7 +119,7 @@ async fn another_spelling_of_the_target_finds_its_consent() {
         .await
         .unwrap();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let answer = KeyMaterialResponse::decode(&bytes).unwrap();
+    let answer = KeyMaterialResponse::decode(&bytes, &[0x0001]).unwrap();
     assert!(
         matches!(answer, KeyMaterialResponse::Success { .. }),
         "{answer:?}"

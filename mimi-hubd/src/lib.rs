@@ -29,6 +29,7 @@ pub mod http;
 pub mod identifier_search;
 pub mod notify_source;
 pub mod peer;
+pub mod policy;
 pub mod problem;
 pub mod provider_auth;
 pub mod signature;
@@ -45,7 +46,7 @@ use mimi_core::consent::{
 };
 use mimi_core::gate::{
     identifier_query, keypackage_ref, mimi_gate_keypackage, mimi_gate_welcome,
-    IdentifierQueryResult, HAVEN_MLS_CIPHERSUITE_U16,
+    IdentifierQueryResult,
 };
 use mimi_core::participant_list::{
     apply_update, decode_participant_list_update, ParticipantListData, ParticipantListUpdate,
@@ -175,6 +176,8 @@ pub struct Provider {
     /// Where this hub's endpoints are reachable, e.g. "https://mimi.example.com:8443", when that is
     /// not `https://{domain}`. Only the directory's endpoint URLs use it; identifiers keep `domain`.
     public_base_url: Option<String>,
+    /// What this hub accepts and answers where the drafts leave it to the deployment.
+    policy: policy::HubPolicy,
     store: SqliteStore,
 }
 
@@ -184,6 +187,7 @@ impl Provider {
         Ok(Self {
             domain: domain.into(),
             public_base_url: None,
+            policy: policy::HubPolicy::default(),
             store: SqliteStore::open(db_path)?,
         })
     }
@@ -193,6 +197,7 @@ impl Provider {
         Ok(Self {
             domain: domain.into(),
             public_base_url: None,
+            policy: policy::HubPolicy::default(),
             store: SqliteStore::in_memory()?,
         })
     }
@@ -213,11 +218,26 @@ impl Provider {
         Ok(self)
     }
 
+    /// Run with `policy` instead of the drafts' defaults.
+    pub fn with_policy(mut self, policy: policy::HubPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    pub fn policy(&self) -> &policy::HubPolicy {
+        &self.policy
+    }
+
+    /// The MLS ciphersuites accepted from other providers.
+    pub fn accepted_suites(&self) -> &[u16] {
+        &self.policy.mls_ciphersuites
+    }
+
     pub fn domain(&self) -> &str {
         &self.domain
     }
 
-    // ---- enrollment (the Standards Testing Page opt-in: discoverability + send-gate + portal) ----
+    // ---- enrollment (`mimi-hubd enroll`: who identifierQuery finds under `identifier_discovery = "enrolled"`) ----
 
     pub fn enroll(&self, username: &str) -> anyhow::Result<()> {
         self.store.enroll(username)
@@ -256,7 +276,7 @@ impl Provider {
     pub fn directory(&self) -> serde_json::Value {
         let mut doc = serde_json::json!({
             "provider": self.domain,
-            "mls_ciphersuites": [HAVEN_MLS_CIPHERSUITE_U16],   // 0x0001 only
+            "mls_ciphersuites": self.policy.mls_ciphersuites,
             "protocol_drafts": { "protocol": "07", "content": "10", "room-policy": "04" },
             "endpoints": {
                 "keyMaterial": "/mimi/v1/keyMaterial",
@@ -279,9 +299,8 @@ impl Provider {
                 "update": "/mimi/pl/update/{roomId}"
             },
             "unsupported": {
-                "groupInfo_external_commit_join": "DIV-1: add-driven join only (ETK security)",
+                "groupInfo_external_commit_join": "DIV-1: not built yet; joins are add-driven",
                 "assets_ohttp": "DIV-3: v1 is messaging-only",
-                "non_0x0001_ciphersuites": "DIV-2: rejected at ingest",
                 "update_wire_endpoint_mixed_commits": "DIV-10: a Commit is applied when it carries a participant-list change, a room-policy change, or one of each (a role list never beside a participant-list change, room-policy-04 §3), alone or with Add and Remove proposals beside it; proposals by reference are accepted only when they are the ones this hub holds for a member's leave. A second change of one kind, a role list beside a participant-list change, a Commit with no change, any other proposal type and any other proposal by reference are refused",
                 "reportAbuse_with_abusive_messages": "DIV-9: a report attaching an AbusiveMessage is refused (its Frank cannot yet be verified) - metadata-only reports are accepted"
             }
@@ -318,16 +337,19 @@ impl Provider {
     // ---- K5: gate every foreign object BEFORE openmls ----
 
     pub fn ingest_foreign_keypackage(&self, kp_bytes: &[u8]) -> anyhow::Result<()> {
-        Ok(mimi_gate_keypackage(kp_bytes)?)
+        Ok(mimi_gate_keypackage(kp_bytes, self.accepted_suites())?)
     }
 
     pub fn ingest_foreign_welcome(&self, mls_message_bytes: &[u8]) -> anyhow::Result<()> {
-        Ok(mimi_gate_welcome(mls_message_bytes)?)
+        Ok(mimi_gate_welcome(
+            mls_message_bytes,
+            self.accepted_suites(),
+        )?)
     }
 
     // ---- store-and-forward delivery (the cross-provider relay) ----
     // The provider stores OPAQUE ciphertext keyed by a caller-supplied recipient (routing metadata).
-    // It never decrypts (INV-MIMI-002). KeyPackages + Welcomes are suite-gated at ingest (INV-MLS-002);
+    // It never decrypts. KeyPackages + Welcomes are suite-gated at ingest against the policy's suites;
     // application messages are opaque PrivateMessages (size-bounded only, their suite is not in clear).
 
     /// Publish a local user's one-time KeyPackage so cross-provider peers can claim it. Suite-gated,
@@ -354,12 +376,12 @@ impl Provider {
         kp_bytes: &[u8],
         now_unix: u64,
     ) -> anyhow::Result<()> {
-        mimi_gate_keypackage(kp_bytes)?; // K5 / INV-MLS-002, reject non-0x0001 before storing
+        mimi_gate_keypackage(kp_bytes, self.accepted_suites())?; // K5: a suite outside the policy is refused before storing
         let not_after = now_unix + KEYPACKAGE_TTL_SECS;
         // K4: the follower associates this served KeyPackageRef -> its local client, so an inbound
         // Welcome carrying that ref can be delivered to the right user. Computed over the SAME bytes we
         // gated/store, so it is byte-identical to the ref a Welcome's secrets carry.
-        let kpref = keypackage_ref(kp_bytes)?;
+        let kpref = keypackage_ref(kp_bytes, self.accepted_suites())?;
         self.store
             .associate_kpref_client(&kpref, username, not_after)?;
         self.store.add_key_package(username, kp_bytes, not_after)
@@ -377,7 +399,7 @@ impl Provider {
         provider_authority: &str,
         not_after: u64,
     ) -> anyhow::Result<Vec<u8>> {
-        let kpref = keypackage_ref(kp_bytes)?;
+        let kpref = keypackage_ref(kp_bytes, self.accepted_suites())?;
         self.store
             .associate_kpref_provider(&kpref, provider_authority, not_after)?;
         Ok(kpref)
@@ -405,7 +427,7 @@ impl Provider {
         welcome_bytes: &[u8],
         now_unix: u64,
     ) -> anyhow::Result<()> {
-        mimi_gate_welcome(welcome_bytes)?; // K5 / INV-MLS-002 before it touches a queue
+        mimi_gate_welcome(welcome_bytes, self.accepted_suites())?; // K5, before it touches a queue
         self.store
             .enqueue_welcome(recipient, welcome_bytes, now_unix)
     }
@@ -437,7 +459,7 @@ impl Provider {
     }
 
     /// Submit an application message (opaque MLS PrivateMessage) for `recipient`. NOT suite-gated - it
-    /// is end-to-end ciphertext the provider must never inspect (INV-MIMI-002); the store bounds size.
+    /// is end-to-end ciphertext the provider never inspects; the store bounds size.
     pub fn submit_message(
         &self,
         recipient: &str,
@@ -545,8 +567,8 @@ impl Provider {
 
     /// THE HUB FAN-OUT ROUTING DECISION (M3). Given a room WE HOST, partition its participants into those
     /// LOCAL to this provider (deliver via the local queue) and those on FOREIGN providers (the ciphertext
-    /// must be forwarded to that provider). Pure metadata routing; the hub never sees plaintext
-    /// (INV-MIMI-002). `exclude` (typically the sender) is omitted. The stored authority was derived from
+    /// must be forwarded to that provider). Pure metadata routing; the hub never sees plaintext.
+    /// `exclude` (typically the sender) is omitted. The stored authority was derived from
     /// each member's own URI at add-time, so it cannot have been spoofed to misroute.
     pub fn fanout_targets(&self, room_uri: &str, exclude: &str) -> anyhow::Result<FanoutPlan> {
         self.assert_hub_of_record(room_uri)?;
@@ -569,8 +591,21 @@ impl Provider {
 
     /// Found ONLY for opt-in enrollees; otherwise NotFound, indistinguishable from non-existent.
     /// Structurally leak-free: the answer depends only on enrollment.
-    pub fn identifier_query(&self, username: &str) -> anyhow::Result<IdentifierQueryResult> {
-        Ok(identifier_query(self.is_enrolled(username)?))
+    /// Whether `identifierQuery` finds `username` under the policy's discovery setting: an enrolled user always; with
+    /// `all`, also a user this hub holds an unexpired KeyPackage for, under the name or its `mimi://` URI here.
+    pub fn identifier_query(
+        &self,
+        username: &str,
+        now_unix: u64,
+    ) -> anyhow::Result<IdentifierQueryResult> {
+        let answerable = self.is_enrolled(username)?
+            || (self.policy.identifier_discovery == policy::Discovery::All
+                && (self.store.holds_key_material(username, now_unix)?
+                    || self.store.holds_key_material(
+                        &format!("mimi://{}/u/{username}", self.domain),
+                        now_unix,
+                    )?));
+        Ok(identifier_query(answerable))
     }
 
     // ---- C1/C2/C3: consent (protocol §5.7) ----
@@ -636,7 +671,7 @@ impl Provider {
 
     /// C2: accept + process an `updateConsent` (grant / revoke). `grant`→granted, `revoke`→revoked (valid
     /// PREEMPTIVELY, no prior request needed). A cancel is the requester's and goes through `requestConsent`
-    /// ([`Self::process_request_consent`]). Any grant-carried client_key_packages are suite-gated (INV-MLS-002) before
+    /// ([`Self::process_request_consent`]). Any grant-carried client_key_packages are suite-gated against the policy's suites before
     /// they could be stored/used.
     pub fn process_update_consent(
         &self,
@@ -648,7 +683,7 @@ impl Provider {
         match entry.operation {
             ConsentOperation::Grant => {
                 for kp in &entry.client_key_packages {
-                    mimi_gate_keypackage(kp)?; // reject non-0x0001 grant KPs before honoring the grant
+                    mimi_gate_keypackage(kp, self.accepted_suites())?; // a grant's KeyPackages are gated before it is honoured
                 }
                 self.store.set_consent(
                     &entry.requester_uri,
@@ -794,7 +829,7 @@ impl Provider {
     /// Ok(()) = may send.
     ///
     /// Deviation from the draft: §5.3 says block a removed member's messages/commits/proposals except
-    /// a Remove/SelfRemove proposal. This hub relays opaque ciphertext (INV-MIMI-002) and cannot see
+    /// a Remove/SelfRemove proposal. This hub relays opaque ciphertext and cannot see
     /// MLS handshake types inside it, so it blocks at participant-list granularity: once removed, a
     /// member can send nothing. This is stricter and correct for a ciphertext relay; there is nothing
     /// legitimate left for a removed member to send (a live member's own SelfRemove is sent while
@@ -893,7 +928,7 @@ impl Provider {
 
     /// Decode a `PublicMessage`-wrapped Commit (`mimi_core::commit_wire`) and apply its single
     /// custom proposal to this room's stored state. Dispatches on `proposal_type`; a value that
-    /// matches neither registered Haven proposal type is refused. Hub-of-record gated (via the
+    /// matches neither custom proposal type this hub reads is refused. Hub-of-record gated (via the
     /// individual `add_participant`/`remove_participant`/`set_member_role`/`set_room_policy` calls
     /// this delegates to, each of which already enforces it).
     pub fn apply_update_commit(
@@ -911,7 +946,7 @@ impl Provider {
         })?;
         // A KeyPackage the gate refuses (a foreign suite, a bad signature) refuses the whole Commit before anything changes.
         for added in &commit.adds {
-            mimi_core::gate::mimi_gate_keypackage(&added.key_package)
+            mimi_core::gate::mimi_gate_keypackage(&added.key_package, self.accepted_suites())
                 .map_err(|_| UpdateRefusal::NotAllowed)?;
         }
         self.assert_hub_of_record(room_uri)
@@ -1237,10 +1272,11 @@ impl Provider {
         peer: Option<&crate::peer::PeerIdentity>,
         now_unix: u64,
     ) -> Result<(), UpdateRefusal> {
-        let bundle = HandshakeBundle::decode(body).map_err(|error| match error {
-            WireError::CiphersuiteGate(_) => UpdateRefusal::NotAllowed,
-            _ => UpdateRefusal::Invalid("the body is not an UpdateRequest this hub can read"),
-        })?;
+        let bundle =
+            HandshakeBundle::decode(body, self.accepted_suites()).map_err(|error| match error {
+                WireError::CiphersuiteGate(_) => UpdateRefusal::NotAllowed,
+                _ => UpdateRefusal::Invalid("the body is not an UpdateRequest this hub can read"),
+            })?;
         match bundle {
             HandshakeBundle::Commit {
                 proposal_or_commit, ..
@@ -1454,6 +1490,10 @@ impl Provider {
 mod participant_order_tests;
 
 #[cfg(test)]
+#[path = "identifier_discovery_tests.rs"]
+mod identifier_discovery_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1524,7 +1564,7 @@ mod tests {
         let kp = real_keypackage("alice");
         p.publish_key_package("alice", &kp, 1000).unwrap();
         // the ref is the canonical openmls ref over the same bytes → resolves to the served client.
-        let kpref = keypackage_ref(&kp).unwrap();
+        let kpref = keypackage_ref(&kp, &[0x0001]).unwrap();
         assert_eq!(
             p.client_for_kpref(&kpref).unwrap(),
             Some("alice".into()),
@@ -1549,7 +1589,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             kpref,
-            keypackage_ref(&kp).unwrap(),
+            keypackage_ref(&kp, &[0x0001]).unwrap(),
             "returns the canonical ref"
         );
         assert_eq!(
@@ -1862,11 +1902,14 @@ mod tests {
     }
 
     #[test]
-    fn directory_advertises_only_0x0001_and_discloses_unsupported() {
+    fn directory_advertises_the_accepted_suites_and_discloses_unsupported() {
         let p = Provider::in_memory("havenmessenger.com").unwrap();
         let dir = p.directory();
         assert_eq!(dir["provider"], "havenmessenger.com");
-        assert_eq!(dir["mls_ciphersuites"], serde_json::json!([1]));
+        assert_eq!(
+            dir["mls_ciphersuites"],
+            serde_json::json!(mimi_core::gate::default_mls_ciphersuites())
+        );
         assert!(dir["unsupported"]["groupInfo_external_commit_join"].is_string());
         assert!(dir["unsupported"]["assets_ohttp"].is_string());
     }
@@ -1932,7 +1975,7 @@ mod tests {
     #[test]
     fn directory_advertises_flat_draft_shaped_keys_for_wire_routed_endpoints() {
         // protocol-07 §5.1's own example directory is a FLAT object - top-level keys are the
-        // endpoint names, values are absolute HTTPS URLs. `endpoints`/`wireEndpoints` are Haven's
+        // endpoint names, values are absolute HTTPS URLs. `endpoints`/`wireEndpoints` are this hub's
         // additive non-standard nesting; a strict §5.1 client looks at the top level directly.
         let p = Provider::in_memory("havenmessenger.com").unwrap();
         let dir = p.directory();
@@ -2030,16 +2073,16 @@ mod tests {
     fn identifier_query_is_optin_only() {
         let p = Provider::in_memory("havenmessenger.com").unwrap();
         assert_eq!(
-            p.identifier_query("alice").unwrap(),
+            p.identifier_query("alice", 0).unwrap(),
             IdentifierQueryResult::NotFound
         );
         p.enroll("alice").unwrap();
         assert_eq!(
-            p.identifier_query("alice").unwrap(),
+            p.identifier_query("alice", 0).unwrap(),
             IdentifierQueryResult::Found
         );
         assert_eq!(
-            p.identifier_query("bob").unwrap(),
+            p.identifier_query("bob", 0).unwrap(),
             IdentifierQueryResult::NotFound
         );
     }

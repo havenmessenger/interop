@@ -170,8 +170,9 @@ async fn a_welcome_under_another_ciphersuite_is_refused_with_no_state_change() {
     let before = participants(&p);
     let commit =
         real_single_custom_proposal_commit(MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE, add_carol());
-    // A Welcome whose leading cipher suite is not the pinned one; the suite refusal comes before anything is decoded.
-    let foreign_welcome = [vec![0x00, 0x03], vec![0xFF; 16]].concat();
+    // A Welcome whose leading cipher suite is not one this hub accepts (0x00FF, which no provider implements); the suite
+    // refusal comes before anything is decoded.
+    let foreign_welcome = [vec![0x00, 0xFF], vec![0xFF; 16]].concat();
     let body = HandshakeBundle::Commit {
         proposal_or_commit: commit,
         welcome: Some(foreign_welcome),

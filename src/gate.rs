@@ -1,80 +1,79 @@
-//! MIMI provider seam - the foreign-input accept-gate for cross-provider MLS objects.
+//! The accept-gate for MLS objects that arrive from another provider.
 //!
-//! This module is a plain, dependency-free Rust boundary for MIMI (Messaging
-//! Interoperability) provider work (`INV-MIMI-003`). It carries no binding-layer
-//! integration and cannot be reached from Haven's own client-to-client MLS path, which
-//! stays on its existing wire format regardless of anything here.
+//! A MIMI provider takes KeyPackages, Welcomes and GroupInfos whose ciphersuite the sender chose. openmls follows the
+//! suite on the wire: a self-consistent Welcome in any suite the crypto provider implements opens through that suite's
+//! HPKE and AEAD, and `KeyPackageIn::validate()` verifies a signature under whatever scheme the KeyPackage names. A
+//! deployment decides which suites it accepts; this module refuses every other suite **before** the bytes reach a
+//! decoder or openmls, by reading the suite from its fixed wire position first. Each gate takes the accepted suites as a
+//! list; [`default_mls_ciphersuites`] is every suite the crate's crypto provider implements.
 //!
-//! ## What lives here
-//! The ciphersuite accept-gate (`INV-MLS-002` accept-clause, conformance row K5), the
-//! `identifierQuery` no-existence-oracle (DIV-4), and the KeyPackageRef/client correlation
-//! this crate's other modules build on.
+//! The module also holds the `identifierQuery` answer shape (one not-found for every miss, protocol-07 §5.8 and
+//! DIVERGENCES DIV-4) and the KeyPackageRef the other modules key KeyPackages and Welcomes by.
 //!
-//! ## Why the gate is load-bearing
-//! Haven's real receive path **follows the wire's ciphersuite**: a
-//! self-consistent suite-`0x0003` Welcome opens via `process_welcome`, driving
-//! OpenMlsRustCrypto's ChaCha20-Poly1305 HPKE-open path. `KeyPackageIn::validate()` is
-//! suite-agnostic too. Native chat is safe ONLY
-//! because we never *hold* a `0x0003` KeyPackage + openmls rejects cross-suite Adds - neither
-//! protection applies to a MIMI path that ingests **foreign** objects whose suite the *remote*
-//! chooses. So a MIMI provider MUST hard-reject any non-`0x0001` object **before** handing
-//! bytes to openmls. That is `mimi_gate_keypackage` / `mimi_gate_welcome` below.
-//!
-//! ## MIMI join model vs INV-MLS-001a (successor of INV-MLS-001)
-//! MIMI has two cross-provider join flows:
-//!   - **§5.2 keyMaterial** → inviter fetches the remote KeyPackage → **Add + Welcome**.
-//!     This is Haven's existing *add-driven* model - INV-MLS-001a-COMPATIBLE.
-//!   - **§5.6 claim-group-key (GroupInfo)** → recipient self-joins via **external commit**.
-//!     `openmls::MlsGroup::export_group_info(crypto, signer, ..)` signs GroupInfo with an
-//!     ordinary member signer (no `ExternalSendersExtension` needed - so *producing* it calls
-//!     no external-op API), BUT the exported GroupInfo embeds an `ExternalPub` extension whose
-//!     sole purpose is to let the recipient call `join_by_external_commit`. That join IS the
-//!     external-commit mechanism `INV-MLS-001a` closes (ETK, eprint 2025/229).
-//!
-//! **Design decision:** cross-provider joins use the **§5.2 KeyPackage+Welcome path only**.
-//! The §5.6 GroupInfo-join is **permanently out, both lanes**. A provider can serve the
-//! add-driven flow conformantly without implementing every optional join mechanism. This keeps
-//! INV-MLS-001a
-//! intact (no `export_group_info` / `join_by_external_commit` is called anywhere in this crate).
-//! This is a two-sided, permanent posture - not a v1 scoping note - because the ETK concern
-//! (eprint 2025/229) doesn't change with implementation effort.
-//!
-//! **External *proposals* are a separate mechanism, governed by its own invariant,
-//! `INV-MLS-001b`** - RFC 9420 `Sender::External`,
-//! validated against a group's `ExternalSendersExtension`, is cryptographically inert until an
-//! existing member commits it, a materially smaller risk than an external commit). Unlike
-//! external commits, this mechanism is NOT permanently banned in the mimi lane: a narrow,
-//! pre-configured, `Remove`-only, explicit-inclusion-only acceptance path is designed, but not
-//! yet implemented, as a later, separately gated piece of work with its own policy seam rather
-//! than a hand-rolled check here. This module's own posture is unaffected today: nothing here
-//! constructs, validates-and-acts-on, or exposes an API for `Sender::External` proposals, in
-//! either lane.
+//! ## Joins
+//! MIMI has two ways into a room on another provider: §5.2 keyMaterial (an existing member fetches the joiner's
+//! KeyPackage, then Add and Welcome) and §5.6 groupInfo (the joiner fetches the room's GroupInfo and joins by external
+//! commit). This crate implements the first. Serving a GroupInfo and accepting an external commit are not built yet
+//! (DIVERGENCES DIV-1); when they are, a room's policy decides whether it takes one. [`mimi_gate_group_info`] gates a
+//! GroupInfo's suite already, because a Commit bundle can carry one.
 
 use openmls::prelude::*;
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::OpenMlsProvider;
 use tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize};
 
-/// The single MLS ciphersuite Haven pins, as the u16 wire value (`INV-MLS-002`).
-/// `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`.
-pub const HAVEN_MLS_CIPHERSUITE_U16: u16 = 0x0001;
+/// `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`, RFC 9420's mandatory-to-implement suite, as its wire value.
+pub const MLS_128_DHKEMX25519_AES128GCM_SHA256_ED25519: u16 = 0x0001;
 
-/// Error returned when a foreign MIMI object carries a non-pinned ciphersuite.
-/// Surfaced as the explicit accept-gate refusal so callers can log + drop without
-/// ever passing the bytes to openmls' AEAD/HPKE path.
+/// Every ciphersuite the crate's crypto provider implements, as wire values in ascending order: what a gate accepts when
+/// the deployment does not narrow it.
+pub fn default_mls_ciphersuites() -> Vec<u16> {
+    let mut suites: Vec<u16> = OpenMlsRustCrypto::default()
+        .crypto()
+        .supported_ciphersuites()
+        .into_iter()
+        .map(u16::from)
+        .collect();
+    suites.sort_unstable();
+    suites.dedup();
+    suites
+}
+
+/// An object from another provider named a ciphersuite outside the accepted list. Callers log and drop it; the bytes
+/// never reach openmls.
 #[derive(Debug)]
 pub struct ForeignCiphersuite {
     pub got: u16,
+    /// The suites that would have been accepted.
+    pub accepted: Vec<u16>,
 }
 
 impl std::fmt::Display for ForeignCiphersuite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let accepted: Vec<String> = self
+            .accepted
+            .iter()
+            .map(|suite| format!("0x{suite:04x}"))
+            .collect();
         write!(
             f,
-            "INV-MLS-002 accept-gate: refusing MIMI object with ciphersuite 0x{:04x} (only 0x{:04x} accepted)",
-            self.got, HAVEN_MLS_CIPHERSUITE_U16
+            "refusing an MLS object with ciphersuite 0x{:04x}; accepted: {}",
+            self.got,
+            accepted.join(", ")
         )
     }
+}
+
+/// Refuse `got` unless it is in `accepted`.
+fn refuse_unless_accepted(got: u16, accepted: &[u16]) -> Result<(), GateError> {
+    if accepted.contains(&got) {
+        return Ok(());
+    }
+    Err(ForeignCiphersuite {
+        got,
+        accepted: accepted.to_vec(),
+    }
+    .into())
 }
 
 impl std::error::Error for ForeignCiphersuite {}
@@ -83,7 +82,7 @@ impl std::error::Error for ForeignCiphersuite {}
 /// the library convention). The load-bearing [`ForeignCiphersuite`] refusal is surfaced transparently.
 #[derive(Debug, thiserror::Error)]
 pub enum GateError {
-    /// A foreign MIMI object carried a non-pinned ciphersuite (INV-MLS-002 accept-gate refusal).
+    /// An object from another provider named a ciphersuite outside the accepted list.
     #[error(transparent)]
     ForeignCiphersuite(#[from] ForeignCiphersuite),
     /// A KeyPackage could not be TLS-deserialized.
@@ -151,25 +150,24 @@ fn keypackage_wire_suite(key_package_bytes: &[u8]) -> Result<u16, GateError> {
         .ok_or_else(|| GateError::UndecodableKeyPackage("too short to carry a ciphersuite".into()))
 }
 
-/// Refuse a KeyPackage whose wire suite is not the pinned one, before it is decoded or verified.
-fn refuse_foreign_keypackage_suite(key_package_bytes: &[u8]) -> Result<(), GateError> {
-    let suite = keypackage_wire_suite(key_package_bytes)?;
-    if suite != HAVEN_MLS_CIPHERSUITE_U16 {
-        return Err(ForeignCiphersuite { got: suite }.into());
-    }
-    Ok(())
+/// Refuse a KeyPackage whose wire suite is not in `accepted`, before it is decoded or verified.
+fn refuse_foreign_keypackage_suite(
+    key_package_bytes: &[u8],
+    accepted: &[u16],
+) -> Result<(), GateError> {
+    refuse_unless_accepted(keypackage_wire_suite(key_package_bytes)?, accepted)
 }
 
-/// **K5 accept-gate - KeyPackage.** Call BEFORE `add_member` on any KeyPackage fetched from a
-/// foreign provider (MIMI §5.2 keyMaterial). Returns `Ok(())` only for the pinned suite.
+/// **K5 accept-gate - KeyPackage.** Call BEFORE `add_member` on any KeyPackage fetched from another provider (§5.2
+/// keyMaterial). Returns `Ok(())` only for a suite in `accepted`.
 ///
-/// Mechanism: read the suite from the KeyPackage's fixed wire position and refuse anything but `0x0001` first;
-/// only then deserialize and `validate()` (signature-only; this does NOT instantiate any AEAD) and confirm the
-/// validated suite is the one the bytes named. Refusing first means a foreign-suite KeyPackage reaches neither
-/// signature verification nor `add_member`'s HPKE-seal, so the only signature scheme ever verified on a peer's
-/// KeyPackage is the pinned suite's Ed25519.
-pub fn mimi_gate_keypackage(key_package_bytes: &[u8]) -> Result<(), GateError> {
-    refuse_foreign_keypackage_suite(key_package_bytes)?;
+/// Mechanism: read the suite from the KeyPackage's fixed wire position and refuse one outside `accepted` first; only
+/// then deserialize and `validate()` (signature-only; this does NOT instantiate any AEAD) and confirm the validated suite
+/// is the one the bytes named. Refusing first means a KeyPackage in a suite outside the list reaches neither signature
+/// verification nor `add_member`'s HPKE-seal: the only signature schemes ever verified on a peer's KeyPackage are those
+/// of the accepted suites.
+pub fn mimi_gate_keypackage(key_package_bytes: &[u8], accepted: &[u16]) -> Result<(), GateError> {
+    refuse_foreign_keypackage_suite(key_package_bytes, accepted)?;
     let provider = OpenMlsRustCrypto::default();
     let (kp_in, consumed) = deserialize_keypackage_in_no_panic(key_package_bytes)?;
     if consumed != key_package_bytes.len() {
@@ -181,11 +179,7 @@ pub fn mimi_gate_keypackage(key_package_bytes: &[u8]) -> Result<(), GateError> {
     let validated = kp_in
         .validate(provider.crypto(), ProtocolVersion::Mls10)
         .map_err(|e| GateError::KeyPackageValidation(format!("{e:?}")))?;
-    let suite = u16::from(validated.ciphersuite());
-    if suite != HAVEN_MLS_CIPHERSUITE_U16 {
-        return Err(ForeignCiphersuite { got: suite }.into());
-    }
-    Ok(())
+    refuse_unless_accepted(u16::from(validated.ciphersuite()), accepted)
 }
 
 /// Whether a KeyPackage meets what a `KeyMaterialRequest` asks of it (protocol-07 §5.2): its ciphersuite is one of
@@ -253,12 +247,12 @@ pub fn welcome_new_members(bytes: &[u8]) -> Result<(Vec<u8>, Vec<Vec<u8>>), Gate
 /// two §5.2-para-16 association maps are keyed by: the hub associates it with the target *provider* (K3)
 /// and the target provider associates it with the local *client* (K4).
 ///
-/// Pure + portable: production Haven MLS can reuse the same ref computation. It refuses a foreign wire suite
-/// first, as the gate does, then runs the same deserialize→`validate()` (signature-only, no AEAD) path and `hash_ref`.
-/// Callers that store foreign objects still gate first (`mimi_gate_keypackage`); this derives the routing key over the
-/// object the gate accepted, and cannot be used to verify a signature under another suite.
-pub fn keypackage_ref(key_package_bytes: &[u8]) -> Result<Vec<u8>, GateError> {
-    refuse_foreign_keypackage_suite(key_package_bytes)?;
+/// Pure and portable: any MLS client can use the same ref computation. It refuses a wire suite outside `accepted` first,
+/// as the gate does, then runs the same deserialize→`validate()` (signature-only, no AEAD) path and `hash_ref`. Callers
+/// that store foreign objects still gate first (`mimi_gate_keypackage`); this derives the routing key over the object the
+/// gate accepted, and cannot be used to verify a signature under a suite outside the list.
+pub fn keypackage_ref(key_package_bytes: &[u8], accepted: &[u16]) -> Result<Vec<u8>, GateError> {
+    refuse_foreign_keypackage_suite(key_package_bytes, accepted)?;
     let provider = OpenMlsRustCrypto::default();
     let (kp_in, consumed) = deserialize_keypackage_in_no_panic(key_package_bytes)?;
     if consumed != key_package_bytes.len() {
@@ -276,10 +270,9 @@ pub fn keypackage_ref(key_package_bytes: &[u8]) -> Result<Vec<u8>, GateError> {
     Ok(kpref.as_slice().to_vec())
 }
 
-/// **K5 accept-gate - Welcome.** Call BEFORE `StagedWelcome::new_from_welcome` on any inbound
-/// Welcome from a foreign provider (we are being added cross-provider). Returns `Ok(())` only
-/// for the pinned suite. Without this gate, an unvalidated foreign-suite Welcome would reach
-/// and drive OpenMlsRustCrypto's ChaCha implementation.
+/// **K5 accept-gate - Welcome.** Call BEFORE `StagedWelcome::new_from_welcome` on any inbound Welcome from another
+/// provider. Returns `Ok(())` only for a suite in `accepted`. Without this gate, an unvalidated Welcome in any suite the
+/// crypto provider implements would reach and drive that suite's HPKE and AEAD.
 ///
 /// Mechanism: deserialize the `MlsMessage`, extract the `Welcome`, and read its ciphersuite
 /// from the wire. The gate re-serializes the `Welcome` and reads the leading `u16` rather than
@@ -289,7 +282,7 @@ pub fn keypackage_ref(key_package_bytes: &[u8]) -> Result<Vec<u8>, GateError> {
 /// encrypted_group_info<V>; }`, so the first two bytes are the big-endian ciphersuite. The
 /// test below pins this layout (accept 0x0001 / reject 0x0003) so an openmls wire change can't
 /// silently defeat the gate.
-pub fn mimi_gate_welcome(mls_message_bytes: &[u8]) -> Result<(), GateError> {
+pub fn mimi_gate_welcome(mls_message_bytes: &[u8], accepted: &[u16]) -> Result<(), GateError> {
     // Same tls_codec-internal panic risk as the KeyPackage gates above (peer-controlled bytes,
     // hostile input must never panic).
     let (msg, consumed) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -315,34 +308,30 @@ pub fn mimi_gate_welcome(mls_message_bytes: &[u8]) -> Result<(), GateError> {
     if wire.len() < 2 {
         return Err(GateError::WelcomeTooShort);
     }
-    let suite = u16::from_be_bytes([wire[0], wire[1]]);
-    if suite != HAVEN_MLS_CIPHERSUITE_U16 {
-        return Err(ForeignCiphersuite { got: suite }.into());
-    }
-    Ok(())
+    refuse_unless_accepted(u16::from_be_bytes([wire[0], wire[1]]), accepted)
 }
 
-/// Refuse a bare `Welcome` whose ciphersuite is not the pinned one, before it is decoded.
+/// Refuse a bare `Welcome` whose ciphersuite is not in `accepted`, before it is decoded.
 ///
 /// RFC 9420 §12.4.3.1: `struct { CipherSuite cipher_suite; EncryptedGroupSecrets secrets<V>; opaque encrypted_group_info<V>; }
 /// Welcome`, so the suite is the big-endian `u16` at the front. Read first, a foreign-suite Welcome never reaches a decoder
 /// or the HPKE-open path.
-pub(crate) fn refuse_foreign_welcome_suite(welcome_bytes: &[u8]) -> Result<(), GateError> {
+pub(crate) fn refuse_foreign_welcome_suite(
+    welcome_bytes: &[u8],
+    accepted: &[u16],
+) -> Result<(), GateError> {
     let suite = welcome_bytes
         .get(..2)
         .map(|suite| u16::from_be_bytes([suite[0], suite[1]]))
         .ok_or(GateError::WelcomeTooShort)?;
-    if suite != HAVEN_MLS_CIPHERSUITE_U16 {
-        return Err(ForeignCiphersuite { got: suite }.into());
-    }
-    Ok(())
+    refuse_unless_accepted(suite, accepted)
 }
 
 /// **K5 accept-gate - bare Welcome.** The same refusal as [`mimi_gate_welcome`] for a `Welcome` that is not wrapped in an
 /// `MLSMessage`, which is how §5.3's `HandshakeBundle` carries one. Refuses a foreign suite first, then requires the bytes
 /// to be one `Welcome` and nothing after it.
-pub fn mimi_gate_welcome_bare(welcome_bytes: &[u8]) -> Result<(), GateError> {
-    refuse_foreign_welcome_suite(welcome_bytes)?;
+pub fn mimi_gate_welcome_bare(welcome_bytes: &[u8], accepted: &[u16]) -> Result<(), GateError> {
+    refuse_foreign_welcome_suite(welcome_bytes, accepted)?;
     let (_welcome, consumed) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut slice = welcome_bytes;
         Welcome::tls_deserialize(&mut slice).map(|w| (w, welcome_bytes.len() - slice.len()))
@@ -360,7 +349,7 @@ pub fn mimi_gate_welcome_bare(welcome_bytes: &[u8]) -> Result<(), GateError> {
 
 /// **K5 accept-gate - GroupInfo (Full representation only).** Call BEFORE treating a `groupInfo`
 /// (§5.6, or a Commit's Full-representation `groupInfoOption`) as viable join material. Returns
-/// `Ok(())` only for the pinned suite. This closes the same foreign-suite AEAD-reachability
+/// `Ok(())` only for a suite in `accepted`. This closes the same foreign-suite AEAD-reachability
 /// class `mimi_gate_welcome` closes for Welcome, on a second live path:
 /// `join_by_external_commit` derives its HPKE parameters from the GroupInfo's ciphersuite,
 /// which a remote peer chooses.
@@ -372,7 +361,7 @@ pub fn mimi_gate_welcome_bare(welcome_bytes: &[u8]) -> Result<(), GateError> {
 /// (`PartialGroupInfo`, the sibling delta-encoding draft) has no decoder in this crate or in
 /// openmls's public surface, so it cannot be gated here - callers must not treat an ungated
 /// `Partial` payload as trusted join material.
-pub fn mimi_gate_group_info(group_info_bytes: &[u8]) -> Result<(), GateError> {
+pub fn mimi_gate_group_info(group_info_bytes: &[u8], accepted: &[u16]) -> Result<(), GateError> {
     use openmls::messages::group_info::VerifiableGroupInfo;
 
     let (info, consumed) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -388,11 +377,7 @@ pub fn mimi_gate_group_info(group_info_bytes: &[u8]) -> Result<(), GateError> {
             n: group_info_bytes.len() - consumed,
         });
     }
-    let suite = u16::from(info.ciphersuite());
-    if suite != HAVEN_MLS_CIPHERSUITE_U16 {
-        return Err(ForeignCiphersuite { got: suite }.into());
-    }
-    Ok(())
+    refuse_unless_accepted(u16::from(info.ciphersuite()), accepted)
 }
 
 // ===========================================================================
@@ -403,25 +388,21 @@ pub fn mimi_gate_group_info(group_info_bytes: &[u8]) -> Result<(), GateError> {
 // without changing the decision logic.
 // ===========================================================================
 
-/// Result of a MIMI `identifierQuery` (§5.7 / DIV-4). The privacy-critical contract:
-/// `NotFound` is returned for BOTH "no such account" AND "account exists but has not opted into
-/// MIMI" - they MUST be indistinguishable, so a query can never reveal the existence of a
-/// non-enrolled Haven user. Only opt-in (Standards-Testing-Page) enrollees are ever `Found`.
+/// Result of a MIMI `identifierQuery` (protocol-07 §5.8). `NotFound` is the one answer for every user the provider
+/// does not answer for, whether the user does not exist or exists outside what the provider's discovery setting lets
+/// it name, so the answer never says which.
 #[derive(Debug, PartialEq, Eq)]
 pub enum IdentifierQueryResult {
-    /// The identifier belongs to a MIMI-opted-in account; safe to expose for federation.
+    /// The provider answers for this user.
     Found,
-    /// Either non-existent OR existent-but-not-opted-in. Caller MUST emit an identical response
-    /// for both - do not branch the wire response on which it was.
+    /// The provider does not answer for this user. Callers send one response for every case behind it.
     NotFound,
 }
 
-/// DIV-4 opt-in-only identifierQuery. `is_mimi_enrolled` is true ONLY for accounts that opted in
-/// via the Standards Testing Page (which also gates send + portal - INV-MIMI-001). The function
-/// deliberately takes ONLY the enrollment bit, never an "account exists" bit, so it is structurally
-/// impossible to leak existence of a non-enrolled account: the answer depends solely on enrollment.
-pub const fn identifier_query(is_mimi_enrolled: bool) -> IdentifierQueryResult {
-    if is_mimi_enrolled {
+/// The `identifierQuery` answer. `answerable` is whether the provider's discovery setting lets it name this user; the
+/// function takes only that bit, never whether the user exists, so the answer cannot depend on existence beyond it.
+pub const fn identifier_query(answerable: bool) -> IdentifierQueryResult {
+    if answerable {
         IdentifierQueryResult::Found
     } else {
         IdentifierQueryResult::NotFound
@@ -509,21 +490,57 @@ mod tests {
     }
 
     const AES: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
-    // INV-MLS-002-ALLOW: test-only foreign suite for the accept-gate (never a prod path).
-    const CHACHA: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519; // INV-MLS-002-ALLOW (test-only)
+    /// The gates asked to accept 0x0001 only.
+    const ONLY_AES: &[u16] = &[MLS_128_DHKEMX25519_AES128GCM_SHA256_ED25519];
+    // A suite the gates below are asked not to accept.
+    const CHACHA: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519;
 
     #[test]
     fn keypackage_gate_accepts_pinned_rejects_foreign() {
         let (kp_aes, _, _, _) = ident("alice_aes", AES);
         let (kp_cc, _, _, _) = ident("alice_cc", CHACHA);
         assert!(
-            mimi_gate_keypackage(&kp_aes).is_ok(),
+            mimi_gate_keypackage(&kp_aes, ONLY_AES).is_ok(),
             "0x0001 KeyPackage must pass the accept-gate"
         );
-        let err = mimi_gate_keypackage(&kp_cc).unwrap_err();
+        let err = mimi_gate_keypackage(&kp_cc, ONLY_AES).unwrap_err();
         assert!(
             err.to_string().contains("0x0003"),
             "0x0003 KeyPackage must be refused by the accept-gate, got: {err}"
+        );
+    }
+
+    /// With no narrower list a deployment accepts every suite the crypto provider implements, and that list is what
+    /// the provider reports, in order.
+    #[test]
+    fn the_default_list_is_every_suite_the_provider_implements() {
+        let mut implemented: Vec<u16> = OpenMlsRustCrypto::default()
+            .crypto()
+            .supported_ciphersuites()
+            .into_iter()
+            .map(u16::from)
+            .collect();
+        implemented.sort_unstable();
+        assert_eq!(default_mls_ciphersuites(), implemented);
+        assert!(default_mls_ciphersuites().contains(&u16::from(CHACHA)));
+    }
+
+    /// The gate follows the list it is given: 0x0003 passes when it is listed, and a refusal names what was accepted.
+    /// Revert check: compare with 0x0001 instead of the list, and the listed 0x0003 is refused.
+    #[test]
+    fn the_gate_accepts_exactly_the_suites_it_is_given() {
+        let (kp_cc, _, _, _) = ident("carol_cc", CHACHA);
+        assert!(
+            mimi_gate_keypackage(&kp_cc, &[0x0001, 0x0003]).is_ok(),
+            "PLANT-GATE-LIST: a listed suite is accepted"
+        );
+        assert!(mimi_gate_keypackage(&kp_cc, &default_mls_ciphersuites()).is_ok());
+        let refused = mimi_gate_keypackage(&kp_cc, &[0x0001, 0x0002])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("0x0003") && refused.contains("accepted: 0x0001, 0x0002"),
+            "{refused}"
         );
     }
 
@@ -533,17 +550,17 @@ mod tests {
         let (kp_aes, _, _, _) = ident("alice_aes", AES);
         let mut with_trailer = kp_aes.clone();
         with_trailer.push(0xEE);
-        assert!(mimi_gate_keypackage(&with_trailer).is_err());
-        assert!(keypackage_ref(&with_trailer).is_err());
+        assert!(mimi_gate_keypackage(&with_trailer, ONLY_AES).is_err());
+        assert!(keypackage_ref(&with_trailer, ONLY_AES).is_err());
     }
 
     #[test]
     fn keypackage_ref_is_deterministic_and_distinct() {
         let (kp_a, _, _, _) = ident("alice", AES);
         let (kp_b, _, _, _) = ident("bob", AES);
-        let ref_a1 = keypackage_ref(&kp_a).unwrap();
-        let ref_a2 = keypackage_ref(&kp_a).unwrap();
-        let ref_b = keypackage_ref(&kp_b).unwrap();
+        let ref_a1 = keypackage_ref(&kp_a, ONLY_AES).unwrap();
+        let ref_a2 = keypackage_ref(&kp_a, ONLY_AES).unwrap();
+        let ref_b = keypackage_ref(&kp_b, ONLY_AES).unwrap();
         // SHA-256-based RefHash → 32 bytes for suite 0x0001.
         assert_eq!(
             ref_a1.len(),
@@ -563,14 +580,14 @@ mod tests {
         let n = tampered.len();
         tampered[n - 1] ^= 0x01;
         // tampering breaks validation OR changes the ref - either way it is NOT the original ref.
-        if let Ok(r) = keypackage_ref(&tampered) {
+        if let Ok(r) = keypackage_ref(&tampered, ONLY_AES) {
             assert_ne!(
                 r, ref_a1,
                 "a modified KeyPackage cannot map to the original's routing key"
             );
         }
         assert!(
-            keypackage_ref(b"not a keypackage").is_err(),
+            keypackage_ref(b"not a keypackage", ONLY_AES).is_err(),
             "garbage → error, never a bogus ref"
         );
     }
@@ -599,10 +616,10 @@ mod tests {
         let w_aes = welcome_under(AES);
         let w_cc = welcome_under(CHACHA);
         assert!(
-            mimi_gate_welcome(&w_aes).is_ok(),
+            mimi_gate_welcome(&w_aes, ONLY_AES).is_ok(),
             "0x0001 Welcome must pass the accept-gate"
         );
-        let err = mimi_gate_welcome(&w_cc).unwrap_err();
+        let err = mimi_gate_welcome(&w_cc, ONLY_AES).unwrap_err();
         assert!(
             err.to_string().contains("0x0003"),
             "0x0003 Welcome must be refused BEFORE openmls processing (the OpenMlsRustCrypto ChaCha path), got: {err}"
@@ -614,7 +631,7 @@ mod tests {
         // Note: the same trailing-bytes class as the KeyPackage gate.
         let mut with_trailer = welcome_under(AES);
         with_trailer.push(0xEE);
-        assert!(mimi_gate_welcome(&with_trailer).is_err());
+        assert!(mimi_gate_welcome(&with_trailer, ONLY_AES).is_err());
     }
 
     /// Build a real GroupInfo (Full representation wire bytes) under `suite` by creating a group
@@ -643,10 +660,10 @@ mod tests {
         let gi_aes = group_info_under(AES);
         let gi_cc = group_info_under(CHACHA);
         assert!(
-            mimi_gate_group_info(&gi_aes).is_ok(),
+            mimi_gate_group_info(&gi_aes, ONLY_AES).is_ok(),
             "0x0001 GroupInfo must pass the accept-gate"
         );
-        let err = mimi_gate_group_info(&gi_cc).unwrap_err();
+        let err = mimi_gate_group_info(&gi_cc, ONLY_AES).unwrap_err();
         assert!(
             err.to_string().contains("0x0003"),
             "0x0003 GroupInfo must be refused before any join_by_external_commit attempt, got: {err}"
@@ -657,7 +674,7 @@ mod tests {
     fn group_info_gate_rejects_trailing_bytes() {
         let mut with_trailer = group_info_under(AES);
         with_trailer.push(0xEE);
-        assert!(mimi_gate_group_info(&with_trailer).is_err());
+        assert!(mimi_gate_group_info(&with_trailer, ONLY_AES).is_err());
     }
 
     // --- hardening: the gate is the one security-load-bearing thing here, so it must
@@ -676,15 +693,15 @@ mod tests {
         ];
         for bad in garbage {
             assert!(
-                mimi_gate_keypackage(bad).is_err(),
+                mimi_gate_keypackage(bad, ONLY_AES).is_err(),
                 "keypackage gate must reject garbage"
             );
             assert!(
-                mimi_gate_welcome(bad).is_err(),
+                mimi_gate_welcome(bad, ONLY_AES).is_err(),
                 "welcome gate must reject garbage"
             );
             assert!(
-                mimi_gate_group_info(bad).is_err(),
+                mimi_gate_group_info(bad, ONLY_AES).is_err(),
                 "group_info gate must reject garbage"
             );
         }
@@ -696,7 +713,7 @@ mod tests {
         // refuse it (covers the `_ => Err` arm) rather than mis-read bytes as a ciphersuite.
         let kp = ident("wrongtype", AES).0;
         assert!(
-            mimi_gate_welcome(&kp).is_err(),
+            mimi_gate_welcome(&kp, ONLY_AES).is_err(),
             "welcome gate must refuse non-Welcome bytes"
         );
     }

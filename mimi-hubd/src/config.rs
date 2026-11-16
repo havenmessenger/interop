@@ -22,6 +22,7 @@ const KNOWN_KEYS: &[&str] = &[
     "client_ca",
     "directory_bind_addr",
     "admin_bind_addr",
+    "policy",
     "public_base_url",
     "activity_log",
     "peer_keys",
@@ -41,6 +42,8 @@ pub struct ConfigFile {
     pub directory_bind_addr: Option<String>,
     /// Where the operator's listener binds, a loopback address only. Unset means there is none.
     pub admin_bind_addr: Option<String>,
+    /// The policy file (see `policy.rs`). Unset means the drafts' defaults.
+    pub policy: Option<String>,
     pub public_base_url: Option<String>,
     /// `1` turns on the activity line (see `activity.rs`). Anything else, or no value, leaves it off.
     pub activity_log: Option<String>,
@@ -82,6 +85,7 @@ impl ConfigFile {
             "client_ca" => self.client_ca.as_ref(),
             "directory_bind_addr" => self.directory_bind_addr.as_ref(),
             "admin_bind_addr" => self.admin_bind_addr.as_ref(),
+            "policy" => self.policy.as_ref(),
             "public_base_url" => self.public_base_url.as_ref(),
             "activity_log" => self.activity_log.as_ref(),
             "peer_keys" => self.peer_keys.as_ref(),
@@ -227,6 +231,8 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
         "MIMI_ADMIN_BIND_ADDR",
         resolve("MIMI_ADMIN_BIND_ADDR", "admin_bind_addr", file, None),
     );
+    // No default: without a policy file the hub follows the drafts' defaults.
+    m.insert("MIMI_POLICY", resolve("MIMI_POLICY", "policy", file, None));
     m.insert(
         "MIMI_PUBLIC_BASE_URL",
         resolve("MIMI_PUBLIC_BASE_URL", "public_base_url", file, None),
@@ -258,6 +264,7 @@ mod tests {
             "MIMI_CLIENT_CA",
             "MIMI_DIRECTORY_BIND_ADDR",
             "MIMI_ADMIN_BIND_ADDR",
+            "MIMI_POLICY",
             "MIMI_PUBLIC_BASE_URL",
             "MIMI_ACTIVITY_LOG",
         ] {

@@ -19,7 +19,7 @@ fn an_enrolled_handle_is_found_by_a_hub_on_the_same_store_and_no_other_is() {
     let (dir, path) = fresh_db_path("found");
     let hub = Provider::open("example.com", &path).unwrap();
     assert_eq!(
-        hub.identifier_query("erin").unwrap(),
+        hub.identifier_query("erin", 0).unwrap(),
         IdentifierQueryResult::NotFound
     );
 
@@ -27,11 +27,11 @@ fn an_enrolled_handle_is_found_by_a_hub_on_the_same_store_and_no_other_is() {
 
     // The hub was open before the handle was enrolled: it reads the store at each query.
     assert_eq!(
-        hub.identifier_query("erin").unwrap(),
+        hub.identifier_query("erin", 0).unwrap(),
         IdentifierQueryResult::Found
     );
     assert_eq!(
-        hub.identifier_query("grace").unwrap(),
+        hub.identifier_query("grace", 0).unwrap(),
         IdentifierQueryResult::NotFound
     );
     std::fs::remove_dir_all(dir).unwrap();
@@ -44,7 +44,7 @@ fn enrolling_a_handle_twice_is_not_an_error() {
     enroll_handle(&path, "erin").unwrap();
     enroll_handle(&path, "erin").unwrap();
     assert_eq!(
-        hub.identifier_query("erin").unwrap(),
+        hub.identifier_query("erin", 0).unwrap(),
         IdentifierQueryResult::Found
     );
     std::fs::remove_dir_all(dir).unwrap();
@@ -73,7 +73,7 @@ fn an_empty_handle_is_refused_and_nothing_is_enrolled() {
 
     assert!(refused.contains("empty"), "{refused}");
     assert_eq!(
-        hub.identifier_query("").unwrap(),
+        hub.identifier_query("", 0).unwrap(),
         IdentifierQueryResult::NotFound
     );
     std::fs::remove_dir_all(dir).unwrap();

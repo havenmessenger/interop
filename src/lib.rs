@@ -1,9 +1,9 @@
 //! mimi-core - pure MIMI/MLS provider logic. Self-contained: no networking, no server deps, no
 //! WASM-incompatible dependencies (see Cargo.toml for the WHY).
 //!
-//! - [`gate`] - the security-critical foreign-input ingest logic: the ciphersuite accept-gate
-//!   (INV-MLS-002, closes the libcrux-ChaCha reachability), the opt-in `identifier_query` (DIV-4),
-//!   the one-time KeyPackage store contract (K1/K2), and the `/notify` dedup (M5).
+//! - [`gate`] - the security-critical foreign-input ingest logic: the ciphersuite accept-gate (a
+//!   suite outside the accepted list never reaches openmls), the `identifier_query` answer shape
+//!   (DIV-4), the one-time KeyPackage store contract (K1/K2), and the `/notify` dedup (M5).
 //! - [`content`] - the MIMI content codec (content-09 §4–6): deterministic CBOR (§4.2.1, NOT the
 //!   forbidden length-first order), the part type system, and the validation MUSTs (depth, nohtml,
 //!   reply-loop).
@@ -19,10 +19,9 @@
 //!
 //! `external-ops` (default-off Cargo feature): when enabled, compiles a small proof-only test module
 //! (`spec_capability_proof`, `#[cfg(all(feature = "external-ops", test))]`) demonstrating that
-//! openmls's OWN external-commit and external-proposal mechanisms are real and testable, for a
-//! full-fidelity ("SpecProfile") consumer such as `mimi-hubd`. It is NOT Haven's own acceptance
-//! mechanism - see `crate::gate`'s join-model note and `crypto_core::profile`'s policy for
-//! Haven's actual posture, which excludes this feature by default and permanently in the native lane.
+//! openmls's own external-commit and external-proposal mechanisms work against this crate's
+//! fixtures. It is a test, not an acceptance path: this crate does not yet serve a GroupInfo or
+//! accept an external commit (DIVERGENCES DIV-1; see `crate::gate`'s join note).
 
 pub mod commit_wire;
 pub mod consent;

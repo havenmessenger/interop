@@ -10,6 +10,9 @@ use openmls_traits::signatures::{Signer, SignerError};
 use openmls_traits::OpenMlsProvider;
 use tls_codec::Serialize as TlsSerialize;
 
+/// The accept-gates asked to accept 0x0001 only, so another suite is refused.
+pub(crate) const ONLY_AES: &[u16] = &[crate::gate::MLS_128_DHKEMX25519_AES128GCM_SHA256_ED25519];
+
 struct Ed25519Signer {
     key: Vec<u8>,
 }

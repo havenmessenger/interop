@@ -1,8 +1,8 @@
 # mimi-hubd
 
 A reference MIMI hub daemon: mTLS-terminated HTTP server, durable SQLite-backed state, and the
-v1 request-handling semantics (add-driven membership, text-only content, MLS ciphersuite 0x0001
-only) over [`mimi-core`](..)'s gate, consent, and room-policy logic.
+v1 request-handling semantics (add-driven membership, text-only content, the MLS ciphersuites the
+deployment accepts) over [`mimi-core`](..)'s gate, consent, and room-policy logic.
 
 ## Wire format: read this before you rely on interop
 
@@ -33,9 +33,9 @@ applies it to the room's stored participant list or policy.
 `success` means that change was applied. The hub does not store or relay the Commit, and it never
 answers `wrongEpoch`. A Commit mixing that proposal with a standard MLS proposal (Add/Remove/Update,
 ...) in the same proposal list is refused - full general Commit processing is out of scope for this
-reference hub. `groupInfo` (§5.6) is out of scope for a different reason: it is the external-commit
-join endpoint DIV-1 disallows in Haven's own product build, and framing it without the accept-path
-behind it would wire-format half of a security-relevant endpoint. Asset download (§5.10) has no v1
+reference hub. `groupInfo` (§5.6) is not built yet (DIV-1): it is the external-commit join
+endpoint, and framing it without the accept-path behind it would wire-format half of a
+security-relevant endpoint. Asset download (§5.10) has no v1
 handler of any kind to frame. The four v1 room-admin JSON endpoints
 (`roomPolicy`/`memberRole`/`addParticipant`/`authorizeSender`) are not protocol-07 endpoints at all -
 they are this hub's own RBAC surface, not part of the draft's wire vocabulary - so there is nothing
@@ -76,8 +76,8 @@ HTTP_STATUS=200
 ```
 
 `notify` (an application message wrapped as `FanoutMessage`) and `identifierQuery` (a
-wire-encoded query against a non-enrolled user, which gets the same `notFound` answer as a name nobody has, DIV-4's
-no-oracle property):
+wire-encoded query for a user the hub does not answer for, which gets the same `notFound` answer as a name nobody
+has):
 
 ```
 $ curl -s --cacert ca-cert.pem --cert client-cert.pem --key client-key.pem \
@@ -181,8 +181,7 @@ Output from the sequence above:
     "provider": "example.com",
     "unsupported": {
         "assets_ohttp": "DIV-3: v1 is messaging-only",
-        "groupInfo_external_commit_join": "DIV-1: add-driven join only (ETK security)",
-        "non_0x0001_ciphersuites": "DIV-2: rejected at ingest",
+        "groupInfo_external_commit_join": "DIV-1: not built yet; joins are add-driven",
         "reportAbuse_with_abusive_messages": "DIV-9: a report attaching an AbusiveMessage is refused (its Frank cannot yet be verified) - metadata-only reports are accepted",
         "update_wire_endpoint_mixed_commits": "DIV-10: a Commit is applied when it carries exactly one participant-list or room-policy change, alone or with Add and Remove proposals beside it; proposals by reference are accepted only when they are the ones this hub holds for a member's leave. A second change, a Commit with no change, any other proposal type and any other proposal by reference are refused"
     },
@@ -285,6 +284,7 @@ the file - see [`debian/mimi-hubd.toml.example`](debian/mimi-hubd.toml.example) 
 | `MIMI_PUBLIC_BASE_URL` | `public_base_url` | no | `https://{MIMI_PROVIDER_DOMAIN}` | The `https://` URL the directory's endpoint URLs start at, for a hub behind a reverse proxy, on a port other than 443, or on a dedicated host. Identifiers keep using `MIMI_PROVIDER_DOMAIN`. One trailing `/` is dropped; a query, fragment or non-`https` URL is a hard error at startup. |
 | `MIMI_DIRECTORY_BIND_ADDR` | `directory_bind_addr` | no | none | A second listener, plain HTTP and with no client certificate, that answers `GET /.well-known/mimi-protocol-directory` and nothing else. It is meant to sit behind whatever terminates TLS for the public name. Unset means there is no such listener. |
 | `MIMI_ADMIN_BIND_ADDR` | `admin_bind_addr` | no | none | The operator's listener: plain HTTP with no client certificate, serving `roomPolicy`, `memberRole` and `addParticipant` and nothing else. It must be a loopback `ip:port` (127.0.0.0/8 or `::1`); any other address stops the hub at start. Unset means there is no such listener, and no request can change a room's policy, roles or participants except a peer's `update`. |
+| `MIMI_POLICY` | `policy` | no | none | A TOML file of the deployment's choices, below. Unset means the drafts' defaults. A named file the hub cannot read, or one that is not a valid policy, stops the start. |
 | `MIMI_PEER_KEYS` | `peer_keys` | no | none | Path of a JSON file of peers' DNS-published signing keys, `{"<keyid>._mimi.<domain>": "<base64 Ed25519 public key>"}`, an empty value for a revoked key. Re-read when it changes. Without it, no signature verifies and only a client certificate admits a peer. |
 | `MIMI_ACTIVITY_LOG` | `activity_log` | no | off | `1` prints one line per request on the peer-facing listener to stderr: `[mimi-activity] method=POST route=/mimi/pl/update/:room_id status=200`. The route is the template the request matched (`route=unmatched` when none did), so no path, query string, header, certificate or body appears in it. Any other value, or none, leaves it off. The directory-only listener is not logged. |
 
@@ -294,6 +294,25 @@ store is opened, so a bad or missing certificate fails before anything touches d
 unrecognized key in a `--config` file is logged as a warning (not a hard error - a genuinely new,
 forward-compatible key should not break parsing), which also means a *typo'd* key surfaces as a
 diagnostic instead of a silent no-op.
+
+### The policy file
+
+Where the drafts leave a choice to the deployment, the hub reads it from the file `MIMI_POLICY` names. Every field has
+a default that is the drafts' behaviour; the hub prints the policy it runs with at startup.
+
+```toml
+# The MLS ciphersuites accepted from other providers, as wire values. Default: every suite the
+# crypto provider implements. The directory's `mls_ciphersuites` advertises exactly this list.
+mls_ciphersuites = [0x0001]
+# Who identifierQuery may find. "all" (default): every user this hub can answer for, which on this
+# hub means a user it has enrolled or holds an unexpired KeyPackage for. "enrolled": only users
+# enrolled with `mimi-hubd enroll`.
+identifier_discovery = "enrolled"
+```
+
+A key the hub does not know, an empty suite list, or a suite the crypto provider does not implement stops the start,
+so a misspelt policy never runs as the defaults. Either discovery setting answers every miss with the same `notFound`;
+protocol-07 §5.8's privacy considerations say what discovery reveals and are worth reading before choosing.
 
 ## Peer authentication
 
@@ -349,9 +368,10 @@ canonical form was already stored.
 
 ## Enrolling a handle for identifierQuery
 
-`identifierQuery` answers `success` only for a handle that opted in, and the one `notFound` answer for every other one, both HTTP 200 on the wire lane (the JSON lane answers 404 with no body)
-(`../DIVERGENCES.md`, DIV-4). No route enrolls a handle, so no peer can make a user discoverable. The operator does
-it, on the hub's host:
+`identifierQuery` answers `success` for a user the hub answers for (the policy's `identifier_discovery`, under the
+configuration reference), and the one `notFound` answer for every other, both HTTP 200 on the wire lane (the JSON
+lane answers 404 with no body). An enrolled handle is always found. No route enrolls a handle, so no peer can make a
+user discoverable this way. The operator does it, on the hub's host:
 
 ```bash
 mimi-hubd --config /etc/mimi-hubd/mimi-hubd.toml enroll erin
@@ -396,8 +416,7 @@ says whether the handle it was given is enrolled.
 
 ## What this hub does not do (v1 scope)
 
-- **§5.6 GroupInfo / external-commit join.** Membership is add-driven only.
-- **Non-0x0001 ciphersuites.** Rejected at the gate before they reach any MLS processing.
+- **§5.6 GroupInfo / external-commit join.** Not built yet; membership is add-driven.
 - **Assets / OHTTP (§5.10).** v1 is messaging-only.
 - **General `update` (§5.3) Commit processing.** Only a Commit whose proposal list holds exactly
   one participant-list or room-policy proposal is applied - a Commit mixing it with a standard MLS

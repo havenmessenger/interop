@@ -80,7 +80,7 @@ Haven's client application is not yet public; the runnable examples in this repo
 devices ("emulator clients") jointly acting as one virtual client under a single MLS leaf. This is
 running code against openmls; see the module's own doc comment for the full
 scope statement (what's implemented vs. not, and why an external commit into the
-emulation group doesn't touch Haven's rule against external commits).
+emulation group is a different matter from one into a room).
 
 ```sh
 cargo test --lib virtual_clients        # unit tests and openmls conformance tests

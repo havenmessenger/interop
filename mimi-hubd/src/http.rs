@@ -393,7 +393,7 @@ async fn fetch_welcome(State(p): State<SharedProvider>, Query(q): Query<UserQuer
 }
 
 /// Deposit an opaque application message (MLS PrivateMessage) for `?recipient=X`. The provider stores
-/// ciphertext only - it never decrypts (INV-MIMI-002); the store bounds size + queue depth. 201 on
+/// ciphertext only - it never decrypts; the store bounds size + queue depth. 201 on
 /// accept, 400 if the bounds reject (empty/oversize/queue-full/bad recipient).
 async fn submit_message(
     State(p): State<SharedProvider>,
@@ -601,7 +601,7 @@ async fn identifier_query(
     State(p): State<SharedProvider>,
     Json(req): Json<IdentifierQueryReq>,
 ) -> StatusCode {
-    match lock(&p).identifier_query(&req.username) {
+    match lock(&p).identifier_query(&req.username, now_unix()) {
         Ok(IdentifierQueryResult::Found) => StatusCode::OK,
         Ok(IdentifierQueryResult::NotFound) | Err(_) => StatusCode::NOT_FOUND,
     }
@@ -624,7 +624,7 @@ async fn identifier_query_wire(State(p): State<SharedProvider>, body: Bytes) -> 
         .and_then(|(search_type, value)| {
             let g = lock(&p);
             let username = crate::identifier_search::enrolled_name(search_type, &value, &g.domain)?;
-            match g.identifier_query(&username) {
+            match g.identifier_query(&username, now_unix()) {
                 Ok(IdentifierQueryResult::Found) => {
                     // The name goes into the URI percent-encoded, so a name in any script is answered as a URI.
                     Some(format!(
@@ -856,8 +856,11 @@ async fn request_consent_wire(
     let peer = peer
         .as_ref()
         .and_then(|Extension(PeerCert(identity))| identity.as_ref());
-    if let Ok(entry) = mimi_core::protocol_wire::decode_consent_entry(&body) {
-        let _ = lock(&p).process_request_consent(&entry, peer, now_unix());
+    let provider = lock(&p);
+    if let Ok(entry) =
+        mimi_core::protocol_wire::decode_consent_entry(&body, provider.accepted_suites())
+    {
+        let _ = provider.process_request_consent(&entry, peer, now_unix());
     }
     StatusCode::ACCEPTED
 }
@@ -873,8 +876,11 @@ async fn update_consent_wire(
     if !operation_is_one_of(&body, &[ConsentOperation::Grant, ConsentOperation::Revoke]) {
         return StatusCode::UNPROCESSABLE_ENTITY;
     }
-    if let Ok(entry) = mimi_core::protocol_wire::decode_consent_entry(&body) {
-        let _ = lock(&p).process_update_consent(&entry, now_unix());
+    let provider = lock(&p);
+    if let Ok(entry) =
+        mimi_core::protocol_wire::decode_consent_entry(&body, provider.accepted_suites())
+    {
+        let _ = provider.process_update_consent(&entry, now_unix());
     }
     StatusCode::ACCEPTED
 }
@@ -1071,7 +1077,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn directory_endpoint_returns_0x0001_only() {
+    async fn directory_endpoint_advertises_the_accepted_suites() {
         let (router, _p) = app();
         let resp = router
             .oneshot(
@@ -1085,7 +1091,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(v["mls_ciphersuites"], serde_json::json!([1]));
+        assert_eq!(
+            v["mls_ciphersuites"],
+            serde_json::json!(mimi_core::gate::default_mls_ciphersuites())
+        );
     }
 
     #[tokio::test]
@@ -1924,7 +1933,7 @@ mod tests {
                 ProposalType::Custom(MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE),
                 ProposalType::Custom(MIMI_ROLES_LIST_PROPOSAL_TYPE),
                 ProposalType::Custom(MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE),
-                // 0xF7FF: an arbitrary type NEITHER of Haven's registered ones, negotiated here
+                // 0xF7FF: an arbitrary type NEITHER of the custom ones this hub reads, negotiated here
                 // only so `update_wire_rejects_an_unrecognized_proposal_type` can exercise this
                 // hub's OWN rejection of it, rather than openmls's group-level capability check
                 // refusing to build the commit at all.
@@ -2125,7 +2134,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        match KeyMaterialResponse::decode(&body).unwrap() {
+        match KeyMaterialResponse::decode(&body, &[0x0001]).unwrap() {
             KeyMaterialResponse::Success {
                 user_uri,
                 key_package,
@@ -2153,7 +2162,7 @@ mod tests {
         assert_eq!(second.status(), StatusCode::OK, "still 200, per §5.2 shape");
         let body2 = second.into_body().collect().await.unwrap().to_bytes();
         assert!(matches!(
-            KeyMaterialResponse::decode(&body2).unwrap(),
+            KeyMaterialResponse::decode(&body2, &[0x0001]).unwrap(),
             KeyMaterialResponse::Exhausted { .. }
         ));
     }
@@ -2193,7 +2202,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK, "still 200, per §5.2 shape");
         let body = resp.into_body().collect().await.unwrap().to_bytes();
-        match KeyMaterialResponse::decode(&body).unwrap() {
+        match KeyMaterialResponse::decode(&body, &[0x0001]).unwrap() {
             KeyMaterialResponse::Denied { user_uri, code } => {
                 assert_eq!(user_uri.0, "carol");
                 assert_eq!(code, KeyMaterialUserCode::NoConsent);

@@ -4,9 +4,12 @@
 //! `examples/gen_protocol07_vectors.rs` and not by this crate's encoders, so they also serve as the input a second
 //! implementation decodes.
 
-use mimi_core::gate::mimi_gate_keypackage;
+use mimi_core::gate::{mimi_gate_keypackage, MLS_128_DHKEMX25519_AES128GCM_SHA256_ED25519};
 use mimi_core::protocol_wire::{HandshakeBundle, KeyMaterialResponse, UpdateRoomResponse};
 use serde::Deserialize;
+
+/// The vectors' KeyPackages are checked against a gate that accepts 0x0001 only.
+const ONLY_AES: &[u16] = &[MLS_128_DHKEMX25519_AES128GCM_SHA256_ED25519];
 
 const VECTORS_JSON: &str = include_str!("vectors/protocol07-vectors.json");
 
@@ -55,7 +58,7 @@ fn every_vector_is_decoded_or_refused_as_recorded() {
         let bytes = hex::decode(&vector.hex).unwrap();
         let id = &vector.id;
         let (accepted, variant, re_encoded) = match vector.kind.as_str() {
-            "KeyMaterialResponse" => match KeyMaterialResponse::decode(&bytes) {
+            "KeyMaterialResponse" => match KeyMaterialResponse::decode(&bytes, ONLY_AES) {
                 Ok(response) => (
                     true,
                     Some(key_material_variant(&response)),
@@ -68,17 +71,19 @@ fn every_vector_is_decoded_or_refused_as_recorded() {
                 Err(_) => (false, None, None),
             },
             // An UpdateRequest is a HandshakeBundle; what the hub answers is replayed in mimi-hubd's own tests.
-            "HandshakeBundle" | "UpdateRequest" => match HandshakeBundle::decode(&bytes) {
-                Ok(bundle) => (
-                    true,
-                    Some(bundle_variant(&bundle)),
-                    Some(bundle.encode().unwrap()),
-                ),
-                Err(_) => (false, None, None),
-            },
+            "HandshakeBundle" | "UpdateRequest" => {
+                match HandshakeBundle::decode(&bytes, ONLY_AES) {
+                    Ok(bundle) => (
+                        true,
+                        Some(bundle_variant(&bundle)),
+                        Some(bundle.encode().unwrap()),
+                    ),
+                    Err(_) => (false, None, None),
+                }
+            }
             // The gate reads a KeyPackage and writes nothing back, so there is no re-encoding to compare.
             "KeyPackage" => {
-                let passed = mimi_gate_keypackage(&bytes).is_ok();
+                let passed = mimi_gate_keypackage(&bytes, ONLY_AES).is_ok();
                 (passed, None, passed.then(|| bytes.clone()))
             }
             other => panic!("{id}: unknown vector kind {other}"),

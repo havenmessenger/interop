@@ -33,7 +33,7 @@ fn enroll_writes_the_handle_into_the_hubs_store_with_no_certificate_configured()
     let path = dir.join("hub.db").to_str().unwrap().to_owned();
     let hub = Provider::open("example.com", &path).unwrap();
     assert_eq!(
-        hub.identifier_query("erin").unwrap(),
+        hub.identifier_query("erin", 0).unwrap(),
         IdentifierQueryResult::NotFound
     );
 
@@ -47,7 +47,7 @@ fn enroll_writes_the_handle_into_the_hubs_store_with_no_certificate_configured()
     let said = String::from_utf8_lossy(&ran.stdout);
     assert!(said.contains("erin") && said.contains(&path), "{said}");
     assert_eq!(
-        hub.identifier_query("erin").unwrap(),
+        hub.identifier_query("erin", 0).unwrap(),
         IdentifierQueryResult::Found
     );
     std::fs::remove_dir_all(dir).unwrap();

@@ -16,6 +16,9 @@
 //!                          (mTLS peer-trust allowlist; see README.md for how to generate one)
 //!   MIMI_ACTIVITY_LOG      optional; 1 prints one line per peer request (method, route template, status); off otherwise
 //!   MIMI_DIRECTORY_BIND_ADDR  optional; a second listener, plain HTTP, that serves the directory document only
+//!   MIMI_POLICY            optional; a TOML file of the deployment's choices (accepted ciphersuites, who
+//!                          identifierQuery finds); without it the hub follows the drafts. A named
+//!                          file that cannot be read or is not a valid policy stops the start
 //!   MIMI_ADMIN_BIND_ADDR   optional; the operator's listener, plain HTTP on a loopback address only (127.0.0.0/8 or
 //!                          ::1), serving roomPolicy, memberRole and addParticipant; any other address stops the start
 //!   MIMI_PEER_KEYS         optional; JSON file of DNS-published peer keys ("<keyid>._mimi.<domain>": base64), kept
@@ -41,6 +44,7 @@ use mimi_hubd::{
     admin::{admin_bind_addr, build_admin_router},
     enroll::enroll_handle,
     http::{build_directory_router, build_router},
+    policy::HubPolicy,
     tls, Provider,
 };
 
@@ -121,8 +125,20 @@ async fn main() -> anyhow::Result<()> {
         .as_deref()
         .map(admin_bind_addr)
         .transpose()?;
+    // The policy too: a named file the hub cannot read or that is not a valid policy stops the start here.
+    let policy = match resolved["MIMI_POLICY"].as_deref() {
+        Some(path) => HubPolicy::load(std::path::Path::new(path))?,
+        None => HubPolicy::default(),
+    };
+    eprintln!(
+        "[mimi-hubd] policy ({}): {}",
+        resolved["MIMI_POLICY"]
+            .as_deref()
+            .unwrap_or("the drafts' defaults"),
+        policy.describe()
+    );
 
-    let mut provider = Provider::open(&domain, &db_path)?;
+    let mut provider = Provider::open(&domain, &db_path)?.with_policy(policy);
     if let Some(url) = &resolved["MIMI_PUBLIC_BASE_URL"] {
         provider = provider.with_public_base_url(url)?;
     }

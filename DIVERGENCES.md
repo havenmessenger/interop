@@ -4,48 +4,47 @@
 and `draft-ietf-mimi-room-policy`. The authoritative source is the hub's own `directory`
 endpoint `unsupported` block (`mimi-hubd/src/lib.rs`); this file explains the reasoning.
 
-DIV-1 through DIV-4 are scoping decisions: deliberate, documented choices about what v1 does
-not do. DIV-5 through DIV-15 are gaps in what v1 attempts: endpoints or fields the code accepts
+This file lists only what is not built yet, and the points where the drafts are open and this hub
+takes a reading the working group may settle otherwise. What a deployment chooses (which
+ciphersuites it accepts, who `identifierQuery` finds) is a setting, described in
+`mimi-hubd/README.md`, not a divergence. DIV-1, DIV-3 and DIV-4 are parts not built yet. DIV-5
+through DIV-15 are gaps in what v1 attempts: endpoints or fields the code accepts
 and processes without yet enforcing everything the draft requires, or behaviour that differs
 from the draft on a point where the draft is silent or the pinned MLS library falls short. A
 strict implementation of the affected endpoints will not interoperate with this hub on those
 points until they close.
 
-## DIV-1 - GroupInfo / external-commit join
+## DIV-1 - GroupInfo / external-commit join: not built yet
 
-Not supported. Cross-provider group membership is add-driven only: an existing member adds
-the new participant via Commit + Welcome. The `§5.6` claim-group-key flow (self-join via
-`join_by_external_commit` against an exported `GroupInfo`) is out.
+Cross-provider group membership is add-driven today: an existing member adds the new participant
+via Commit + Welcome (§5.2). The §5.6 `groupInfo` endpoint and accepting an external commit
+(self-join via `join_by_external_commit` against an exported `GroupInfo`) are not built yet. When
+they are, a room's own policy decides whether it takes one (`external_commit_allowed` in its
+operational parameters), and MLS's default applies where the room says nothing. A GroupInfo a
+Commit bundle carries is already gated on its ciphersuite.
 
-External commits are the part of MLS the original security proofs did not cover. The
-External-Operations TreeKEM analysis (ETK, eprint 2025/229) shows an adversary who
-compromises a party's long-term secret can, at any time, resync that party's group
-representation via external join, a strictly larger attack surface than standard membership
-operations. Haven does not implement it, in either the native or the mimi lane
-(`INV-MLS-001a`).
+## DIV-2 - CLOSED: the accepted ciphersuites are a setting
 
-## DIV-2 - Non-`0x0001` ciphersuites
-
-Rejected at ingest, before the object reaches openmls. Haven generates and accepts
-`MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519` (`0x0001`) only, on both sides of the wire
-(`INV-MLS-002`). A foreign KeyPackage or Welcome carrying a different suite is refused by
-the gate rather than passed through.
+The accept-gates refuse a KeyPackage, Welcome or GroupInfo in a ciphersuite outside the accepted
+list before the bytes reach openmls. The list is the deployment's (`mls_ciphersuites` in the
+policy file, `mimi-hubd/README.md`); by default it is every suite the crypto provider implements,
+and the directory advertises exactly it.
 
 ## DIV-3 - Assets and OHTTP transport
 
 Not supported. v1 is messaging-only: text content over the wire and JSON lanes, no binary
 asset transfer, no OHTTP relay path (`§5.10`).
 
-## DIV-4 - `identifierQuery` has no existence oracle, and only ever answers a single Handle or Nick query
+## DIV-4 - `identifierQuery` answers a single Handle or Nick query only: other identifier types not built yet
 
-Only users who opted in (enrolled) can be found. On the TLS-PL wire lane the answer is an `IdentifierResponse`, as
-§5.8 has it, always HTTP 200 (notFound means the request was acceptable and nothing matched, so the code in the body
-says the outcome): an enrollee is `success` with the user's URI on this provider; every other answer is the same
-`notFound` body, byte for byte, whether the user is not enrolled, does not exist, or the request could not be decoded or
-evaluated. So an answer says found or not found and nothing else, and repeated queries cannot tell a real
-but private account from a name nobody has. The JSON lane answers with the bare status (200 or 404, no body).
+Who a query can find is the deployment's setting (`identifier_discovery`, `mimi-hubd/README.md`). On the TLS-PL wire
+lane the answer is an `IdentifierResponse`, as §5.8 has it, always HTTP 200 (notFound means the request was acceptable
+and nothing matched, so the code in the body says the outcome): a user the hub answers for is `success` with the
+user's URI on this provider; every other answer is the same `notFound` body, byte for byte, whether the user is
+outside the setting, does not exist, or the request could not be decoded or evaluated. The JSON lane answers with the
+bare status (200 or 404, no body).
 
-This also means the hub cannot honor the draft's implied AND-across-elements semantics for a
+The hub cannot honor the draft's implied AND-across-elements semantics for a
 multi-element `IdentifierRequest`: v1 has no data model for `email`/`phone`/`oidcStdClaim`/
 `vcardField`/etc. lookups, only usernames. A request is answered only when it carries exactly
 one query element of type `Handle` or `Nick`; a request with zero elements, more than one
@@ -107,7 +106,7 @@ identity have different answers, not one shared gap:
 - **`consent`**: `ConsentEntry` (§5.7) carries no signature field at all in the draft - no
   self-signed mechanism exists here for this hub to check even if it wanted to. This may be a
   genuine gap in the draft itself rather than an implementation gap; worth raising with the WG
-  rather than inventing a Haven-only signing convention unilaterally.
+  rather than inventing a private signing convention unilaterally.
 
 ## DIV-7 - the directory document - CLOSED
 
@@ -147,7 +146,7 @@ rejects attached `AbusiveMessage` values rather than accepting them unverified.
 each rewrite is kept below rather than silently replaced, per this file's own discipline of
 recording what changed and why.** The short version: the wire-parsing step some earlier language
 here called blocked on group-state machinery was not blocked on that at all; it is done, and it is
-now wired end to end for both Haven custom proposal types.
+now wired end to end for both custom proposal types.
 
 `POST /mimi/pl/update/{roomId}` (§5.3) takes an `UpdateRequest`, a `HandshakeBundle` whose
 `PublicMessage`-wrapped MLS Commit carries a participant-list change, a room-policy change, or one of each (and, since
@@ -337,7 +336,8 @@ is read and written back unchanged. The hub still sends `partialSuccess`, until 
 (mls-extensions-10 §4.7, proposal type `0x0008` as its §7.2.1 suggests) addressed to
 component `0x0022` (`participant_list`, protocol-07 §10.3), or the custom proposal of the
 private type `0xF7A0` (`mimiParticipantList`). Both carry the draft's `ParticipantListUpdate`
-encoding and are applied the same way. The openmls release this crate pins (0.9.2) is built
+encoding and are applied the same way. `0xF7A0` is a compatibility carrier for clients that do not
+yet send the change as an AppDataUpdate, and is to be removed once they do. The openmls release this crate pins (0.9.2) is built
 without its `extensions-draft` feature and cannot read an AppDataUpdate, so `commit_wire` reads
 the proposals window itself and rewrites an AppDataUpdate to the `0xF7A0` form for reading only; the
 bytes of the Commit are never changed. A fanned-out Commit or proposal reaching `/notify` is refused before it is read

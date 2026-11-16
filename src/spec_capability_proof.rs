@@ -2,17 +2,15 @@
 //! testable - gated behind the default-off `external-ops` Cargo feature (compiled ONLY when the
 //! feature is enabled AND under `cfg(test)`, so it never ships in any build, feature-gated or not).
 //!
-//! **This module is NOT Haven's acceptance mechanism.** It calls openmls's APIs directly - no
-//! `crate::gate` function, no `crypto-core::profile` policy check, no allowlist, no room-policy
-//! hub-of-record check. Its only job is to prove the underlying capability a full-fidelity
-//! ("SpecProfile") consumer would rely on genuinely exists and is exercised by a real test, not
-//! merely declared. Building Haven's own narrow mimi-lane acceptance path against
-//! `crypto-core::profile::allows_external_proposal`'s `AllowlistedRemoveOnly` policy - the
-//! sender-verification, the room-policy check, the explicit-inclusion-only commit mechanic - is
-//! separate work, out of scope for this module.
+//! **This module is not an acceptance path.** It calls openmls's APIs directly - no `crate::gate`
+//! function, no allowlist, no room-policy or hub-of-record check. Its only job is to prove that the
+//! capability an implementation of MIMI's external join and external proposals relies on exists and
+//! is exercised by a real test, not merely declared. Accepting an external commit or an external
+//! proposal - verifying the sender, checking the room's policy, committing only what was explicitly
+//! included - is not built yet (DIVERGENCES DIV-1).
 //!
-//! Structural-exclusion proof: with `external-ops` off (Haven's product build), this module - and
-//! therefore these test symbols - is entirely absent from the compiled artifact, provable by a
+//! Structural-exclusion proof: with `external-ops` off (the default), this module - and therefore
+//! these test symbols - is entirely absent from the compiled artifact, provable by a
 //! `cargo tree`/symbol-table check against a `--no-default-features` build (see the CI job that
 //! asserts this). With the feature on, both tests below run against real openmls and pass.
 
@@ -89,9 +87,8 @@ fn group_info_in(out: MlsMessageOut) -> VerifiableGroupInfo {
     }
 }
 
-/// A SpecProfile consumer can construct a `GroupInfo` and use it to join via external commit -
-/// the RFC 9420 §12.4.3.1 mechanism `INV-MLS-001a` permanently refuses in `Profile::Haven`, both
-/// lanes. This is `openmls`'s own capability, exercised directly, with no Haven wrapper involved.
+/// A client can construct a `GroupInfo` and another use it to join via external commit (RFC 9420
+/// §12.4.3.1). This is `openmls`'s own capability, exercised directly, with no wrapper involved.
 #[test]
 fn spec_profile_external_commit_join_works_against_real_openmls() {
     let (asig, acwk, _apk, aprov) = ident("alice");
@@ -141,10 +138,9 @@ fn spec_profile_external_commit_join_works_against_real_openmls() {
     );
 }
 
-/// A SpecProfile consumer can pre-configure an `ExternalSendersExtension` and have that sender
-/// construct a valid `Sender::External` Remove proposal openmls accepts (stages as a
-/// `ProposalMessage`) - the narrow mechanism `INV-MLS-001b` describes, not yet wired to any live
-/// acceptance path. A proposal from a signer NOT in the extension is rejected
+/// A group can pre-configure an `ExternalSendersExtension` and have that sender construct a valid
+/// `Sender::External` Remove proposal openmls accepts (stages as a `ProposalMessage`) - a mechanism
+/// not yet wired to any acceptance path here. A proposal from a signer NOT in the extension is rejected
 /// by openmls before ever reaching that stage. This test only proves openmls's OWN validation; it
 /// does not select, commit, or otherwise "process" the proposal the way a real acceptance
 /// mechanism would.

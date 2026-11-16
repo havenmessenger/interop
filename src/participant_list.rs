@@ -3,7 +3,7 @@
 //! Participant-list changes travel as an **AppSync proposal** (`applicationId = mimiParticipantList`),
 //! committed before/with the corresponding MLS operation. AppSync is an MLS *custom proposal*
 //! (`ProposalType::Custom(u16)`) - an ORDINARY in-group proposal by a member, NOT an external
-//! proposal/commit (so INV-MLS-001 is untouched).
+//! proposal or commit.
 //!
 //! WIRE FORMAT - **NORMATIVE** (draft-ietf-mimi-protocol §7.5): the participant list IS specified
 //! (it is not implementation-defined) - the structs are TLS presentation language and MIMI
@@ -31,8 +31,9 @@
 //! bytes; the two encoders are kept in lockstep by the `tls_kat` golden vectors below + a
 //! cross-implementation functional livetest.
 //!
-//! Why it's load-bearing: GROUP interop with a NON-Haven MIMI client needs the roster via AppSync - a
-//! foreign client does not parse Haven's URI-in-credential convention. This is the portable primitive.
+//! Why it's load-bearing: group interop between implementations needs the roster via AppSync - a
+//! client cannot be expected to parse another implementation's URI-in-credential convention. This is
+//! the portable primitive.
 //!
 //! Consumers: this module is the codec, not a deployment. A delivery service is free to build on it,
 //! but is not required to, and the reference provider in this project does not: it treats a
@@ -40,9 +41,9 @@
 //! store instead, written over its authenticated admin API. A deployment that wants the hub's view of
 //! roles to follow the in-group list has to bridge the two deliberately; nothing here does it for you.
 //!
-//! STILL HAVEN-CHOSEN (not resolved by §7.5): the custom `ProposalType` value `0xF7A0` (IANA/WG
-//! registration open) and the credential↔URI binding (BasicCredential-carrying-URI vs X.509
-//! IM-URI). SCOPE BOUNDARY: this module is the spec-faithful primitive (structs + codec + apply); storing
+//! A COMPATIBILITY CARRIER, to be removed: the custom `ProposalType` value `0xF7A0` carries this
+//! list for clients that do not yet send it as an AppDataUpdate (DIVERGENCES DIV-10); once they do,
+//! it goes. The credential↔URI binding (BasicCredential-carrying-URI vs X.509 IM-URI) is still open. SCOPE BOUNDARY: this module is the spec-faithful primitive (structs + codec + apply); storing
 //! `ParticipantListData` as a real MLS GroupContext `app_data_dictionary` extension is a flagged follow-on
 //! (the live hub mirrors the ordering to compute indices).
 
@@ -53,8 +54,8 @@ use tls_codec::{
 use crate::protocol_wire::{bounded_run_input, MAX_RUN_AGGREGATE_BYTES};
 use crate::uri::{MimiKind, MimiUri};
 
-/// The custom MLS `ProposalType` value for `mimiParticipantList` AppSync proposals. HAVEN-CHOSEN pending
-/// IANA/WG guidance - §7.5 does not resolve registration for this ProposalType. Picked
+/// The custom MLS `ProposalType` value that carries a `mimiParticipantList` update for clients that do
+/// not yet send it as an AppDataUpdate (a compatibility carrier, to be removed; DIVERGENCES DIV-10). Picked
 /// in the private/experimental high range (0xF000+) to avoid colliding with registered MLS proposal types
 /// (Add=0x0001..GroupContextExtensions=0x0007, SelfRemove, Grease 0x0A0A-pattern). A gated wire-format event.
 pub const MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE: u16 = 0xF7A0;

@@ -86,11 +86,11 @@ pub const MAX_NEST_DEPTH: usize = 4;
 /// Coarse stack-safety bound enforced DURING CBOR deserialize on the untrusted inbound parse path
 /// (`from_content08_cbor`). This is NOT the spec depth bound - that is [`MAX_NEST_DEPTH`], enforced
 /// precisely in `value_to_nested_part`. This is the defense-in-depth cap that gates `ciborium`'s
-/// tree-materialize step at a Haven-owned value instead of leaning on ciborium's incidental default
+/// tree-materialize step at a value this crate owns instead of leaning on ciborium's incidental default
 /// (256). A legal max-depth-4 message nests ~8 CBOR array levels (2·`MAX_NEST_DEPTH` + outer), so 64
 /// is 8× headroom (never rejects a conformant message) while being 4× tighter than ciborium's default.
 /// WHY at-our-boundary: a dependency default can change on a bump and is invisible to our trust
-/// boundary; bounding the recursion here makes parse-time stack-safety explicit and Haven-controlled.
+/// boundary; bounding the recursion here makes parse-time stack-safety explicit and owned here.
 pub const MAX_CBOR_RECURSION_DEPTH: usize = 64;
 
 /// A content-09 §3.3 message ID: 32 octets, one naming the hash algorithm and 31 of hash output
@@ -516,7 +516,7 @@ fn value_to_nested_part(v: &Value, depth: usize) -> Result<NestedPart, ContentEr
 
 /// Decode content-09 §4.1 wire-conformant CBOR back to `MimiContent` (inverse of `to_content08_cbor`).
 pub fn from_content08_cbor(bytes: &[u8]) -> Result<MimiContent, ContentError> {
-    // Bound recursion DURING materialize at a Haven-owned limit (defense-in-depth vs. ciborium's
+    // Bound recursion DURING materialize at a limit this crate owns (defense-in-depth vs. ciborium's
     // incidental 256 default): an over-deep hostile blob fails closed with a typed error here, before
     // any unbounded tree is built. ciborium returns Err(RecursionLimitExceeded) - not a panic/abort.
     //
@@ -663,8 +663,8 @@ pub fn validate_nesting(part: &NestedPart) -> Result<(), ContentError> {
 
 /// content-09 §7.1.1 (F7): for GFM-MIMI markdown, raw HTML tags MUST be rejected (the `nohtml`
 /// extension is MANDATORY) and the Autolink extension MUST NOT be supported. We apply this as a
-/// receive-side validation on any SinglePart whose contentType is the GFM-MIMI variant. This aligns
-/// with Haven's existing CSP/sanitizer posture (INV-CSP-003: HTML is sanitized before any render).
+/// receive-side validation on any SinglePart whose contentType is the GFM-MIMI variant. A client that
+/// renders HTML still sanitizes it before any render; this check does not replace that.
 /// Conservative heuristic: reject if a raw HTML tag (`<tag ...>`/`</tag>`) appears. A full markdown
 /// parser is the eventual home; this fails-closed in the meantime (over-reject > under-reject).
 pub fn validate_gfm_mimi_nohtml(part: &NestedPart) -> Result<(), ContentError> {

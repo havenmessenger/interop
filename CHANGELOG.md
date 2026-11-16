@@ -6,6 +6,20 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- **API change (mimi-core):** each accept-gate (`mimi_gate_keypackage`, `mimi_gate_welcome`, `mimi_gate_welcome_bare`,
+  `mimi_gate_group_info`, `keypackage_ref`) takes the ciphersuites it accepts as a list, and so do the decoders that
+  gate what they carry (`decode_consent_entry`, `KeyMaterialResponse::decode`, `HandshakeBundle::decode`).
+  `default_mls_ciphersuites()` is every suite the crypto provider implements; a refusal names the accepted suites.
+  `HAVEN_MLS_CIPHERSUITE_U16` is gone; `MLS_128_DHKEMX25519_AES128GCM_SHA256_ED25519` names 0x0001.
+- mimi-hubd reads a policy file named by `MIMI_POLICY` (`policy`): `mls_ciphersuites` (default: every implemented suite;
+  the directory advertises exactly the list) and `identifier_discovery` (default `all`: every user the hub can answer
+  for, one it has enrolled or holds an unexpired KeyPackage for; `enrolled` keeps it to enrolled users). A named file
+  that cannot be read or is not a valid policy stops the start; the hub logs the policy it runs. A deployment that
+  wants the earlier behaviour sets `mls_ciphersuites = [0x0001]` and `identifier_discovery = "enrolled"`.
+- The directory's `unsupported` block no longer lists other ciphersuites, and says the GroupInfo join is not built yet.
+- DIVERGENCES lists only what is not built yet and where the drafts are open: DIV-1 (GroupInfo and external-commit join)
+  is not built yet, and a room's policy will decide when it is; DIV-2 is closed (a setting); DIV-4 is the single-query
+  limit. `0xF7A0` is described as a compatibility carrier to be removed once clients send an AppDataUpdate.
 - `roomPolicy`, `memberRole` and `addParticipant` are the operator's: they are served only on a loopback listener of
   their own, `MIMI_ADMIN_BIND_ADDR` (`admin_bind_addr`), with no client certificate, and the peer listener answers 404
   for them. The hub does not start if that address is not loopback. Unset, there is no such listener.

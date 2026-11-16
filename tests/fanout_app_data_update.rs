@@ -4,6 +4,9 @@
 use mimi_core::protocol_wire::{FanoutMessage, HandshakeBundle};
 use serde::Deserialize;
 
+/// The gates asked to accept 0x0001 only.
+const ONLY_AES: &[u16] = &[mimi_core::gate::MLS_128_DHKEMX25519_AES128GCM_SHA256_ED25519];
+
 const VECTORS_JSON: &str = include_str!("vectors/protocol07-vectors.json");
 
 #[derive(Deserialize)]
@@ -37,7 +40,7 @@ fn a_commit_with_app_data_updates_is_read_as_a_fanout_message_and_kept_as_sent()
         let vector = vectors.vectors.iter().find(|v| v.id == id).unwrap();
         let HandshakeBundle::Commit {
             proposal_or_commit, ..
-        } = HandshakeBundle::decode(&bytes(&vector.hex)).unwrap()
+        } = HandshakeBundle::decode(&bytes(&vector.hex), ONLY_AES).unwrap()
         else {
             panic!("{id} is not a Commit bundle");
         };

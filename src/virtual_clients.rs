@@ -1,9 +1,8 @@
 //! MLS Virtual Clients (draft-ietf-mls-virtual-clients-01, WG Document, §5-§6) - the mechanism that
 //! lets multiple emulator clients jointly act as one virtual client under a single leaf in a
-//! higher-level MLS group. This is a **contribution-backing reference implementation**: the running
-//! code behind Haven's multi-device standards contribution, built to conform to the now-normative
-//! `-01` mechanism, NOT a Haven product feature (that is a separate design track touching Haven's
-//! core session/key-management architecture, gated on its own security review).
+//! higher-level MLS group. This is a reference implementation of the `-01` mechanism, the running
+//! code behind a multi-device contribution to the draft; it is a library mechanism, not a client's
+//! multi-device design.
 //!
 //! ## What's implemented (v1 conformance scope)
 //! - **§5.2 Generating Virtual Client Secrets** - the five-secret derivation
@@ -30,23 +29,18 @@
 //! [`derive_epoch_secrets`] + the per-leaf operation-ratchet derivation this module documents (§5.2);
 //! what's missing is the serialization format for handing it to an offline-onboarded client.
 //!
-//! ## INV-MLS-001a scope note (the emulation group is not the invariant's target)
-//! Haven's `INV-MLS-001a` ("no external commits", successor to the original single `INV-MLS-001`)
-//! closes the ETK external-treekem attack (eprint 2025/229) on Haven's
-//! **product/higher-level MLS groups** - the wire-facing surface a *foreign, untrusted* party could
-//! reach over federation (see `gate.rs`'s join-model note and `DIV-1` in the conformance record, both
-//! scoped to that cross-provider join path). The **emulation group** this module derives secrets for is a
-//! different trust domain entirely: per §7.1 of the draft, "emulator clients have to trust each other
-//! fully; the emulation group does not provide any isolation between them" - it is a private group
-//! whose only members are devices of **one virtual client**, never exposed to a foreign party as a
-//! joinable target. §6.2's external-commit join is a new, *legitimate* device of that same virtual
-//! client onboarding itself - structurally the same trust relationship as a user's own
-//! account-recovery flow, not the adversarial-relay scenario ETK attacks. Using
-//! `join_by_external_commit` for the emulation group therefore does not touch `INV-MLS-001a`'s actual
-//! target (Haven's higher-level chat groups still allow only the add-driven §5.2 KeyPackage + Welcome
-//! join, unchanged - permanently, per that invariant). This module never calls `export_group_info` /
-//! `join_by_external_commit` against a higher-level group; the conformance tests exercise it only
-//! against a standalone emulation group with no foreign membership.
+//! ## External commits here are inside the emulation group only
+//! External commits widen what a party holding a member's long-term secret can do (the ETK analysis,
+//! eprint 2025/229), which is why a room's policy may refuse them for the higher-level groups a
+//! foreign party can reach (see `gate.rs`'s join note and DIV-1). The **emulation group** this module
+//! derives secrets for is a different trust domain: per §7.1 of the draft, "emulator clients have to
+//! trust each other fully; the emulation group does not provide any isolation between them" - it is
+//! a private group whose only members are devices of **one virtual client**, never exposed to a
+//! foreign party as a joinable target. §6.2's external-commit join is a new device of that same
+//! virtual client onboarding itself, the same trust relationship as a user's own account-recovery
+//! flow, not the adversarial-relay scenario ETK attacks. This module never calls
+//! `export_group_info` / `join_by_external_commit` against a higher-level group; the conformance
+//! tests exercise it only against a standalone emulation group with no foreign membership.
 
 use openmls_traits::{crypto::OpenMlsCrypto, types::Ciphersuite};
 use tls_codec::{Error as TlsError, Serialize as TlsSerialize, Size as TlsSize, VLBytes};
@@ -1313,7 +1307,7 @@ mod tests {
         #[test]
         fn a_new_emulator_client_joining_externally_shares_the_emulation_groups_epoch_state() {
             // §6.2: a new emulator client with no online sibling to bootstrap from performs an external
-            // commit into the emulation group. Per this module's INV-MLS-001a scope note, "dave" here is
+            // commit into the emulation group. Per this module's note on external commits, "dave" here is
             // a new, legitimate device of the SAME virtual client (alice's sibling emulator), never a
             // foreign/untrusted party - the trust relationship §7.1 of the draft describes.
             let (asig, acwk, aprov) = ident("alice-emulator-1");

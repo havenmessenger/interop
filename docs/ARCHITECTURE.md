@@ -25,8 +25,8 @@ This crate tracks the relevant IETF drafts/RFCs. Known divergences from the draf
 [`DIVERGENCES.md`](../DIVERGENCES.md).
 
 ## Module map
-- `gate` - the security-critical foreign-input ingest logic: the ciphersuite accept-gate
-  (`INV-MLS-002`), the `identifierQuery` no-existence-oracle (`DIV-4`), the one-time KeyPackage
+- `gate` - the security-critical foreign-input ingest logic: the ciphersuite accept-gate (the
+  suites a deployment accepts), the `identifierQuery` no-existence-oracle (`DIV-4`), the one-time KeyPackage
   store contract, and notify dedup.
 - `content` - the MIMI content codec (content-09 §4-6, read and written as content-10; DIV-17): deterministic CBOR, the part type
   system, and the validation MUSTs (nesting depth, no-HTML, reply-loop).
@@ -44,7 +44,7 @@ This crate tracks the relevant IETF drafts/RFCs. Known divergences from the draf
   derivation, Small-Space PRP, reuse guard, and generation-ID mechanism.
 - `spec_capability_proof` (test-only, `external-ops` feature, off by default) - proves
   openmls's own external-commit and external-proposal mechanisms are real and testable, for a
-  full-fidelity consumer. Not Haven's own acceptance mechanism; see `gate`'s own scope note.
+  full-fidelity consumer. A test, not an acceptance path; see `gate`'s join note and DIV-1.
 
 `mimi-hubd/` (the reference hub daemon) consumes these modules and adds the HTTP transport, mTLS
 termination, and durable storage. All library modules are dependency-free of FRB and the app;

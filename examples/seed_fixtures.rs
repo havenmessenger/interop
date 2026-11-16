@@ -211,7 +211,10 @@ fn write_key_material_request(file: &str, requesting: &str, target: &str) -> Res
 }
 
 fn say_key_material_answer(file: &str) -> Result<(), Failure> {
-    let word = match KeyMaterialResponse::decode(&std::fs::read(file)?)? {
+    let word = match KeyMaterialResponse::decode(
+        &std::fs::read(file)?,
+        &mimi_core::gate::default_mls_ciphersuites(),
+    )? {
         KeyMaterialResponse::Success { .. } => "success",
         KeyMaterialResponse::Exhausted { .. } => "exhausted",
         KeyMaterialResponse::Denied { .. } => "denied",

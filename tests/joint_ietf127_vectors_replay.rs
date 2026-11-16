@@ -23,6 +23,9 @@ use mimi_core::protocol_wire::{
 };
 use mimi_core::room_policy_wire::decode_role_data;
 
+/// The gates asked to accept 0x0001 only.
+const ONLY_AES: &[u16] = &[mimi_core::gate::MLS_128_DHKEMX25519_AES128GCM_SHA256_ED25519];
+
 const VECTORS_JSON: &str = include_str!("vectors/joint-ietf127-vectors.json");
 const MLS_VECTORS_JSON: &str = include_str!("vectors/joint-ietf127-mls-vectors.json");
 
@@ -30,7 +33,7 @@ const MLS_VECTORS_JSON: &str = include_str!("vectors/joint-ietf127-mls-vectors.j
 /// same bytes.
 fn decodes(kind: &str, bytes: &[u8]) -> Result<(), String> {
     match kind {
-        "ConsentEntry" => decode_consent_entry(bytes)
+        "ConsentEntry" => decode_consent_entry(bytes, ONLY_AES)
             .map(drop)
             .map_err(|e| e.to_string()),
         "AbuseReport" => AbuseReport::decode(bytes)
@@ -96,7 +99,8 @@ fn every_joint_update_request_decodes_as_a_commit_bundle() {
         let earlier = v["earlier"].as_array().expect("an earlier array");
         for hex_text in earlier.iter().chain(std::iter::once(&v["hex"])) {
             let bytes = hex::decode(hex_text.as_str().expect("hex")).expect("valid hex");
-            let bundle = HandshakeBundle::decode(&bytes).unwrap_or_else(|e| panic!("{id}: {e}"));
+            let bundle =
+                HandshakeBundle::decode(&bytes, ONLY_AES).unwrap_or_else(|e| panic!("{id}: {e}"));
             assert!(matches!(bundle, HandshakeBundle::Commit { .. }), "{id}");
         }
     }

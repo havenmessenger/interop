@@ -6,6 +6,8 @@ use super::*;
 use crate::commit_wire::app_data_tests::{app_data_update, commit_with, custom};
 use crate::test_fixtures::{add_commit, AddCommit};
 
+/// The gates asked to accept 0x0001 only.
+const ONLY_AES: &[u16] = &[crate::gate::MLS_128_DHKEMX25519_AES128GCM_SHA256_ED25519];
 const FULL: u8 = 1;
 const PARTIAL: u8 = 2;
 
@@ -45,7 +47,7 @@ fn a_commit_bundle_carries_a_bare_welcome_and_a_raw_group_info() {
         group_info,
     } = add_commit();
     let wire = bundle(&commit, Some(&welcome), FULL, &group_info, &[0xCC, 0xDD]);
-    let decoded = HandshakeBundle::decode(&wire).unwrap();
+    let decoded = HandshakeBundle::decode(&wire, ONLY_AES).unwrap();
     let HandshakeBundle::Commit {
         proposal_or_commit,
         welcome: read_welcome,
@@ -76,7 +78,7 @@ fn a_commit_bundle_without_a_welcome_round_trips() {
         commit, group_info, ..
     } = add_commit();
     let wire = bundle(&commit, None, FULL, &group_info, &[]);
-    let decoded = HandshakeBundle::decode(&wire).unwrap();
+    let decoded = HandshakeBundle::decode(&wire, ONLY_AES).unwrap();
     assert_eq!(decoded.encode().unwrap(), wire);
 }
 
@@ -89,7 +91,7 @@ fn a_welcome_wrapped_in_an_mls_message_is_not_a_welcome() {
     } = add_commit();
     let wrapped = [vec![0x00, 0x01, 0x00, 0x03], welcome].concat();
     let wire = bundle(&commit, Some(&wrapped), FULL, &group_info, &[]);
-    assert!(HandshakeBundle::decode(&wire).is_err());
+    assert!(HandshakeBundle::decode(&wire, ONLY_AES).is_err());
 }
 
 #[test]
@@ -110,7 +112,7 @@ fn a_full_group_info_is_never_read_through_a_length_prefix() {
     // that the bytes read as the group info are not the GroupInfo that was sent.
     if let Ok(HandshakeBundle::Commit {
         group_info_option, ..
-    }) = HandshakeBundle::decode(&wire)
+    }) = HandshakeBundle::decode(&wire, ONLY_AES)
     {
         assert_ne!(group_info_option.payload, group_info);
     }
@@ -129,7 +131,7 @@ fn a_partial_group_info_keeps_its_length_prefix() {
         &length_prefixed(&payload),
         &[0xEE],
     );
-    let decoded = HandshakeBundle::decode(&wire).unwrap();
+    let decoded = HandshakeBundle::decode(&wire, ONLY_AES).unwrap();
     let HandshakeBundle::Commit {
         group_info_option,
         ratchet_tree_option,
@@ -156,7 +158,7 @@ fn a_foreign_suite_welcome_is_refused_before_it_is_decoded() {
     // suite first can name the suite; a decoder would report garbage.
     let foreign = [vec![0x00, 0x03], vec![0xFF; 16]].concat();
     let wire = bundle(&commit, Some(&foreign), FULL, &group_info, &[]);
-    let error = HandshakeBundle::decode(&wire).unwrap_err();
+    let error = HandshakeBundle::decode(&wire, ONLY_AES).unwrap_err();
     assert!(matches!(error, WireError::CiphersuiteGate(_)), "{error:?}");
 }
 
@@ -170,7 +172,7 @@ fn a_foreign_suite_group_info_is_refused() {
     // The GroupInfoTBS opens with the group context, whose second field is the cipher suite (version u16, then suite u16).
     group_info[2..4].copy_from_slice(&[0x00, 0x03]);
     let wire = bundle(&commit, Some(&welcome), FULL, &group_info, &[]);
-    assert!(HandshakeBundle::decode(&wire).is_err());
+    assert!(HandshakeBundle::decode(&wire, ONLY_AES).is_err());
 }
 
 #[test]
@@ -183,7 +185,7 @@ fn a_truncated_bundle_is_refused_at_every_cut() {
     let wire = bundle(&commit, Some(&welcome), FULL, &group_info, &[]);
     for cut in (0..wire.len()).step_by(37) {
         assert!(
-            HandshakeBundle::decode(&wire[..cut]).is_err(),
+            HandshakeBundle::decode(&wire[..cut], ONLY_AES).is_err(),
             "cut at {cut}"
         );
     }
@@ -192,14 +194,14 @@ fn a_truncated_bundle_is_refused_at_every_cut() {
 #[test]
 fn the_bare_welcome_gate_refuses_a_foreign_suite_and_a_trailer() {
     let AddCommit { welcome, .. } = add_commit();
-    crate::gate::mimi_gate_welcome_bare(&welcome).unwrap();
+    crate::gate::mimi_gate_welcome_bare(&welcome, ONLY_AES).unwrap();
     let mut foreign = welcome.clone();
     foreign[..2].copy_from_slice(&[0x00, 0x03]);
-    assert!(crate::gate::mimi_gate_welcome_bare(&foreign).is_err());
+    assert!(crate::gate::mimi_gate_welcome_bare(&foreign, ONLY_AES).is_err());
     let mut trailing = welcome;
     trailing.push(0);
-    assert!(crate::gate::mimi_gate_welcome_bare(&trailing).is_err());
-    assert!(crate::gate::mimi_gate_welcome_bare(&[0x00]).is_err());
+    assert!(crate::gate::mimi_gate_welcome_bare(&trailing, ONLY_AES).is_err());
+    assert!(crate::gate::mimi_gate_welcome_bare(&[0x00], ONLY_AES).is_err());
 }
 
 /// A Commit that carries an AppDataUpdate for the participant list: openmls built without `extensions-draft-08` cannot find
@@ -229,7 +231,7 @@ mod app_data_update {
         for update_len in [0usize, 20, 58, 59, 60, 63, 64, 70, 16380, 16384, 16390] {
             let sent = commit(update_len);
             let wire = bundle(&sent, Some(&welcome), FULL, &group_info, &[0xCC, 0xDD]);
-            let decoded = HandshakeBundle::decode(&wire)
+            let decoded = HandshakeBundle::decode(&wire, ONLY_AES)
                 .unwrap_or_else(|e| panic!("update of {update_len} bytes: {e:?}"));
             let HandshakeBundle::Commit {
                 proposal_or_commit,
@@ -266,7 +268,7 @@ mod app_data_update {
         let wire = bundle(&sent, Some(&welcome), FULL, &group_info, &[]);
         let HandshakeBundle::Commit {
             proposal_or_commit, ..
-        } = HandshakeBundle::decode(&wire).unwrap()
+        } = HandshakeBundle::decode(&wire, ONLY_AES).unwrap()
         else {
             panic!("Commit");
         };
@@ -289,6 +291,6 @@ mod app_data_update {
             &group_info,
             &[],
         );
-        assert!(HandshakeBundle::decode(&wire).is_err());
+        assert!(HandshakeBundle::decode(&wire, ONLY_AES).is_err());
     }
 }

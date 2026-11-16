@@ -3,22 +3,19 @@
 //!
 //! Scope: `submitMessage` (§5.4, routed), consent (§5.7, routed), `keyMaterial` (§5.2, routed),
 //! `update` (§5.3, codec only, see its own section doc), `notify` inbound-receive (§5.5, routed),
-//! `identifierQuery` (§5.8, routed). `groupInfo` (§5.6) is out of scope: it is the external-commit
-//! join endpoint DIV-1 disallows in Haven's own product build, and framing it without the
-//! accept-path behind it would wire-format half of a security-relevant endpoint. `reportAbuse`
+//! `identifierQuery` (§5.8, routed). `groupInfo` (§5.6) is not built yet (DIV-1): it is the
+//! external-commit join endpoint, and framing it without the accept-path behind it would
+//! wire-format half of a security-relevant endpoint. `reportAbuse`
 //! (§5.9) and asset download (§5.10) are out of scope because this reference hub has no v1 handler
 //! for either.
 //!
-//! The four v1 room-admin endpoints (`roomPolicy`/`memberRole`/`addParticipant`/
+//! The hub's own room-admin endpoints (`roomPolicy`/`memberRole`/`addParticipant`/
 //! `authorizeSender`) are NOT framed here: protocol-06 §5 has ten named endpoints (directory,
 //! keyMaterial, update, submitMessage, fanout, groupInfo, consent, identifierQuery, reportAbuse,
-//! download) and the admin four are not among them. They are Haven's own RBAC management
-//! surface, expressing (out
-//! of band, via direct RPC) what the draft models as AppSync proposals carried inside a real
-//! `update` transaction (§4.3.2). Since `update` itself has no live accept-path (see its section
-//! doc), there is no spec wire form to frame the admin four AGAINST; inventing one would be a
-//! private encoding wearing the TLS-PL label, not protocol conformance. Their v1 authorization
-//! (query-param-based) is unchanged, which is the only thing to confirm about them.
+//! download) and these are not among them. They are the reference hub's operator surface,
+//! expressing out of band what the draft models as AppSync proposals carried inside an `update`
+//! (§4.3.2), so there is no spec wire form to frame them against; inventing one would be a private
+//! encoding wearing the TLS-PL label, not protocol conformance.
 //!
 //! `<V>` maps to `tls_codec::VLBytes`/`Vec<T>` (QUIC varint length prefix, RFC 9000); `uint32`/`uint64`
 //! are big-endian fixed-width. This mirrors `participant_list.rs`'s already-shipped TLS-PL codec, which
@@ -32,8 +29,8 @@
 //! uses); the remaining slice after the MLS read is where the next field starts. Reading the outer MLS
 //! envelope (wire_format, group_id, epoch) this way is the same operation `gate.rs`'s suite check already
 //! performs on every inbound object. It does not touch `PrivateMessage` ciphertext content, consistent
-//! with the store-and-forward opacity `Provider::submit_message` documents (INV-MIMI-002: the provider
-//! never gains message-decryption capability).
+//! with the store-and-forward opacity `Provider::submit_message` documents (the provider never gains
+//! message-decryption capability).
 
 use openmls::ciphersuite::signature::SignaturePublicKey;
 use openmls::prelude::{
@@ -50,7 +47,7 @@ use crate::consent::{ConsentEntry, ConsentOperation};
 /// protocol-06 §5 preamble `enum { reserved(0), mls10(1), (255) } Protocol;`. Modeled as a raw `u8`
 /// (not a Rust enum), so an unknown or future value still round-trips instead of erroring on decode.
 /// This is the same GREASE-tolerant choice `role_index`/`user_index` make in `participant_list.rs` for
-/// fields with an explicit `(255)` extensible range. Haven only ever emits or accepts `MLS10`.
+/// fields with an explicit `(255)` extensible range. This crate emits and accepts `MLS10` only, the one value defined.
 pub type Protocol = u8;
 pub const PROTOCOL_RESERVED: Protocol = 0;
 pub const PROTOCOL_MLS10: Protocol = 1;
@@ -70,7 +67,7 @@ pub struct MlsOuterHeader {
 /// error, never a partially-populated struct.
 #[derive(Debug, thiserror::Error)]
 pub enum WireError {
-    #[error("unsupported Protocol value {0} (Haven only speaks mls10)")]
+    #[error("unsupported Protocol value {0} (only mls10 is defined)")]
     UnsupportedProtocol(u8),
     #[error("malformed MLSMessage: {0}")]
     MlsMessage(String),
@@ -626,7 +623,8 @@ pub fn encode_consent_entry(e: &ConsentEntry) -> Result<Vec<u8>, WireError> {
     Ok(out)
 }
 
-pub fn decode_consent_entry(bytes: &[u8]) -> Result<ConsentEntry, WireError> {
+/// `accepted` is the ciphersuites a carried KeyPackage may name; one outside it refuses the entry.
+pub fn decode_consent_entry(bytes: &[u8], accepted: &[u16]) -> Result<ConsentEntry, WireError> {
     let (&op_byte, rest) = bytes.split_first().ok_or_else(|| WireError::Codec {
         what: "consentOperation",
         detail: "empty input".into(),
@@ -705,7 +703,7 @@ pub fn decode_consent_entry(bytes: &[u8]) -> Result<ConsentEntry, WireError> {
             budget.record("clientKeyPackages[]", kp_bytes.len())?;
             // A consent grant's carried KeyPackages are join material a requester
             // may add to a group directly - gate each one at decode, same as `/keyMaterial`.
-            crate::gate::mimi_gate_keypackage(&kp_bytes)?;
+            crate::gate::mimi_gate_keypackage(&kp_bytes, accepted)?;
             kps.push(kp_bytes);
             offset += consumed;
         }
@@ -840,9 +838,9 @@ pub struct KeyMaterialRequest {
 }
 
 impl KeyMaterialRequest {
-    /// `requester_credential`'s embedded identity bytes, per Haven's `BasicCredential::new(uri
-    /// bytes)` convention - lets a caller compare a self-signed request's claimed identity against
-    /// its `requesting_user` without needing openmls's `Credential` type in scope itself.
+    /// `requester_credential`'s embedded identity bytes - for a `BasicCredential` whose identity is the
+    /// user's URI, this lets a caller compare a self-signed request's claimed identity against its
+    /// `requesting_user` without needing openmls's `Credential` type in scope itself.
     pub fn requester_credential_identity(&self) -> &[u8] {
         self.requester_credential.serialized_content()
     }
@@ -1172,7 +1170,7 @@ impl ClientKeyMaterial {
     }
 
     /// Read one entry from the front of `window`; returns it and the bytes it used.
-    fn decode_from(window: &[u8]) -> Result<(Self, usize), WireError> {
+    fn decode_from(window: &[u8], accepted: &[u16]) -> Result<(Self, usize), WireError> {
         let (&status_byte, rest) = window.split_first().ok_or_else(|| WireError::Codec {
             what: "clientStatus",
             detail: "truncated".into(),
@@ -1200,9 +1198,9 @@ impl ClientKeyMaterial {
                     })?
                     .map_err(|e| codec_err("keyPackage", e))?;
                 let key_package = after_uri[..consumed].to_vec();
-                // A remote hub's claim that a KeyPackage is well-formed is not a claim that it carries the pinned
-                // ciphersuite: a foreign suite never leaves `decode()` wrapped in a success.
-                crate::gate::mimi_gate_keypackage(&key_package)?;
+                // A remote hub's claim that a KeyPackage is well-formed is not a claim that it carries an accepted
+                // ciphersuite: a suite outside `accepted` never leaves `decode()` wrapped in a success.
+                crate::gate::mimi_gate_keypackage(&key_package, accepted)?;
                 (Some(key_package), None, &after_uri[consumed..])
             }
             KeyMaterialClientCode::KeyMaterialExhausted => (None, None, after_uri),
@@ -1329,7 +1327,8 @@ impl KeyMaterialResponse {
         Ok(out)
     }
 
-    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+    /// `accepted` is the ciphersuites a carried MLS object may name; one outside it refuses the whole answer.
+    pub fn decode(bytes: &[u8], accepted: &[u16]) -> Result<Self, WireError> {
         let (&protocol, rest) = bytes
             .split_first()
             .ok_or(WireError::UnsupportedProtocol(0))?;
@@ -1382,7 +1381,7 @@ impl KeyMaterialResponse {
         let mut budget = RunBudget::new();
         let mut offset = 0usize;
         while offset < client_bytes.len() {
-            let (client, used) = ClientKeyMaterial::decode_from(&client_bytes[offset..])?;
+            let (client, used) = ClientKeyMaterial::decode_from(&client_bytes[offset..], accepted)?;
             budget.record("clients[]", used)?;
             clients.push(client);
             offset += used;
@@ -1595,7 +1594,8 @@ impl HandshakeBundle {
         Ok(out)
     }
 
-    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+    /// `accepted` is the ciphersuites a carried MLS object may name; one outside it refuses the whole bundle.
+    pub fn decode(bytes: &[u8], accepted: &[u16]) -> Result<Self, WireError> {
         // `MlsMessageIn::tls_deserialize` can PANIC (not just Err) on certain malformed
         // nested-length-prefix input -- the same tls_codec-internal panic risk as the welcome/
         // moreProposals parses below in this same function (peer-controlled bytes). catch_unwind
@@ -1649,7 +1649,7 @@ impl HandshakeBundle {
                 let (welcome, rest) = match welcome_tag {
                     0 => (None, rest),
                     1 => {
-                        crate::gate::refuse_foreign_welcome_suite(rest)?;
+                        crate::gate::refuse_foreign_welcome_suite(rest, accepted)?;
                         let (_w, consumed_len) =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 let mut c: &[u8] = rest;
@@ -1663,7 +1663,7 @@ impl HandshakeBundle {
                         let w = rest[..consumed_len].to_vec();
                         // A hub forwarding a Commit's welcome is exactly the "decode -> join" path the
                         // accept-gate exists for.
-                        crate::gate::mimi_gate_welcome_bare(&w)?;
+                        crate::gate::mimi_gate_welcome_bare(&w, accepted)?;
                         (Some(w), &rest[consumed_len..])
                     }
                     other => {
@@ -1698,7 +1698,7 @@ impl HandshakeBundle {
                             })?
                             .map_err(|e| codec_err("groupInfoOption.payload", e))?;
                         let payload = rest[..used].to_vec();
-                        crate::gate::mimi_gate_group_info(&payload)?;
+                        crate::gate::mimi_gate_group_info(&payload, accepted)?;
                         (payload, &rest[used..])
                     }
                     GroupInfoRepresentation::Partial => {
@@ -2226,7 +2226,7 @@ impl IdentifierRequest {
     }
 
     /// The effective username this reference hub's v1 `identifier_query` looks up. Requires EXACTLY
-    /// ONE query element, of type `Handle` (Haven's v1 model has no other identifier type - no
+    /// ONE query element, of type `Handle` (the reference hub has no other identifier type - no
     /// email/phone/OIDC/vcard search backing store exists), decoded as UTF-8; returns `None`
     /// otherwise (zero elements, more than one element, or a non-Handle element - a decoder that
     /// silently ignored these and only ever looked at the first element regardless of type or count
@@ -2592,7 +2592,11 @@ mod tests {
         want.push(0x00); // roomId absent
         want.push(0x00); // consent_extensions empty
         assert_eq!(tohex(&encoded), tohex(&want), "hand-computed KAT mismatch");
-        assert_eq!(decode_consent_entry(&encoded).unwrap(), e, "round-trip");
+        assert_eq!(
+            decode_consent_entry(&encoded, crate::test_fixtures::ONLY_AES).unwrap(),
+            e,
+            "round-trip"
+        );
     }
 
     #[test]
@@ -2631,7 +2635,11 @@ mod tests {
         want.extend_from_slice(&wrapped_kp);
         want.push(0x00); // consent_extensions empty
         assert_eq!(tohex(&encoded), tohex(&want), "hand-computed KAT mismatch");
-        assert_eq!(decode_consent_entry(&encoded).unwrap(), e, "round-trip");
+        assert_eq!(
+            decode_consent_entry(&encoded, crate::test_fixtures::ONLY_AES).unwrap(),
+            e,
+            "round-trip"
+        );
     }
 
     #[test]
@@ -2650,7 +2658,7 @@ mod tests {
         let old_buggy: Vec<VLBytes> = vec![VLBytes::new(kp_bytes.clone())];
         old_buggy.tls_serialize(&mut bad).unwrap();
         bad.push(0x00); // consent_extensions empty
-        assert!(decode_consent_entry(&bad).is_err());
+        assert!(decode_consent_entry(&bad, crate::test_fixtures::ONLY_AES).is_err());
     }
 
     #[test]
@@ -2666,7 +2674,7 @@ mod tests {
         let mut bytes = encode_consent_entry(&e).unwrap();
         bytes.push(0xFF);
         assert!(matches!(
-            decode_consent_entry(&bytes),
+            decode_consent_entry(&bytes, crate::test_fixtures::ONLY_AES),
             Err(WireError::Trailing { .. })
         ));
     }
@@ -2674,12 +2682,12 @@ mod tests {
     #[test]
     fn consent_entry_decode_rejects_bad_operation_byte() {
         let bytes = unhex("ff00");
-        assert!(decode_consent_entry(&bytes).is_err());
+        assert!(decode_consent_entry(&bytes, crate::test_fixtures::ONLY_AES).is_err());
     }
 
     /// A consent grant's `clientKeyPackages` are join material a requester may
     /// add to a group directly, mirroring `real_key_package_bytes` but under a non-pinned suite
-    /// (INV-MLS-002-ALLOW: test-only, never a production path). The accept-gate must reject the
+    /// The accept-gate must reject the
     /// whole entry before the foreign-suite KeyPackage can leave `decode_consent_entry` at all.
     fn foreign_suite_key_package_bytes(credential_name: &[u8]) -> Vec<u8> {
         use openmls::credentials::{BasicCredential, CredentialWithKey};
@@ -2705,7 +2713,7 @@ mod tests {
         }
 
         let provider = OpenMlsRustCrypto::default();
-        // INV-MLS-002-ALLOW (test-only): the foreign suite the gate must reject.
+        // A suite the gate is asked not to accept.
         let suite =
             openmls::prelude::Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519;
         let scheme = SignatureScheme::ED25519;
@@ -2748,7 +2756,7 @@ mod tests {
             consent_extensions: Vec::new(),
         };
         let encoded = encode_consent_entry(&e).unwrap();
-        let err = decode_consent_entry(&encoded)
+        let err = decode_consent_entry(&encoded, crate::test_fixtures::ONLY_AES)
             .expect_err("a 0x0003 KeyPackage must never leave decode_consent_entry");
         assert!(
             matches!(err, WireError::CiphersuiteGate(_)),
@@ -2772,7 +2780,7 @@ mod tests {
             consent_extensions: Vec::new(),
         };
         let encoded = encode_consent_entry(&e).unwrap();
-        let err = decode_consent_entry(&encoded)
+        let err = decode_consent_entry(&encoded, crate::test_fixtures::ONLY_AES)
             .expect_err("a room URI as requesterUri must fail semantic validation");
         assert!(
             matches!(err, WireError::ConsentValidation(_)),
@@ -2795,7 +2803,7 @@ mod tests {
             consent_extensions: vec![(7, b"hello consent extensions".to_vec()), (3, Vec::new())],
         };
         let encoded = encode_consent_entry(&e).unwrap();
-        let decoded = decode_consent_entry(&encoded).unwrap();
+        let decoded = decode_consent_entry(&encoded, crate::test_fixtures::ONLY_AES).unwrap();
         let mut want_sorted = e.consent_extensions.clone();
         want_sorted.sort_by_key(|(id, _)| *id);
         assert_eq!(
@@ -2861,7 +2869,7 @@ mod tests {
         let mut bytes = encode_consent_entry(&e).unwrap();
         bytes.pop(); // the real (empty) consent_extensions window is one 0x00 length byte
         tls_codec::vlen::write_length(&mut bytes, MAX_RUN_AGGREGATE_BYTES + 1).unwrap();
-        let err = decode_consent_entry(&bytes).expect_err(
+        let err = decode_consent_entry(&bytes, crate::test_fixtures::ONLY_AES).expect_err(
             "an over-budget consent_extensions declared length must be rejected before allocation",
         );
         assert!(matches!(err, WireError::RunBudgetExceeded { .. }));
@@ -2896,7 +2904,7 @@ mod tests {
         tls_codec::vlen::write_length(&mut bytes, name_prefix.len()).unwrap();
         bytes.extend_from_slice(&name_prefix); // the full inner name prefix, zero payload bytes for it
 
-        let err = decode_consent_entry(&bytes).expect_err(
+        let err = decode_consent_entry(&bytes, crate::test_fixtures::ONLY_AES).expect_err(
             "an inner name prefix overshooting an in-budget outer window must be rejected, not panic",
         );
         assert!(matches!(err, WireError::Codec { .. }));
@@ -2996,7 +3004,7 @@ mod tests {
         let mut bytes = vec![u8::from(ConsentOperation::Request)];
         bytes.push(0xC0);
         bytes.extend_from_slice(&[0u8; 20]);
-        let err = decode_consent_entry(&bytes)
+        let err = decode_consent_entry(&bytes, crate::test_fixtures::ONLY_AES)
             .expect_err("the 8-byte varint form on requesterUri must be rejected, not panic");
         assert!(matches!(err, WireError::Codec { .. }));
     }
@@ -3419,7 +3427,10 @@ mod tests {
         want.push(22);
         want.extend_from_slice(b"mimi://b.example/u/bob");
         assert_eq!(tohex(&encoded), tohex(&want), "hand-computed KAT mismatch");
-        assert_eq!(KeyMaterialResponse::decode(&encoded).unwrap(), r);
+        assert_eq!(
+            KeyMaterialResponse::decode(&encoded, crate::test_fixtures::ONLY_AES).unwrap(),
+            r
+        );
     }
 
     #[test]
@@ -3480,7 +3491,8 @@ mod tests {
             key_package: kp_bytes.clone(),
         };
         let encoded = r.encode().unwrap();
-        let decoded = KeyMaterialResponse::decode(&encoded).unwrap();
+        let decoded =
+            KeyMaterialResponse::decode(&encoded, crate::test_fixtures::ONLY_AES).unwrap();
         match decoded {
             KeyMaterialResponse::Success {
                 user_uri,
@@ -3502,7 +3514,7 @@ mod tests {
     /// A wire-valid `KeyMaterialResponse::Success` carrying a foreign-suite (non-0x0001)
     /// KeyPackage must be rejected by `decode()` itself - the accept-gate runs on the receive
     /// path, not left to whichever caller eventually calls `add_member` on the returned bytes.
-    /// INV-MLS-002-ALLOW: the foreign suite here is test-only, constructed to prove the gate
+    /// The suite here is one the gate is asked not to accept, constructed to prove the gate
     /// fires, never a production path.
     #[test]
     fn key_material_response_decode_rejects_foreign_suite_keypackage() {
@@ -3529,7 +3541,7 @@ mod tests {
         }
 
         let provider = OpenMlsRustCrypto::default();
-        // INV-MLS-002-ALLOW (test-only): the foreign suite the gate must reject.
+        // A suite the gate is asked not to accept.
         let suite =
             openmls::prelude::Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519;
         let scheme = SignatureScheme::ED25519;
@@ -3564,7 +3576,7 @@ mod tests {
             key_package: kp_bytes,
         };
         let encoded = r.encode().unwrap();
-        let err = KeyMaterialResponse::decode(&encoded)
+        let err = KeyMaterialResponse::decode(&encoded, crate::test_fixtures::ONLY_AES)
             .expect_err("a 0x0003 KeyPackage must never decode as Success");
         assert!(
             matches!(err, WireError::CiphersuiteGate(_)),
@@ -3575,7 +3587,7 @@ mod tests {
     #[test]
     fn key_material_response_decode_rejects_garbage() {
         let bytes = unhex("01ff0000");
-        assert!(KeyMaterialResponse::decode(&bytes).is_err());
+        assert!(KeyMaterialResponse::decode(&bytes, crate::test_fixtures::ONLY_AES).is_err());
     }
 
     #[test]
@@ -3598,7 +3610,7 @@ mod tests {
             };
             let encoded = r.encode().unwrap();
             assert!(
-                KeyMaterialResponse::decode(&encoded).is_err(),
+                KeyMaterialResponse::decode(&encoded, crate::test_fixtures::ONLY_AES).is_err(),
                 "malformed keyPackage bytes must be rejected, not panic: {bad:?}"
             );
         }
@@ -3622,7 +3634,7 @@ mod tests {
             .unwrap();
         // clients<V> declares a length over the shared budget, with NO body bytes following.
         tls_codec::vlen::write_length(&mut bytes, MAX_RUN_AGGREGATE_BYTES + 1).unwrap();
-        let err = KeyMaterialResponse::decode(&bytes).expect_err(
+        let err = KeyMaterialResponse::decode(&bytes, crate::test_fixtures::ONLY_AES).expect_err(
             "an over-budget clients declared length must be rejected before allocation",
         );
         assert!(matches!(err, WireError::RunBudgetExceeded { .. }));
@@ -3709,7 +3721,7 @@ mod tests {
             ];
             for bad in garbage_payloads {
                 assert!(
-                    HandshakeBundle::decode(bad).is_err(),
+                    HandshakeBundle::decode(bad, crate::test_fixtures::ONLY_AES).is_err(),
                     "malformed proposalOrCommit bytes must be rejected, not panic: {bad:?}"
                 );
             }
@@ -3755,7 +3767,8 @@ mod tests {
                 ratchet_tree_option: vec![0xCC],
             };
             let encoded = bundle.encode().unwrap();
-            let decoded = HandshakeBundle::decode(&encoded).unwrap();
+            let decoded =
+                HandshakeBundle::decode(&encoded, crate::test_fixtures::ONLY_AES).unwrap();
             match decoded {
                 HandshakeBundle::Commit {
                     proposal_or_commit,
@@ -3799,7 +3812,7 @@ mod tests {
                 group.add_members(&provider, &asigner, &[bob_kp]).unwrap();
             let mut bytes = commit.tls_serialize_detached().unwrap();
             bytes.push(0xFF); // bad welcome-presence tag right after the commit envelope
-            assert!(HandshakeBundle::decode(&bytes).is_err());
+            assert!(HandshakeBundle::decode(&bytes, crate::test_fixtures::ONLY_AES).is_err());
         }
 
         /// Same shape as `ident`, but lets the caller pick the ciphersuite - needed to build a
@@ -3859,7 +3872,7 @@ mod tests {
         #[test]
         fn commit_decode_rejects_foreign_suite_welcome() {
             let provider = OpenMlsRustCrypto::default();
-            // INV-MLS-002-ALLOW (test-only): the foreign suite the gate must reject.
+            // A suite the gate is asked not to accept.
             let suite =
                 openmls::prelude::Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519;
             let (_akp, asigner, acwk) = ident("alice", &provider);
@@ -3890,7 +3903,7 @@ mod tests {
                 ratchet_tree_option: vec![],
             };
             let encoded = bundle.encode().unwrap();
-            let err = HandshakeBundle::decode(&encoded)
+            let err = HandshakeBundle::decode(&encoded, crate::test_fixtures::ONLY_AES)
                 .expect_err("a 0x0003 Welcome must never leave HandshakeBundle::decode as Ok");
             assert!(
                 matches!(err, WireError::CiphersuiteGate(_)),
@@ -3924,7 +3937,7 @@ mod tests {
             let welcome_bytes = bare_welcome(&welcome);
 
             // A separate foreign-suite group, only to mint a decodable but wrong-suite
-            // GroupInfo. INV-MLS-002-ALLOW (test-only): never a production path.
+            // GroupInfo.
             let foreign_suite =
                 openmls::prelude::Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519;
             let (_fakp, fasigner, facwk) = ident_under("mallory", &provider, foreign_suite);
@@ -3959,7 +3972,7 @@ mod tests {
                 ratchet_tree_option: vec![],
             };
             let encoded = bundle.encode().unwrap();
-            let err = HandshakeBundle::decode(&encoded)
+            let err = HandshakeBundle::decode(&encoded, crate::test_fixtures::ONLY_AES)
                 .expect_err("a 0x0003 GroupInfo must never leave HandshakeBundle::decode as Ok");
             assert!(
                 matches!(err, WireError::CiphersuiteGate(_)),
@@ -4012,7 +4025,8 @@ mod tests {
                 more_proposals: more_proposals_expected.clone(),
             };
             let encoded = bundle.encode().unwrap();
-            let decoded = HandshakeBundle::decode(&encoded).unwrap();
+            let decoded =
+                HandshakeBundle::decode(&encoded, crate::test_fixtures::ONLY_AES).unwrap();
             match decoded {
                 HandshakeBundle::Proposal {
                     proposal_or_commit,
@@ -4039,7 +4053,7 @@ mod tests {
                 .create_message(&provider, &asigner, b"not a handshake message")
                 .unwrap();
             let bytes = app_msg.tls_serialize_detached().unwrap();
-            let err = HandshakeBundle::decode(&bytes).unwrap_err();
+            let err = HandshakeBundle::decode(&bytes, crate::test_fixtures::ONLY_AES).unwrap_err();
             assert!(matches!(err, WireError::MlsMessage(_)));
         }
     }

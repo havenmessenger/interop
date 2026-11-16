@@ -5,6 +5,9 @@
 use super::*;
 use crate::test_fixtures::{capabilities, key_package};
 
+/// The gates asked to accept 0x0001 only.
+const ONLY_AES: &[u16] = &[crate::gate::MLS_128_DHKEMX25519_AES128GCM_SHA256_ED25519];
+
 const USER: &str = "mimi://example.org/u/alice";
 const CLIENT_A: &str = "mimi://example.org/d/alice-a";
 const CLIENT_B: &str = "mimi://example.org/d/alice-b";
@@ -42,7 +45,7 @@ fn response(user_status: u8, user: &str, clients: &[Vec<u8>]) -> Vec<u8> {
 
 /// Decode, check the result is `Clients`, and require that writing it back gives the bytes that came in.
 fn round_trips(bytes: &[u8]) -> KeyMaterialResponse {
-    let decoded = KeyMaterialResponse::decode(bytes).unwrap();
+    let decoded = KeyMaterialResponse::decode(bytes, ONLY_AES).unwrap();
     assert_eq!(
         decoded.encode().unwrap(),
         bytes,
@@ -165,7 +168,7 @@ fn a_user_code_that_must_not_carry_clients_refuses_them() {
     for code in [2u8, 4, 7] {
         let bytes = response(code, USER, &[exhausted(CLIENT_A)]);
         assert!(
-            KeyMaterialResponse::decode(&bytes).is_err(),
+            KeyMaterialResponse::decode(&bytes, ONLY_AES).is_err(),
             "user code {code}"
         );
     }
@@ -174,7 +177,7 @@ fn a_user_code_that_must_not_carry_clients_refuses_them() {
 #[test]
 fn success_and_partial_success_enumerate_their_clients() {
     for code in [0u8, 1] {
-        assert!(KeyMaterialResponse::decode(&response(code, USER, &[])).is_err());
+        assert!(KeyMaterialResponse::decode(&response(code, USER, &[]), ONLY_AES).is_err());
     }
 }
 
@@ -182,7 +185,7 @@ fn success_and_partial_success_enumerate_their_clients() {
 fn success_means_material_for_every_client() {
     let a = key_package(b"a", 1);
     let bytes = response(0, USER, &[success(CLIENT_A, &a), exhausted(CLIENT_B)]);
-    assert!(KeyMaterialResponse::decode(&bytes).is_err());
+    assert!(KeyMaterialResponse::decode(&bytes, ONLY_AES).is_err());
 }
 
 #[test]
@@ -195,7 +198,9 @@ fn a_denial_still_carries_no_client() {
             ..
         }
     ));
-    assert!(KeyMaterialResponse::decode(&response(5, USER, &[exhausted(CLIENT_A)])).is_err());
+    assert!(
+        KeyMaterialResponse::decode(&response(5, USER, &[exhausted(CLIENT_A)]), ONLY_AES).is_err()
+    );
 }
 
 #[test]
@@ -228,7 +233,7 @@ fn a_foreign_suite_key_package_in_any_client_is_refused() {
         USER,
         &[success(CLIENT_A, &a), success(CLIENT_B, &foreign)],
     );
-    assert!(KeyMaterialResponse::decode(&bytes).is_err());
+    assert!(KeyMaterialResponse::decode(&bytes, ONLY_AES).is_err());
 }
 
 #[test]
@@ -237,19 +242,19 @@ fn a_truncated_or_overlong_response_is_refused() {
     let good = response(1, USER, &[success(CLIENT_A, &a), exhausted(CLIENT_B)]);
     for cut in [1, 5, good.len() - 1] {
         assert!(
-            KeyMaterialResponse::decode(&good[..cut]).is_err(),
+            KeyMaterialResponse::decode(&good[..cut], ONLY_AES).is_err(),
             "cut at {cut}"
         );
     }
     let mut trailing = good.clone();
     trailing.push(0);
-    assert!(KeyMaterialResponse::decode(&trailing).is_err());
+    assert!(KeyMaterialResponse::decode(&trailing, ONLY_AES).is_err());
 }
 
 #[test]
 fn an_unknown_client_status_is_refused() {
     let bytes = response(1, USER, &[[vec![9], uri(CLIENT_A)].concat()]);
-    assert!(KeyMaterialResponse::decode(&bytes).is_err());
+    assert!(KeyMaterialResponse::decode(&bytes, ONLY_AES).is_err());
 }
 
 #[test]
@@ -257,7 +262,7 @@ fn a_run_of_too_many_clients_is_refused_by_the_run_budget() {
     let many: Vec<Vec<u8>> = (0..=MAX_RUN_ELEMENTS)
         .map(|_| exhausted(CLIENT_A))
         .collect();
-    let error = KeyMaterialResponse::decode(&response(1, USER, &many)).unwrap_err();
+    let error = KeyMaterialResponse::decode(&response(1, USER, &many), ONLY_AES).unwrap_err();
     assert!(
         matches!(error, WireError::RunBudgetExceeded { .. }),
         "{error}"

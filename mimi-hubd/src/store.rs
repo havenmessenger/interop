@@ -2,7 +2,7 @@
 //! open `:memory:`, same code path. Holds the three pieces of provider state:
 //!   - one-time KeyPackages per local user (K1 once-only + K2 expiry),
 //!   - the `/notify` byte-exact dedup ledger (M5),
-//!   - MIMI enrollment (the Standards-Testing-Page opt-in; DIV-4 + INV-MIMI-001 send-gate).
+//!   - enrollment for `identifierQuery` (`mimi-hubd enroll`; who it finds is the policy's `identifier_discovery`).
 //!
 //! K1 atomicity is load-bearing: a race that serves one KeyPackage twice breaks the one-time
 //! guarantee. `claim_one` is therefore a SINGLE `DELETE ... RETURNING` statement (atomic in SQLite),
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS notify_seen (
 -- a served KeyPackageRef -> its local client (so an inbound Welcome can be delivered to the right user).
 -- K3: the HUB maps a claimed KeyPackageRef -> the target provider (so it forwards the Welcome there).
 -- `not_after` lets the sweep drop stale associations (spec: deletable after the Welcome is forwarded OR
--- not_after passes). Pure routing METADATA: a ref is a hash, not plaintext (INV-MIMI-002 holds).
+-- not_after passes). Pure routing METADATA: a ref is a hash, not plaintext.
 CREATE TABLE IF NOT EXISTS kpref_client (
     kpref     BLOB PRIMARY KEY,
     username  TEXT NOT NULL,
@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS enrolled (
 -- Cross-provider consent (protocol §5.7; conformance C1/C2/C3). A directional (requester -> target)
 -- authorization the TARGET's provider holds, scoping whether the requester may reach the target. `room_key`
 -- is the room URI for a room-scoped record or '' for a global one (room-specific overrides global). `state`
--- is requested|granted|revoked. Pure authz METADATA (URIs), no plaintext (INV-MIMI-002).
+-- is requested|granted|revoked. Pure authz METADATA (URIs), no plaintext.
 CREATE TABLE IF NOT EXISTS consent (
     requester TEXT NOT NULL,
     target    TEXT NOT NULL,
@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS member_role (
 );
 
 -- Store-and-forward delivery (the cross-provider relay). The provider stores OPAQUE ciphertext keyed
--- by a caller-supplied RECIPIENT string (routing METADATA only, it never decrypts; INV-MIMI-002).
+-- by a caller-supplied RECIPIENT string (routing METADATA only; it never decrypts).
 CREATE TABLE IF NOT EXISTS welcomes (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     recipient TEXT NOT NULL,
@@ -118,7 +118,7 @@ CREATE INDEX IF NOT EXISTS idx_msg_rcpt ON messages(recipient, id);
 -- Room participant list (the HUB's per-room membership; protocol §5.3, conformance R1-R3). The hub for a
 -- room is the provider whose authority owns the room URI. `authority` is each member's provider - the
 -- routing key that decides, on fan-out (M3), whether a member is LOCAL (enqueue here) or FOREIGN (forward
--- to that provider). This is metadata routing only; the provider never sees plaintext (INV-MIMI-002).
+-- to that provider). This is metadata routing only; the provider never sees plaintext.
 CREATE TABLE IF NOT EXISTS room_participants (
     room_uri   TEXT NOT NULL,
     member_uri TEXT NOT NULL,
@@ -750,6 +750,21 @@ impl SqliteStore {
             params![username],
         )?;
         Ok(())
+    }
+
+    /// Whether an unexpired KeyPackage is kept under `username` (a name, or a URI in any form that canonicalizes to the
+    /// one it was published under).
+    pub fn holds_key_material(&self, username: &str, now_unix: u64) -> anyhow::Result<bool> {
+        let username = mimi_core::uri::canonical(username);
+        let found: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM keypackages WHERE username = ?1 AND not_after > ?2 LIMIT 1",
+                params![username.as_str(), now_unix as i64],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(found.is_some())
     }
 
     pub fn is_enrolled(&self, username: &str) -> anyhow::Result<bool> {

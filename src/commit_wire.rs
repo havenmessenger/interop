@@ -11,7 +11,7 @@
 //! hub's role).
 //!
 //! Bounded to a Commit whose `proposals` list holds exactly one entry, carried by value (not by
-//! reference), whose `proposal_type` is one of Haven's registered custom types. A Commit that
+//! reference), whose `proposal_type` is one of the custom types this crate reads. A Commit that
 //! also carries a standard proposal (Add, Remove, ...) in the same list is rejected rather than
 //! decoded: skipping past a standard proposal's own body (an `Add`, for instance, embeds a full
 //! KeyPackage) needs that proposal's own decoder, which this module does not implement. A sender
