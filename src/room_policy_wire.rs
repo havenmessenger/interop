@@ -86,7 +86,11 @@ impl<'a> Reader<'a> {
         Self { rest }
     }
 
-    fn take(&mut self, n: usize, what: &'static str) -> Result<&'a [u8], RoomPolicyError> {
+    pub(crate) fn take(
+        &mut self,
+        n: usize,
+        what: &'static str,
+    ) -> Result<&'a [u8], RoomPolicyError> {
         if self.rest.len() < n {
             return Err(refuse(
                 what,
@@ -98,18 +102,29 @@ impl<'a> Reader<'a> {
         Ok(head)
     }
 
-    fn u16(&mut self, what: &'static str) -> Result<u16, RoomPolicyError> {
+    pub(crate) fn u8(&mut self, what: &'static str) -> Result<u8, RoomPolicyError> {
+        Ok(self.take(1, what)?[0])
+    }
+
+    pub(crate) fn u16(&mut self, what: &'static str) -> Result<u16, RoomPolicyError> {
         let b = self.take(2, what)?;
         Ok(u16::from_be_bytes([b[0], b[1]]))
     }
 
-    fn u32(&mut self, what: &'static str) -> Result<u32, RoomPolicyError> {
+    pub(crate) fn u32(&mut self, what: &'static str) -> Result<u32, RoomPolicyError> {
         let b = self.take(4, what)?;
         Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
     }
 
     /// `bool`: one octet, 0 or 1.
-    fn flag(&mut self, what: &'static str) -> Result<bool, RoomPolicyError> {
+    pub(crate) fn u64(&mut self, what: &'static str) -> Result<u64, RoomPolicyError> {
+        let b = self.take(8, what)?;
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(b);
+        Ok(u64::from_be_bytes(bytes))
+    }
+
+    pub(crate) fn flag(&mut self, what: &'static str) -> Result<bool, RoomPolicyError> {
         match self.take(1, what)?[0] {
             0 => Ok(false),
             1 => Ok(true),
@@ -166,7 +181,7 @@ impl<'a> Reader<'a> {
         String::from_utf8(bytes.to_vec()).map_err(|_| refuse(what, "not valid UTF-8"))
     }
 
-    fn done(&self, what: &'static str) -> Result<(), RoomPolicyError> {
+    pub(crate) fn done(&self, what: &'static str) -> Result<(), RoomPolicyError> {
         if self.rest.is_empty() {
             Ok(())
         } else {
@@ -345,7 +360,7 @@ pub fn decode_base_room_policy(bytes: &[u8]) -> Result<BaseRoomPolicy, RoomPolic
     })
 }
 
-fn put_run(out: &mut Vec<u8>, content: &[u8]) {
+pub(crate) fn put_run(out: &mut Vec<u8>, content: &[u8]) {
     // The content is built here, never from a peer, and is far below the 30-bit limit.
     let wrapped = VLBytes::new(content.to_vec());
     let encoded =
