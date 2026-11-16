@@ -128,6 +128,12 @@ pub fn percent_encode(value: &str) -> String {
     out
 }
 
+/// The outbound client and the directory cache, shared by everything in the hub that reaches another provider.
+pub struct PeerAccess {
+    pub client: Arc<PeerClient>,
+    pub directories: Arc<Directories>,
+}
+
 /// The directories of the providers this hub sends to, fetched on first use and kept for [`DIRECTORY_TTL`].
 pub struct Directories {
     bases: PeerBases,

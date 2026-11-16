@@ -226,6 +226,63 @@ async fn key_material_wire(
     log_key_material_identity_claim(&req.requesting_user.0, req.requester_credential_identity());
     let now = now_unix();
     let room_uri = (!req.room_id.0.is_empty()).then_some(req.room_id.0.as_str());
+    // A user of another provider, by the request's `targetUser`: forwarded to it, for a room this hub hosts
+    // (`key_material_proxy`).
+    let route = lock(&p).key_material_route(&req.requesting_user.0, &req.target_user.0, room_uri);
+    match route {
+        crate::key_material_proxy::KeyMaterialRoute::Local => {}
+        crate::key_material_proxy::KeyMaterialRoute::Refused(why) => {
+            eprintln!("[mimi-hubd] keyMaterial: noConsent, not forwarded ({why})");
+            let answer = KeyMaterialResponse::Denied {
+                user_uri: IdentifierUri(req.target_user.0.clone()),
+                code: KeyMaterialUserCode::NoConsent,
+            };
+            return match answer.encode() {
+                Ok(bytes) => (StatusCode::OK, bytes).into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            };
+        }
+        crate::key_material_proxy::KeyMaterialRoute::Unavailable => {
+            eprintln!(
+                "[mimi-hubd] keyMaterial: 502 (another provider's user, and no outbound client)"
+            );
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
+        crate::key_material_proxy::KeyMaterialRoute::Forward { domain, access } => {
+            let forwarded = crate::key_material_proxy::forward_key_material(
+                &access,
+                &domain,
+                &req.target_user.0,
+                body.to_vec(),
+            )
+            .await;
+            let answer = forwarded.and_then(|bytes| {
+                let accepted = lock(&p).accepted_suites().to_vec();
+                KeyMaterialResponse::decode(&bytes, &accepted)
+                    .map(|decoded| (bytes, decoded))
+                    .map_err(|error| format!("the answer does not decode: {error}"))
+            });
+            return match answer {
+                Ok((bytes, decoded)) => {
+                    match lock(&p).record_forwarded_key_material(&domain, &decoded, now) {
+                        Ok(recorded) => eprintln!(
+                            "[mimi-hubd] keyMaterial: forwarded to {domain}; {recorded} KeyPackage(s) recorded for its Welcome"
+                        ),
+                        Err(error) => eprintln!(
+                            "[mimi-hubd] keyMaterial: forwarded to {domain}; recording its KeyPackages failed: {error}"
+                        ),
+                    }
+                    (StatusCode::OK, bytes).into_response()
+                }
+                Err(why) => {
+                    eprintln!(
+                        "[mimi-hubd] keyMaterial: 502, forwarding to {domain} failed ({why})"
+                    );
+                    StatusCode::BAD_GATEWAY.into_response()
+                }
+            };
+        }
+    }
     let gated = lock(&p).serve_key_material_for(
         &req.requesting_user.0,
         &target_user,

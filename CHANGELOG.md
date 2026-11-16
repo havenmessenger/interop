@@ -29,6 +29,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   participants before and after), the Welcome in a Commit's bundle (by the provider recorded for its KeyPackageRef, else
   the added user's), held leave proposals with their `moreProposals`, and application messages. Local members now get
   a room's Commits and held proposals in their queue too. mimi-core's `FanoutMessage` gains a constructor per kind.
+- mimi-hubd forwards keyMaterial for another provider's user to that provider, for a room it hosts and from a
+  participant who may add participants, and records each returned KeyPackage's provider for routing its Welcome.
+  Any other such request is answered `noConsent`; a failing peer is `502`.
 
 ## 0.1.0 - 2026-11-16
 

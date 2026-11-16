@@ -97,10 +97,17 @@ protocol-07 §5.1 takes a directory's URLs as given. And the peer's server certi
 connected to, by the same `dNSName` test DIV-16 applies inbound; for an endpoint on a subdomain that is the subdomain,
 not the provider domain §4.1 names.
 
+**keyMaterial for a user of another provider** (`mimi-hubd/src/key_material_proxy.rs`), chosen by the request's
+`targetUser`: the hub forwards it only for a room it hosts and only from a participant whose role may add
+participants (`canAddParticipant`; any participant of a room with no roles), as mimid does. Any other such request is
+answered `noConsent`, which is what §5.2 has for a refusal, and nothing is forwarded. The request goes as received to
+the target provider's directory `keyMaterial` URL; a `200` answer must decode as a `KeyMaterialResponse`, and the
+`KeyPackageRef` of each KeyPackage in it is recorded against that provider for 30 days, so the Welcome that adds it is
+routed there. The answer is returned as received. A peer that fails or answers anything else is `502`. The hub does not
+check the request's signature before forwarding: the target provider does (DIV-6).
+
 Not built yet:
 
-- **keyMaterial for a user of another provider** is not proxied, so the hub has no `KeyPackageRef` record for such a
-  user and routes its Welcome by the added user's domain.
 - **A room on another hub**: this provider's `notify` still refuses anything but a Welcome for such a room (DIV-16),
   and it does not relay its own users' `update` or `submitMessage` to that room's hub.
 

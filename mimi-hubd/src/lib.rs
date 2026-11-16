@@ -29,6 +29,7 @@ pub mod fanout;
 pub mod group_store;
 pub mod http;
 pub mod identifier_search;
+pub mod key_material_proxy;
 #[cfg(test)]
 mod mls_fixtures;
 pub mod notify_source;
@@ -190,6 +191,8 @@ pub struct Provider {
     store: SqliteStore,
     /// Notified after fan-out is queued, so the outbox worker sends it without waiting for its next tick.
     outbox_waker: Option<std::sync::Arc<tokio::sync::Notify>>,
+    /// The outbound client and directory cache, for requests the hub makes while answering one (`key_material_proxy`).
+    peer_access: Option<std::sync::Arc<peer_directory::PeerAccess>>,
 }
 
 /// One line for what a fan-out queued, or why it could not: the change it follows was stored either way.
@@ -226,6 +229,7 @@ impl Provider {
             policy: policy::HubPolicy::default(),
             store: SqliteStore::open(db_path)?,
             outbox_waker: None,
+            peer_access: None,
         })
     }
 
@@ -237,6 +241,7 @@ impl Provider {
             policy: policy::HubPolicy::default(),
             store: SqliteStore::in_memory()?,
             outbox_waker: None,
+            peer_access: None,
         })
     }
 

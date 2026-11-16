@@ -359,7 +359,9 @@ A peer's endpoints come from its directory, `<base>/.well-known/mimi-protocol-di
 room and provider, delivered in order by a worker in the hub (`../DIVERGENCES.md`, DIV-5, says what each answer does);
 `GET /mimi/v1/outbox` and `POST /mimi/v1/dropOutbox` on the operator's listener show and drop queues. What goes into
 the outbox: an accepted Commit, the Welcome in its bundle, held leave proposals and application messages, for each
-other provider with a participant in the room (DIV-5).
+other provider with a participant in the room (DIV-5). A `keyMaterial` request for another provider's user, for a room
+this hub hosts and from a participant who may add participants, is forwarded to that provider, and each KeyPackage it
+returns is recorded so the Welcome that uses it goes there; any other such request is answered `noConsent`.
 
 ## Endpoints
 

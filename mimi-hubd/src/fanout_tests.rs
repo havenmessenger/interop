@@ -3,7 +3,6 @@
 
 use mimi_core::protocol_wire::FanoutMessage;
 use openmls::prelude::tls_codec::Serialize as _;
-use openmls::prelude::*;
 
 use crate::mls_fixtures::Member;
 use crate::store::ParticipantRow;
