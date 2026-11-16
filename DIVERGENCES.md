@@ -73,8 +73,15 @@ JSON compat lane's `submit_message` is intentionally left as the pre-existing un
 demo/admin path (`?recipient=` accepts any opaque string, no room semantics) - it predates and
 is independent of the wire protocol surface.
 
-The hub has the client such forwarding would go through (`mimi-hubd/src/outbound.rs`; SECURITY-INVARIANTS says what it
-refuses), and nothing sends through it yet. Two of its rules are this hub's, not the draft's. A URL it sends to must
+The hub has the client such forwarding goes through (`mimi-hubd/src/outbound.rs`; SECURITY-INVARIANTS says what it
+refuses) and the queue that feeds it (`store_outbox.rs`, `outbox.rs`), and nothing is queued yet. The queue follows
+§5.5 as mimid's does, where the draft leaves it open: one FIFO queue per room and destination provider, of which only
+the head is attempted, its bytes fixed so a retry is a byte-identical duplicate; `201` delivers it; a `4xx` other than
+`408` and `429` drops it and logs it; anything else retries after a backoff of 1 s doubling to 5 min, or the
+`Retry-After` asked for, up to a day. Nothing expires while a provider is down; the operator sees each queue
+(`GET /mimi/v1/outbox`) and can drop one (`dropOutbox`). A provider's endpoints come from its directory at
+`https://<domain>/.well-known/mimi-protocol-directory`, or under the base the operator's `MIMI_PEERS` gives it. Two of
+its rules are this hub's, not the draft's. A URL it sends to must
 name the peer's own domain or a subdomain of it as its host, so a directory that points an endpoint at another host is
 refused, where protocol-07 §5.1 takes a directory's URLs as given. And the peer's server certificate is checked for the
 host connected to, by the same `dNSName` test DIV-16 applies inbound; for an endpoint on a subdomain that is the

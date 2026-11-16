@@ -289,13 +289,16 @@ the file - see [`debian/mimi-hubd.toml.example`](debian/mimi-hubd.toml.example) 
 | `MIMI_DB_PATH` | `db_path` | no | `/var/lib/mimi/provider.db` | SQLite file path for durable state. This binary-level default is unchanged by packaging - the shipped `.toml.example` template recommends `/var/lib/mimi-hubd/hub.db` instead (matching the systemd unit's `StateDirectory=`), but that is the template's choice, not a change to this daemon's own default. |
 | `MIMI_PUBLIC_BASE_URL` | `public_base_url` | no | `https://{MIMI_PROVIDER_DOMAIN}` | The `https://` URL the directory's endpoint URLs start at, for a hub behind a reverse proxy, on a port other than 443, or on a dedicated host. Identifiers keep using `MIMI_PROVIDER_DOMAIN`. One trailing `/` is dropped; a query, fragment or non-`https` URL is a hard error at startup. |
 | `MIMI_DIRECTORY_BIND_ADDR` | `directory_bind_addr` | no | none | A second listener, plain HTTP and with no client certificate, that answers `GET /.well-known/mimi-protocol-directory` and nothing else. It is meant to sit behind whatever terminates TLS for the public name. Unset means there is no such listener. |
-| `MIMI_ADMIN_BIND_ADDR` | `admin_bind_addr` | no | none | The operator's listener: plain HTTP with no client certificate, serving `roomPolicy`, `memberRole`, `addParticipant` and `untrackRoom` and nothing else. It must be a loopback `ip:port` (127.0.0.0/8 or `::1`); any other address stops the hub at start. Unset means there is no such listener, and no request can change a room's policy, roles or participants except a peer's `update`. |
+| `MIMI_ADMIN_BIND_ADDR` | `admin_bind_addr` | no | none | The operator's listener: plain HTTP with no client certificate, serving `roomPolicy`, `memberRole`, `addParticipant`, `untrackRoom`, `outbox` and `dropOutbox` and nothing else. It must be a loopback `ip:port` (127.0.0.0/8 or `::1`); any other address stops the hub at start. Unset means there is no such listener, and no request can change a room's policy, roles or participants except a peer's `update`. |
 | `MIMI_POLICY` | `policy` | no | none | A TOML file of the deployment's choices, below. Unset means the drafts' defaults. A named file the hub cannot read, or one that is not a valid policy, stops the start. |
 | `MIMI_PEER_KEYS` | `peer_keys` | no | none | Path of a JSON file of peers' DNS-published signing keys, `{"<keyid>._mimi.<domain>": "<base64 Ed25519 public key>"}`, an empty value for a revoked key. Re-read when it changes. Without it, no signature verifies and only a client certificate admits a peer. |
 | `MIMI_ACTIVITY_LOG` | `activity_log` | no | off | `1` prints one line per request on the peer-facing listener to stderr: `[mimi-activity] method=POST route=/mimi/pl/update/:room_id status=200`. The route is the template the request matched (`route=unmatched` when none did), so no path, query string, header, certificate or body appears in it. Any other value, or none, leaves it off. The directory-only listener is not logged. |
 | `MIMI_OUTBOUND_ALLOW` | `outbound_allow` | no | none | Comma-separated `addr/len` ranges an outbound request may reach although they are special (loopback, private, link-local, ...), for a test deployment whose peers run on such addresses. A value that does not parse stops the start. See "Outbound requests" below. |
 | `MIMI_OUTBOUND_PROXY` | `outbound_proxy` | no | none | An HTTP `CONNECT` proxy for outbound requests, `http://host:port`. The tunnel is opened to the address the hub checked, and TLS with the hub's client certificate runs end to end inside it. |
 | `MIMI_PEER_TRUST` | `peer_trust` | no | `system` | The roots a peer's server certificate may chain to: `system` (the system's roots plus `MIMI_CLIENT_CA`) or `bundle` (`MIMI_CLIENT_CA` only). |
+| `MIMI_CLIENT_CERT` | `client_cert` | no | `MIMI_SERVER_CERT` | PEM path of the certificate outbound requests present, with `MIMI_CLIENT_KEY`; for a server certificate without the `clientAuth` extended key usage. Set both or neither. |
+| `MIMI_CLIENT_KEY` | `client_key` | no | `MIMI_SERVER_KEY` | PEM path of that certificate's key. |
+| `MIMI_PEERS` | `peers` | no | none | A TOML file of `"<peer domain>" = "https://<base>"`, for a peer whose directory is not at `https://<domain>` (mimid serves it at its configured base, such as `https://mimi.a.example`). A base outside the peer's domain stops the start. |
 
 The daemon never falls back to plain HTTP: a missing certificate, key, or CA path is a hard error
 at startup, not a degraded-but-running mode - and mTLS material is validated *before* the SQLite
@@ -346,11 +349,16 @@ Every request this hub makes to another provider goes through one client (`src/o
 connection. Before connecting it requires an `https` URL whose host is the peer's domain or a subdomain of it, resolves
 the host once, and refuses the request if any address it resolves to is in a special range (loopback, unspecified,
 link-local, private, shared, unique-local, multicast, documentation, reserved), unless `MIMI_OUTBOUND_ALLOW` names it;
-it then connects to that checked address. TLS presents `MIMI_SERVER_CERT` as the client certificate on every request,
-so that certificate needs the `clientAuth` extended key usage as well as `serverAuth`; the peer's server certificate
-must be valid for the host connected to. Requests carry `From: mimi@<MIMI_PROVIDER_DOMAIN>`; redirects are not
-followed. The startup log says how the client reaches peers. Nothing is sent through it yet: delivery to other
-providers is not built (`../DIVERGENCES.md`, DIV-5).
+it then connects to that checked address. TLS presents a client certificate on every request: `MIMI_CLIENT_CERT` /
+`MIMI_CLIENT_KEY` when set, else `MIMI_SERVER_CERT` / `MIMI_SERVER_KEY`, which then needs the `clientAuth` extended key
+usage as well as `serverAuth`. The peer's server certificate must be valid for the host connected to. Requests carry
+`From: mimi@<MIMI_PROVIDER_DOMAIN>`; redirects are not followed. The startup log says how the client reaches peers.
+
+A peer's endpoints come from its directory, `<base>/.well-known/mimi-protocol-directory`, where the base is
+`https://<domain>` unless `MIMI_PEERS` gives another. Fan-out for other providers waits in the outbox, one queue per
+room and provider, delivered in order by a worker in the hub (`../DIVERGENCES.md`, DIV-5, says what each answer does);
+`GET /mimi/v1/outbox` and `POST /mimi/v1/dropOutbox` on the operator's listener show and drop queues. Nothing is queued
+yet: the hub does not fan out to other providers (DIV-5).
 
 ## Endpoints
 
@@ -378,6 +386,8 @@ not MIMI routes; a peer changes a room's roster or policy through `update`.
 | POST | `/mimi/v1/memberRole?room=&member=&role=` | Assign a member's role in a room. |
 | POST | `/mimi/v1/addParticipant?room=&member=` | Register a room participant. |
 | POST | `/mimi/v1/untrackRoom?room=` | Drop the room's ratchet tree; its next bundle with a Full GroupInfo and a full tree seeds it again. |
+| GET | `/mimi/v1/outbox` | Each queue of fan-out waiting for another provider: room, domain, depth, oldest row, and its head's attempts and last outcome. |
+| POST | `/mimi/v1/dropOutbox?room=&domain=` | Drop that queue, every row of it; answers how many. |
 
 ### How user and room URIs compare
 

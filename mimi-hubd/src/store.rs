@@ -21,6 +21,10 @@ pub enum KeyClaim {
     NoneCompatible,
 }
 
+#[path = "store_outbox.rs"]
+mod outbox;
+pub use outbox::{OutboxQueue, OutboxRow};
+
 pub struct SqliteStore {
     conn: Connection,
 }
@@ -314,6 +318,7 @@ impl SqliteStore {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         // WAL + foreign-keys are good hygiene; the schema is idempotent (IF NOT EXISTS).
         conn.execute_batch(SCHEMA)?;
+        conn.execute_batch(outbox::SCHEMA)?;
         // Migration (L1): notify_seen gained `seen_at` after its initial release, needed to sweep
         // an otherwise permanently-growing dedup ledger. `CREATE TABLE IF NOT EXISTS` above is a
         // no-op against a pre-existing DB missing the column, so add it explicitly; ignore only the

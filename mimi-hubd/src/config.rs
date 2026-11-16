@@ -29,6 +29,9 @@ const KNOWN_KEYS: &[&str] = &[
     "outbound_allow",
     "outbound_proxy",
     "peer_trust",
+    "client_cert",
+    "client_key",
+    "peers",
 ];
 
 /// The settings this daemon takes from env vars, also loadable from a TOML file. Field names match the env var suffix in lowercase (`MIMI_PROVIDER_DOMAIN` ->
@@ -58,6 +61,11 @@ pub struct ConfigFile {
     /// Which roots a peer's server certificate may chain to: `system` (the system roots plus the client CA bundle, the
     /// default) or `bundle` (the bundle only).
     pub peer_trust: Option<String>,
+    /// The certificate and key presented on outbound requests, when they are not `server_cert` / `server_key`.
+    pub client_cert: Option<String>,
+    pub client_key: Option<String>,
+    /// A TOML file mapping a peer's domain to the base its directory is under, when that is not `https://<domain>`.
+    pub peers: Option<String>,
 }
 
 impl ConfigFile {
@@ -102,6 +110,9 @@ impl ConfigFile {
             "outbound_allow" => self.outbound_allow.as_ref(),
             "outbound_proxy" => self.outbound_proxy.as_ref(),
             "peer_trust" => self.peer_trust.as_ref(),
+            "client_cert" => self.client_cert.as_ref(),
+            "client_key" => self.client_key.as_ref(),
+            "peers" => self.peers.as_ref(),
             _ => None,
         }
     }
@@ -273,6 +284,16 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
         "MIMI_PEER_TRUST",
         resolve("MIMI_PEER_TRUST", "peer_trust", file, None),
     );
+    // No defaults: outbound requests present the server certificate, and every peer's base is https://<domain>.
+    m.insert(
+        "MIMI_CLIENT_CERT",
+        resolve("MIMI_CLIENT_CERT", "client_cert", file, None),
+    );
+    m.insert(
+        "MIMI_CLIENT_KEY",
+        resolve("MIMI_CLIENT_KEY", "client_key", file, None),
+    );
+    m.insert("MIMI_PEERS", resolve("MIMI_PEERS", "peers", file, None));
     m
 }
 

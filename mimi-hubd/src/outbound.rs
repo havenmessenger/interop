@@ -686,4 +686,4 @@ async fn deadline<T>(
 
 #[cfg(test)]
 #[path = "outbound_tests.rs"]
-mod tests;
+pub(crate) mod tests;

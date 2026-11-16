@@ -190,3 +190,63 @@ async fn untrack_room_is_on_the_operator_listener_only() {
         StatusCode::BAD_REQUEST
     );
 }
+
+/// The operator sees each outbox queue and can drop one; the router peers reach has neither route. Revert check: mount
+/// the outbox routes on the peer router, and a peer reads the hub's queues.
+#[tokio::test]
+async fn the_operator_sees_and_drops_an_outbox_queue_and_a_peer_cannot() {
+    let p = provider();
+    {
+        let hub = p.lock().unwrap();
+        hub.store
+            .enqueue_fanout(ROOM, "peer.example", b"one", 5)
+            .unwrap();
+        hub.store
+            .enqueue_fanout(ROOM, "peer.example", b"two", 6)
+            .unwrap();
+    }
+    let admin = build_admin_router(p.clone());
+    let response = admin
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/mimi/v1/outbox")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let queues: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(queues[0]["domain"], "peer.example");
+    assert_eq!(queues[0]["depth"], 2);
+
+    for (method, uri) in [
+        (Method::GET, "/mimi/v1/outbox".to_string()),
+        (
+            Method::POST,
+            format!("/mimi/v1/dropOutbox?room={ROOM}&domain=peer.example"),
+        ),
+    ] {
+        assert_eq!(
+            send(build_router(p.clone()), method, &uri, None).await,
+            StatusCode::NOT_FOUND,
+            "PLANT-ADMIN-OUTBOX: {uri} reached through the peer router"
+        );
+    }
+    assert_eq!(
+        send(
+            admin,
+            Method::POST,
+            &format!("/mimi/v1/dropOutbox?room={ROOM}&domain=peer.example"),
+            None
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert!(p.lock().unwrap().store.outbox_queues().unwrap().is_empty());
+}

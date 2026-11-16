@@ -13,11 +13,11 @@ use tokio::net::{TcpListener, TcpStream};
 use super::*;
 use crate::tls::tests::{issue, make_ca};
 
-const PEER: &str = "peer.example";
+pub(crate) const PEER: &str = "peer.example";
 const HUB: &str = "hub.example";
 
 /// Maps names to fixed addresses, so a test domain reaches a local server.
-struct MapResolver(HashMap<String, Vec<SocketAddr>>);
+pub(crate) struct MapResolver(HashMap<String, Vec<SocketAddr>>);
 
 impl Resolve for MapResolver {
     fn resolve<'a>(
@@ -32,26 +32,26 @@ impl Resolve for MapResolver {
     }
 }
 
-fn resolver(host: &str, addrs: &[SocketAddr]) -> Arc<dyn Resolve> {
+pub(crate) fn resolver(host: &str, addrs: &[SocketAddr]) -> Arc<dyn Resolve> {
     Arc::new(MapResolver(HashMap::from([(
         host.to_string(),
         addrs.to_vec(),
     )])))
 }
 
-struct Pki {
+pub(crate) struct Pki {
     ca: rcgen::Issuer<'static, rcgen::KeyPair>,
     ca_pem: String,
 }
 
 impl Pki {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let (ca, ca_pem) = make_ca();
         Self { ca, ca_pem }
     }
 
     /// A client for `HUB` presenting a certificate from this CA, trusting this CA only.
-    fn client(
+    pub(crate) fn client(
         &self,
         addresses: AddressPolicy,
         proxy: Option<ProxyAddr>,
@@ -74,20 +74,33 @@ impl Pki {
     }
 }
 
-fn loopback_allowed() -> AddressPolicy {
+pub(crate) fn loopback_allowed() -> AddressPolicy {
     AddressPolicy::with_allowlist(vec![Cidr::v4(127, 0, 0, 0, 8)])
 }
 
 /// What a test server saw of one request.
 #[derive(Debug, Default, Clone)]
-struct Seen {
-    head: String,
-    body: Vec<u8>,
-    client_certificate: bool,
+pub(crate) struct Seen {
+    pub(crate) head: String,
+    pub(crate) body: Vec<u8>,
+    pub(crate) client_certificate: bool,
 }
 
 /// A TLS server for `name` that answers each request with `answer`, recording what it saw.
-async fn server(pki: &Pki, name: &str, answer: Vec<u8>) -> (SocketAddr, Arc<Mutex<Vec<Seen>>>) {
+pub(crate) async fn server(
+    pki: &Pki,
+    name: &str,
+    answer: Vec<u8>,
+) -> (SocketAddr, Arc<Mutex<Vec<Seen>>>) {
+    server_with(pki, name, move |_| answer.clone()).await
+}
+
+/// A TLS server for `name` that answers each request with what `respond` makes of it, recording what it saw.
+pub(crate) async fn server_with(
+    pki: &Pki,
+    name: &str,
+    respond: impl Fn(&Seen) -> Vec<u8> + Send + Sync + 'static,
+) -> (SocketAddr, Arc<Mutex<Vec<Seen>>>) {
     let (cert, key) = issue(&pki.ca, vec![name.into()], name);
     let config = crate::tls::build_mtls_server_config(
         cert.as_bytes(),
@@ -135,11 +148,13 @@ async fn server(pki: &Pki, name: &str, answer: Vec<u8>) -> (SocketAddr, Arc<Mute
                 }
                 buffer.extend_from_slice(&chunk[..read]);
             }
-            record.lock().unwrap().push(Seen {
+            let seen = Seen {
                 head,
                 body: buffer[head_end..].to_vec(),
                 client_certificate,
-            });
+            };
+            let answer = respond(&seen);
+            record.lock().unwrap().push(seen);
             let _ = tls.write_all(&answer).await;
             let _ = tls.shutdown().await;
         }
@@ -147,7 +162,7 @@ async fn server(pki: &Pki, name: &str, answer: Vec<u8>) -> (SocketAddr, Arc<Mute
     (addr, seen)
 }
 
-fn answer(status: &str, headers: &str, body: &[u8]) -> Vec<u8> {
+pub(crate) fn answer(status: &str, headers: &str, body: &[u8]) -> Vec<u8> {
     [
         format!(
             "HTTP/1.1 {status}\r\n{headers}content-length: {}\r\nconnection: close\r\n\r\n",

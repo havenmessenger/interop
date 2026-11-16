@@ -21,6 +21,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   a subdomain; the hub's certificate as the client certificate; every resolved address checked against the special
   ranges before connecting, and the connection made to that address. New settings `MIMI_OUTBOUND_ALLOW`,
   `MIMI_OUTBOUND_PROXY` and `MIMI_PEER_TRUST`. `MIMI_SERVER_CERT` needs the `clientAuth` extended key usage for it.
+- mimi-hubd has an outbox for fan-out to other providers, delivered by a worker in order per room and provider, with
+  retries and no expiry, and a peer directory lookup (`MIMI_PEERS` for a peer's base). The operator's listener gains
+  `outbox` and `dropOutbox`. `MIMI_CLIENT_CERT` / `MIMI_CLIENT_KEY` set the outbound client certificate apart from the
+  server's. Nothing is queued yet.
 
 ## 0.1.0 - 2026-11-16
 

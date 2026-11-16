@@ -46,6 +46,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
 rustls-native-certs = "0.8"
+httpdate = "1"                                          # Retry-After as an HTTP-date
 # Durable state - one store, no in-memory residue. bundled = sqlite compiled from source, so the
 # binary is container-portable with no system sqlite dependency.
 rusqlite = { version = "0.41", features = ["bundled"] }

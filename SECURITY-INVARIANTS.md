@@ -29,9 +29,10 @@ operator's routes cannot change them for a tracked room. What is not checked yet
 ## Its requests to other hubs go only where they are meant to
 
 The hub reads the keys of peers that sign requests from a file a job on the host keeps current (`MIMI_PEER_KEYS`), and
-has one outbound client (`mimi-hubd/src/outbound.rs`), which nothing sends through yet: delivery to other hubs is not
-built (DIV-5). Every request that client makes is `https` to a host that is the peer's domain or a subdomain of it,
-presents the hub's certificate as the client certificate, and checks the peer's server certificate for that host. The
+has one outbound client (`mimi-hubd/src/outbound.rs`); the outbox worker (`outbox.rs`) and the directory lookup
+(`peer_directory.rs`) send through it and nothing else does. Nothing is queued for it yet (DIV-5). Every request that
+client makes is `https` to a host that is the peer's domain or a subdomain of it, endpoint URLs from a peer's directory
+included, presents the hub's client certificate (`MIMI_CLIENT_CERT`, else the server's), and checks the peer's server certificate for that host. The
 host is resolved once; if any address it resolves to is loopback, unspecified, link-local, private, shared,
 unique-local, multicast, documentation or reserved, the request is refused and nothing connects, unless the operator's
 `MIMI_OUTBOUND_ALLOW` names that range. The connection goes to the checked address itself, and through a `CONNECT`
