@@ -74,8 +74,9 @@ hex = "0.4"
 # Default-off. Gates ONLY a proof-only test module (spec_capability_proof) showing openmls's own
 # MLS "external operations" - external commits (join_by_external_commit / GroupInfo ExternalPub) and
 # external proposals (Sender::External / ExternalSendersExtension) - work against this crate's
-# fixtures. No call site in this crate constructs or accepts either mechanism under either feature
-# state; accepting them is not built yet (DIVERGENCES DIV-1).
+# fixtures. Under either feature state, nothing in this crate constructs either mechanism and no
+# external proposal is accepted. commit_wire reads an external Commit's proposals, and mimi-hubd
+# verifies and accepts one where the room allows it (DIVERGENCES DIV-1).
 default = []
 external-ops = []
 test-helpers = ["dep:hex"]
