@@ -151,7 +151,9 @@ identity have different answers, not one shared gap:
   Requiring a match before serving would functionally refuse any identity this hub has not already
   interacted with, defeating the point of testing interop with new peers. A production/GA
   federation policy (rate-limiting repeated unverified claims, or a real persistent identity-key
-  registry) should be revisited before general availability.
+  registry) should be revisited before general availability. A request for another provider's user is forwarded as
+  received (DIV-5): this hub does not check its signature and cannot sign one, so the target provider checks it, and
+  a KeyPackage is claimed from another provider only for a requester whose client signs the request.
 - **`consent`**: `ConsentEntry` (§5.7) carries no signature field at all in the draft - no
   self-signed mechanism exists here for this hub to check even if it wanted to. This may be a
   genuine gap in the draft itself rather than an implementation gap; worth raising with the WG
