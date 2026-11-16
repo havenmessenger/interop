@@ -62,6 +62,7 @@ fn worker(
         provider,
         Arc::new(pki.client(addresses, None, resolver(PEER, &[addr]))),
         Arc::new(Directories::new(bases)),
+        Arc::new(tokio::sync::Notify::new()),
     )
 }
 

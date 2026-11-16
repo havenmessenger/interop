@@ -1985,12 +1985,10 @@ impl UpdateRoomResponse {
 // are not modeled separately; this reference hub's own `submit_notify` treats the whole body as
 // opaque bytes for dedup-by-content-hash, so decoding only needs to find `message`'s boundary
 // (via `MlsMessageIn`, the same technique used throughout this module), not interpret its
-// contents. This is the inbound-receive shape only (what a real MIMI hub would send US); the
-// outbound-calling side (this hub acting as a hub, pushing fanout to foreign followers), support
-// for concatenated FanoutMessage objects in one body, and per-wire-format tail parsing are all
-// materially different, not-yet-built features -- see DIVERGENCES.md.
+// contents. A hub building one to send uses the constructors below, one per `select` arm, which
+// write that arm's tail; a body of several concatenated FanoutMessage objects is not decoded here.
 
-/// §5.5 `FanoutMessage`, inbound-receive framing only.
+/// §5.5 `FanoutMessage`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FanoutMessage {
     pub protocol: Protocol,
@@ -2001,6 +1999,46 @@ pub struct FanoutMessage {
 }
 
 impl FanoutMessage {
+    /// A Commit (a `PublicMessage` MLSMessage), with an empty `externalProposals`: a hub that takes no external Commit
+    /// has none to staple.
+    pub fn commit(timestamp: u64, commit: &[u8]) -> Self {
+        Self::with_tail(timestamp, commit, &[0])
+    }
+
+    /// A proposal (a `PublicMessage` MLSMessage) and the `moreProposals` of the bundle it came in, each an MLSMessage,
+    /// as one length-prefixed run of them (§5.5: the same list as the `HandshakeBundle`'s).
+    pub fn proposal(
+        timestamp: u64,
+        proposal: &[u8],
+        more_proposals: &[Vec<u8>],
+    ) -> Result<Self, WireError> {
+        let mut tail = Vec::new();
+        VLBytes::new(more_proposals.concat())
+            .tls_serialize(&mut tail)
+            .map_err(|e| codec_err("moreProposals", e))?;
+        Ok(Self::with_tail(timestamp, proposal, &tail))
+    }
+
+    /// An application message (a `PrivateMessage` MLSMessage), with no `frank`: this hub franks nothing.
+    pub fn application(timestamp: u64, message: &[u8]) -> Self {
+        Self::with_tail(timestamp, message, &[0])
+    }
+
+    /// A Welcome, given bare as a `HandshakeBundle` carries it: wrapped as an `mls_welcome` MLSMessage (protocol
+    /// version `mls10`, wire format 3), followed by the bundle's `RatchetTreeOption`.
+    pub fn welcome(timestamp: u64, bare_welcome: &[u8], ratchet_tree_option: &[u8]) -> Self {
+        let message = [&[0x00, 0x01, 0x00, 0x03][..], bare_welcome].concat();
+        Self::with_tail(timestamp, &message, ratchet_tree_option)
+    }
+
+    fn with_tail(timestamp: u64, message: &[u8], tail: &[u8]) -> Self {
+        Self {
+            protocol: PROTOCOL_MLS10,
+            timestamp,
+            message_and_tail: [message, tail].concat(),
+        }
+    }
+
     pub fn encode(&self) -> Result<Vec<u8>, WireError> {
         if self.protocol != PROTOCOL_MLS10 {
             return Err(WireError::UnsupportedProtocol(self.protocol));
@@ -2489,6 +2527,10 @@ impl AbuseReport {
 #[cfg(test)]
 #[path = "protocol_wire_key_material_tests.rs"]
 mod key_material_tests;
+
+#[cfg(all(test, feature = "test-helpers"))]
+#[path = "protocol_wire_fanout_tests.rs"]
+mod fanout_tests;
 
 #[cfg(test)]
 #[path = "protocol_wire_handshake_bundle_tests.rs"]

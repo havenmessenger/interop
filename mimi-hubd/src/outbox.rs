@@ -58,16 +58,18 @@ pub struct OutboxWorker {
 }
 
 impl OutboxWorker {
+    /// `wake` is the one the provider notifies after queueing fan-out (`Provider::with_outbox_waker`).
     pub fn new(
         provider: SharedProvider,
         client: Arc<PeerClient>,
         directories: Arc<Directories>,
+        wake: Arc<Notify>,
     ) -> Arc<Self> {
         Arc::new(Self {
             provider,
             client,
             directories,
-            wake: Arc::new(Notify::new()),
+            wake,
             in_flight: Mutex::new(HashSet::new()),
         })
     }

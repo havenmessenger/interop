@@ -357,8 +357,9 @@ usage as well as `serverAuth`. The peer's server certificate must be valid for t
 A peer's endpoints come from its directory, `<base>/.well-known/mimi-protocol-directory`, where the base is
 `https://<domain>` unless `MIMI_PEERS` gives another. Fan-out for other providers waits in the outbox, one queue per
 room and provider, delivered in order by a worker in the hub (`../DIVERGENCES.md`, DIV-5, says what each answer does);
-`GET /mimi/v1/outbox` and `POST /mimi/v1/dropOutbox` on the operator's listener show and drop queues. Nothing is queued
-yet: the hub does not fan out to other providers (DIV-5).
+`GET /mimi/v1/outbox` and `POST /mimi/v1/dropOutbox` on the operator's listener show and drop queues. What goes into
+the outbox: an accepted Commit, the Welcome in its bundle, held leave proposals and application messages, for each
+other provider with a participant in the room (DIV-5).
 
 ## Endpoints
 
@@ -386,7 +387,7 @@ not MIMI routes; a peer changes a room's roster or policy through `update`.
 | POST | `/mimi/v1/memberRole?room=&member=&role=` | Assign a member's role in a room. |
 | POST | `/mimi/v1/addParticipant?room=&member=` | Register a room participant. |
 | POST | `/mimi/v1/untrackRoom?room=` | Drop the room's ratchet tree; its next bundle with a Full GroupInfo and a full tree seeds it again. |
-| GET | `/mimi/v1/outbox` | Each queue of fan-out waiting for another provider: room, domain, depth, oldest row, and its head's attempts and last outcome. |
+| GET | `/mimi/v1/outbox` | Each queue of fan-out waiting for another provider: room, domain, depth, oldest row, and its head's attempts and last outcome. A queue the outbound client refuses (for example a peer resolving into a refused range) never moves on its own; its last outcome says why. |
 | POST | `/mimi/v1/dropOutbox?room=&domain=` | Drop that queue, every row of it; answers how many. |
 
 ### How user and room URIs compare

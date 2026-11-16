@@ -61,36 +61,52 @@ the form of the draft's own example. A found user is answered as a URI, the name
 from its UTF-8. A handle on another provider, a room or device URI, a bare name searched as a
 handle, or a name that does not decode to UTF-8 is not-found.
 
-## DIV-5 - `submitMessage`'s sender authorization and fan-out - MOSTLY CLOSED
+## DIV-5 - fan-out to other providers, and what is not delivered yet
 
-`submit_message_wire` now calls `authorize_sender` (active-participant + not-removed +
-room-policy check) before accepting anything, and `fanout_targets` after: every other LOCAL
-participant of the room the path segment names now receives the message, not just the one
-routing key. The residual: forwarding to a participant on a FOREIGN provider is still not
-implemented (this reference hub has no cross-provider relay client), so a room spanning
-multiple providers only delivers to the local share of its membership over the wire lane. The
-JSON compat lane's `submit_message` is intentionally left as the pre-existing unauthenticated
-demo/admin path (`?recipient=` accepts any opaque string, no room semantics) - it predates and
-is independent of the wire protocol surface.
+For a room it hosts, the hub fans out what it accepts (protocol-07 §5.5; `mimi-hubd/src/fanout.rs`): each local
+participant gets the message in its queue, and each other provider with a participant gets one FanoutMessage in the
+outbox, which a worker posts to that provider's `notify`.
 
-The hub has the client such forwarding goes through (`mimi-hubd/src/outbound.rs`; SECURITY-INVARIANTS says what it
-refuses) and the queue that feeds it (`store_outbox.rs`, `outbox.rs`), and nothing is queued yet. The queue follows
-§5.5 as mimid's does, where the draft leaves it open: one FIFO queue per room and destination provider, of which only
-the head is attempted, its bytes fixed so a retry is a byte-identical duplicate; `201` delivers it; a `4xx` other than
-`408` and `429` drops it and logs it; anything else retries after a backoff of 1 s doubling to 5 min, or the
-`Retry-After` asked for, up to a day. Nothing expires while a provider is down; the operator sees each queue
-(`GET /mimi/v1/outbox`) and can drop one (`dropOutbox`). A provider's endpoints come from its directory at
-`https://<domain>/.well-known/mimi-protocol-directory`, or under the base the operator's `MIMI_PEERS` gives it. Two of
-its rules are this hub's, not the draft's. A URL it sends to must
-name the peer's own domain or a subdomain of it as its host, so a directory that points an endpoint at another host is
-refused, where protocol-07 §5.1 takes a directory's URLs as given. And the peer's server certificate is checked for the
-host connected to, by the same `dNSName` test DIV-16 applies inbound; for an endpoint on a subdomain that is the
-subdomain, not the provider domain §4.1 names.
+- **A Commit** goes to the participants before and after it, so a member it removes is told (§5.5 SHOULD), with an
+  empty `externalProposals`: the hub takes no external Commit, so it has nothing to staple.
+- **A Welcome** in the Commit's bundle goes with the bundle's `RatchetTreeOption`, to the provider the hub recorded
+  for each `KeyPackageRef` in its secrets when it claimed that KeyPackage, and, for a ref it has no record of, to the
+  providers of the users the Commit adds (mimid routes every Welcome that way). The submitter's provider is not left
+  out (§5.5). A new member of this provider gets it in its own queue.
+- **Held leave proposals** go when they are held, the first with the rest as `moreProposals`, as the bundle carried
+  them (§5.5 MUST).
+- **An application message** goes to every participant but its sender, with no `frank`: this hub franks nothing.
+- The sender's provider is not skipped for its own message: §5.5 does not require the hub to send it back, and asks
+  the client and its provider to be ready for one.
+- Fan-out runs after the change is stored and never undoes it: a failure to queue is logged, and the message stays
+  accepted.
 
-Protocol-07 §5.5 adds that the exemption for a client's own message does not cover a Welcome: the
-hub sends a Welcome to every provider associated with a `KeyPackageRef` in its `secrets` array,
-including the provider of the client that submitted it. This hub relays no Welcome to another
-provider, which is the residual above, so that rule is not exercised here.
+The outbox follows §5.5 as mimid's does, where the draft leaves it open: one FIFO queue per room and destination
+provider, of which only the head is attempted, its bytes fixed so a retry is a byte-identical duplicate; `201`
+delivers it; a `4xx` other than `408` and `429` drops it and logs it; anything else retries after a backoff of 1 s
+doubling to 5 min, or the `Retry-After` asked for, up to a day. Nothing expires while a provider is down; the operator
+sees each queue (`GET /mimi/v1/outbox`), with its head's last outcome, and can drop one (`dropOutbox`). A request the
+outbound client refuses (a peer whose name resolves into a refused range, or a directory naming another host) is
+retried like any failure, so that room's queue to that provider does not move until the operator changes the
+configuration or drops the queue; its last outcome is the refusal's reason. A provider's endpoints come from its
+directory at `https://<domain>/.well-known/mimi-protocol-directory`, or under the base the operator's `MIMI_PEERS`
+gives it. Every request goes through the hub's one outbound client (`mimi-hubd/src/outbound.rs`; SECURITY-INVARIANTS
+says what it refuses). Two of its rules are this hub's, not the draft's. A URL it sends to must name the peer's own
+domain or a subdomain of it as its host, so a directory that points an endpoint at another host is refused, where
+protocol-07 §5.1 takes a directory's URLs as given. And the peer's server certificate is checked for the host
+connected to, by the same `dNSName` test DIV-16 applies inbound; for an endpoint on a subdomain that is the subdomain,
+not the provider domain §4.1 names.
+
+Not built yet:
+
+- **keyMaterial for a user of another provider** is not proxied, so the hub has no `KeyPackageRef` record for such a
+  user and routes its Welcome by the added user's domain.
+- **A room on another hub**: this provider's `notify` still refuses anything but a Welcome for such a room (DIV-16),
+  and it does not relay its own users' `update` or `submitMessage` to that room's hub.
+
+`submitMessage` checks the sender first (`authorize_sender`: an active, unremoved participant whose role may send).
+The JSON compatibility lane's `submit_message` is the older unauthenticated path (`?recipient=` takes any opaque
+string, with no room semantics) and does not fan out.
 
 ## DIV-6 - client-asserted identity is not bound to an authenticated channel
 

@@ -424,11 +424,9 @@ async fn submit_message(
 /// before anything is stored, and `NotAllowed` is
 /// returned otherwise (a `room_id` that doesn't even parse as a room this hub hosts also lands
 /// here, via `authorize_sender`'s own `assert_hub_of_record`). On success, the message is queued
-/// under the literal path segment AS BEFORE (unchanged persistence key, for callers already relying
-/// on that shape) AND additionally fanned out to every other LOCAL participant of the room (M3),
-/// which is the real room-delivery behavior this endpoint was missing entirely. Forwarding to
-/// FOREIGN participants' providers still isn't implemented (no cross-provider relay client exists
-/// in this reference hub) - see DIVERGENCES.md DIV-5 for that bounded residual.
+/// under the literal path segment, as before (callers rely on that key), and fanned out
+/// (`Provider::fan_out_application`): to every other local participant's queue, and to the outbox for
+/// every other provider with a participant (DIVERGENCES.md, DIV-5).
 async fn submit_message_wire(
     State(p): State<SharedProvider>,
     Path(room_id): Path<String>,
@@ -446,16 +444,11 @@ async fn submit_message_wire(
     }
     let outcome = match g.submit_message(&room_id, &req.app_message, now_unix()) {
         Ok(()) => {
-            if let Ok(plan) = g.fanout_targets(&room_id, sending_uri) {
-                eprintln!(
-                    "[mimi-hubd] submitMessage: accepted, queued for {} local participant(s); {} on other providers not sent (DIV-5)",
-                    plan.local.len(),
-                    plan.foreign.len()
-                );
-                for member in plan.local {
-                    let _ = g.submit_message(&member, &req.app_message, now_unix());
-                }
-            }
+            crate::log_fanout(
+                "application message",
+                &room_id,
+                g.fan_out_application(&room_id, sending_uri, &req.app_message, now_unix()),
+            );
             SubmitMessageResponse::Accepted {
                 accepted_timestamp: now_unix_millis(),
             }

@@ -25,6 +25,7 @@
 pub mod activity;
 pub mod admin;
 pub mod enroll;
+pub mod fanout;
 pub mod group_store;
 pub mod http;
 pub mod identifier_search;
@@ -187,6 +188,21 @@ pub struct Provider {
     /// What this hub accepts and answers where the drafts leave it to the deployment.
     policy: policy::HubPolicy,
     store: SqliteStore,
+    /// Notified after fan-out is queued, so the outbox worker sends it without waiting for its next tick.
+    outbox_waker: Option<std::sync::Arc<tokio::sync::Notify>>,
+}
+
+/// One line for what a fan-out queued, or why it could not: the change it follows was stored either way.
+pub(crate) fn log_fanout(what: &str, room_uri: &str, report: anyhow::Result<fanout::FanoutReport>) {
+    match report {
+        Ok(report) => eprintln!(
+            "[mimi-hubd] fan-out: {what} for {room_uri} queued for {} provider(s) {:?} and {} local member(s)",
+            report.providers.len(),
+            report.providers,
+            report.local
+        ),
+        Err(error) => eprintln!("[mimi-hubd] fan-out: {what} for {room_uri} could not be queued: {error}"),
+    }
 }
 
 /// Whether a Commit's changes add a `roles_list` to a group that has none: refused for a tracked room (room-policy PR #52,
@@ -209,6 +225,7 @@ impl Provider {
             public_base_url: None,
             policy: policy::HubPolicy::default(),
             store: SqliteStore::open(db_path)?,
+            outbox_waker: None,
         })
     }
 
@@ -219,6 +236,7 @@ impl Provider {
             public_base_url: None,
             policy: policy::HubPolicy::default(),
             store: SqliteStore::in_memory()?,
+            outbox_waker: None,
         })
     }
 
@@ -1386,25 +1404,53 @@ impl Provider {
         match bundle {
             HandshakeBundle::Commit {
                 proposal_or_commit,
+                welcome,
                 group_info_option,
                 ratchet_tree_option,
-                ..
-            } => self.apply_commit_bundle(
-                room_uri,
-                &proposal_or_commit,
-                Some((&group_info_option, &ratchet_tree_option)),
-                peer,
-                now_unix,
-            ),
+            } => {
+                let before = self
+                    .store
+                    .list_participant_rows(room_uri)
+                    .map_err(|_| UpdateRefusal::Store)?;
+                self.apply_commit_bundle(
+                    room_uri,
+                    &proposal_or_commit,
+                    Some((&group_info_option, &ratchet_tree_option)),
+                    peer,
+                    now_unix,
+                )?;
+                let welcome = welcome
+                    .as_deref()
+                    .map(|welcome| (welcome, ratchet_tree_option.as_slice()));
+                log_fanout(
+                    "Commit",
+                    room_uri,
+                    self.fan_out_commit(room_uri, &proposal_or_commit, welcome, &before, now_unix),
+                );
+                Ok(())
+            }
             HandshakeBundle::Proposal {
                 proposal_or_commit,
                 more_proposals,
-            } => self.hold_leave_proposals(
-                room_uri,
-                peer,
-                std::iter::once(&proposal_or_commit).chain(&more_proposals),
-                now_unix,
-            ),
+            } => {
+                self.hold_leave_proposals(
+                    room_uri,
+                    peer,
+                    std::iter::once(&proposal_or_commit).chain(&more_proposals),
+                    now_unix,
+                )?;
+                log_fanout(
+                    "held proposals",
+                    room_uri,
+                    self.fan_out_proposals(
+                        room_uri,
+                        &proposal_or_commit,
+                        &more_proposals,
+                        now_unix,
+                    ),
+                );
+                Ok(())
+            }
         }
     }
 

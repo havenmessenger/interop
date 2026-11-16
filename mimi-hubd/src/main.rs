@@ -164,12 +164,15 @@ async fn main() -> anyhow::Result<()> {
     if let Some(url) = &resolved["MIMI_PUBLIC_BASE_URL"] {
         provider = provider.with_public_base_url(url)?;
     }
-    let shared = Arc::new(Mutex::new(provider));
-    // The outbox worker: delivers fan-out queued for other providers, in order per room and provider.
+    // The outbox worker delivers fan-out queued for other providers, in order per room and provider; the provider wakes
+    // it after queueing.
+    let wake = Arc::new(tokio::sync::Notify::new());
+    let shared = Arc::new(Mutex::new(provider.with_outbox_waker(wake.clone())));
     let outbox = mimi_hubd::outbox::OutboxWorker::new(
         shared.clone(),
         Arc::new(outbound),
         Arc::new(mimi_hubd::peer_directory::Directories::new(peer_bases)),
+        wake,
     );
     outbox.spawn();
     // The activity line is for the peer-facing listener only, and off unless MIMI_ACTIVITY_LOG is 1.

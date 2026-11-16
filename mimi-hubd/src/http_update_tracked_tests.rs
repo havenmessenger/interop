@@ -151,6 +151,21 @@ async fn the_joint_vectors_get_their_answers_with_the_tree_tracked() {
             Some(setup_epoch + accepted),
             "PLANT-TRACKED-VECTORS: {id}: the tree is at the epoch after every accepted Commit"
         );
+        // Each accepted Commit is queued once for the provider of the room's participant elsewhere; a refused one is
+        // not queued.
+        let queues = p.lock().unwrap().store.outbox_queues().unwrap();
+        let queued: u64 = queues
+            .iter()
+            .filter(|queue| {
+                queue.domain == "b.example" && queue.room_uri == mimi_core::uri::canonical(room)
+            })
+            .map(|queue| queue.depth)
+            .sum();
+        assert_eq!(
+            queued,
+            u64::from(accepted),
+            "PLANT-FANOUT-VECTORS: {id}: fan-out queued"
+        );
         checked += 1;
     }
     assert_eq!(checked, 3);
