@@ -8,13 +8,10 @@ description = "Cross-implementation vector generator for draft-ietf-mls-virtual-
 
 [dependencies]
 mimi-core = { path = "../.." }
-openmls_rust_crypto = "0.5.1"
-openmls_traits = "0.5.0"
-# openmls-main pinned to the exact commit docs/vc-01-vector-report.md cites. Aliased via `package =`
-# so it coexists with the crates.io 0.5.1 pull mimi-core itself uses (Cargo allows the same crate
-# under two source origins when renamed).
-openmls_rust_crypto_vc = { package = "openmls_rust_crypto", git = "https://github.com/openmls/openmls", rev = "f3040aaac59b8c72a9d4e0b7970eefcde9c1dd11", features = ["virtual-clients-draft"] }
-openmls_traits_vc = { package = "openmls_traits", git = "https://github.com/openmls/openmls", rev = "f3040aaac59b8c72a9d4e0b7970eefcde9c1dd11", features = ["virtual-clients-draft"] }
+# openmls at the commit docs/vc-01-vector-report.md cites, the one mimi-core and mimi-hubd use, with its
+# virtual-clients-draft feature.
+openmls_rust_crypto = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3", features = ["virtual-clients-draft"] }
+openmls_traits = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3", features = ["virtual-clients-draft"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"

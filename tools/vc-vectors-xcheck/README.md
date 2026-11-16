@@ -40,7 +40,7 @@ re-verified independently:
 ```bash
 git clone https://github.com/openmls/openmls.git /tmp/openmls-main
 cd /tmp/openmls-main
-git checkout f3040aaac59b8c72a9d4e0b7970eefcde9c1dd11
+git checkout 28369d5b48608bef4ddf8371d91503b0f3852bb3
 git apply /path/to/this/openmls-extraction.patch
 cargo test -p openmls \
   --features test-utils,virtual-clients-draft,virtual-clients-draft-test-dependencies \

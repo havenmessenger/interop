@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "ciphersuite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-  "openmls_main_pinned_sha": "f3040aaac59b8c72a9d4e0b7970eefcde9c1dd11",
+  "openmls_main_pinned_sha": "28369d5b48608bef4ddf8371d91503b0f3852bb3",
   "epoch_secrets": [
     {
       "case": "case_a_baseline",

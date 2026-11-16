@@ -14,6 +14,7 @@ use mimi_core::virtual_clients::{
     small_space_prp_encrypt, RatchetType,
 };
 use openmls_traits::{types::Ciphersuite, OpenMlsProvider};
+use openmls_traits as openmls_traits_vc;
 use openmls_traits_vc::{
     crypto::OpenMlsCrypto as OpenMlsCryptoVc, OpenMlsProvider as OpenMlsProviderVc,
 };
@@ -352,7 +353,7 @@ fn main() {
     let out = VectorFile {
         format_version: 1,
         ciphersuite: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-        openmls_main_pinned_sha: "f3040aaac59b8c72a9d4e0b7970eefcde9c1dd11",
+        openmls_main_pinned_sha: "28369d5b48608bef4ddf8371d91503b0f3852bb3",
         epoch_secrets,
         small_space_prp,
         reuse_guard,
@@ -373,7 +374,7 @@ fn main() {
 /// `openmls_rust_crypto_vc`) implementing `openmls_traits_vc`'s `OpenMlsCrypto` trait.
 fn crypto_vc() -> &'static (impl OpenMlsCryptoVc + 'static) {
     use std::sync::OnceLock;
-    static P: OnceLock<openmls_rust_crypto_vc::OpenMlsRustCrypto> = OnceLock::new();
-    let provider = P.get_or_init(openmls_rust_crypto_vc::OpenMlsRustCrypto::default);
+    static P: OnceLock<openmls_rust_crypto::OpenMlsRustCrypto> = OnceLock::new();
+    let provider = P.get_or_init(openmls_rust_crypto::OpenMlsRustCrypto::default);
     OpenMlsProviderVc::crypto(provider)
 }

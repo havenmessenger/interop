@@ -5,8 +5,10 @@
 independent implementations of the `-01` mechanism.
 
 - Implementation A: this repository, `src/virtual_clients.rs`.
-- Implementation B: `openmls/openmls`, commit `f3040aaac59b8c72a9d4e0b7970eefcde9c1dd11`
-  (2026-07-07, unreleased; 0.8.1 predates the `virtual-clients-draft` feature).
+- Implementation B: `openmls/openmls`, commit `28369d5b48608bef4ddf8371d91503b0f3852bb3`, the commit `mimi-core` and `mimi-hubd`
+  build on. The vectors were first produced against commit `f3040aaac59b8c72a9d4e0b7970eefcde9c1dd11`
+  (2026-07-07, unreleased; 0.8.1 predates the `virtual-clients-draft` feature); both the live PRP check and
+  the extraction below give identical output at either commit.
 - Draft anchor: `draft-ietf-mls-virtual-clients-01`, re-verified §-by-§ against the live text the
   same day this vector set was built. No `-02` exists as of this writing.
 - Vectors: `tests/vectors/vc-01-vectors.json`, 12 cases across the four categories below.
@@ -22,12 +24,12 @@ itself; the module `ciphersuite::secret` is not even `pub mod`). Two extraction 
 
 1. Small-Space PRP (§5.6.1), a direct external call, no patching.
    `openmls_traits::crypto::OpenMlsCrypto::ff1_aes128_encrypt`/`ff1_aes128_decrypt`
-   (`traits/src/crypto.rs:206-223`) are trait methods on the public `OpenMlsCrypto` trait,
+   (`traits/src/crypto.rs:200-206` at the commit above) are trait methods on the public `OpenMlsCrypto` trait,
    implemented by the public `openmls_rust_crypto::OpenMlsRustCrypto` provider
-   (`openmls_rust_crypto/src/provider.rs:615-623`, which delegates to `openmls_rust_crypto::ff1::
+   (`openmls_rust_crypto/src/provider.rs:648-655`, which delegates to `openmls_rust_crypto::ff1::
    encrypt`/`decrypt`). `tools/vc-vectors-xcheck` depends on `openmls_rust_crypto` git-pinned to
-   the SHA above (aliased via Cargo's `package =` rename so it coexists with the crates.io
-   `openmls_rust_crypto` `mimi-core` already depends on) and calls this live on every run: a
+   the SHA above, the same `openmls_rust_crypto` `mimi-core` depends on, with its `virtual-clients-draft`
+   feature, and calls this live on every run: a
    two-implementation comparison with no source access needed.
 
 2. Everything else (the five §5.2 secrets, the reuse-guard PRP-key derivation, generation_id): a
