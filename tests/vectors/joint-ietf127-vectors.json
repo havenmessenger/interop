@@ -1,0 +1,223 @@
+{
+  "description": "Joint mimid and Haven vectors from the IETF 127 hackathon MIMI table, 2026-11-14. Draft for review by both implementations.",
+  "format_version": 1,
+  "generator": "mimid crates/mimid-server/tests/joint_vectors.rs",
+  "spec": "draft-ietf-mimi-protocol-07, draft-ietf-mimi-room-policy-04, draft-ietf-mimi-content-10",
+  "vectors": [
+    {
+      "decode": "ok",
+      "description": "requestConsent request: henry (mimi://a.example/u/henry) asks alice (mimi://b.example/u/alice), any room",
+      "hex": "01186d696d693a2f2f612e6578616d706c652f752f68656e7279186d696d693a2f2f622e6578616d706c652f752f616c6963650000",
+      "id": "jt-consent-01",
+      "kind": "ConsentEntry",
+      "outcome": {
+        "haven": "202, stored",
+        "mimid": "202, stored",
+        "operation": "POST /requestConsent/b.example from a.example, alice has a client",
+        "spec": "202, the request is held"
+      }
+    },
+    {
+      "decode": "ok",
+      "description": "requestConsent cancel of jt-consent-01's scope",
+      "hex": "00186d696d693a2f2f612e6578616d706c652f752f68656e7279186d696d693a2f2f622e6578616d706c652f752f616c6963650000",
+      "id": "jt-consent-02",
+      "kind": "ConsentEntry",
+      "outcome": {
+        "haven": "202, deleted",
+        "mimid": "202, deleted",
+        "operation": "the same POST, after jt-consent-01",
+        "spec": "202, the held request is withdrawn"
+      }
+    },
+    {
+      "decode": "ok",
+      "description": "henry reports alice with a note and no messages",
+      "hex": "186d696d693a2f2f612e6578616d706c652f752f68656e7279186d696d693a2f2f622e6578616d706c652f752f616c696365000c696e7465726f7020746573740000",
+      "id": "jt-abuse-01",
+      "kind": "AbuseReport",
+      "outcome": {
+        "haven": "201",
+        "mimid": "200, no body",
+        "operation": "POST /reportAbuse/{roomId} to the room's hub",
+        "spec": "accepted; §5.9 names no success code"
+      }
+    },
+    {
+      "decode": "ok",
+      "decode_haven": "error",
+      "description": "as jt-abuse-01 with one AbusiveMessage whose frank is all zero",
+      "hex": "186d696d693a2f2f612e6578616d706c652f752f68656e7279186d696d693a2f2f622e6578616d706c652f752f616c696365000c696e7465726f7020746573744073404687505a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5af640f6f6a0850160017818746578742f706c61696e3b636861727365743d7574662d38507265706f72746564206d6573736167650000000000000000000000000000000000000000000000000000000000000000000100000001a1dc0bf2c800",
+      "id": "jt-abuse-02",
+      "kind": "AbuseReport",
+      "outcome": {
+        "haven": "400: refuses any attached message at decode (DIV-8/9)",
+        "mimid": "422 unverified-abusive-message; in a room without franking, 200 and logged unverified",
+        "operation": "POST /reportAbuse/{roomId} for a franked room",
+        "spec": "refused: the frank does not verify"
+      }
+    },
+    {
+      "decode": "ok",
+      "description": "wrongEpoch, currentEpoch 2, empty errorDescription: a Commit one epoch late",
+      "hex": "01000000000000000002",
+      "id": "jt-update-01",
+      "kind": "UpdateRoomResponse"
+    },
+    {
+      "decode": "ok",
+      "description": "handle query, the URI exactly",
+      "hex": "1a01186d696d693a2f2f622e6578616d706c652f752f616c69636500",
+      "id": "jt-iq-01",
+      "kind": "IdentifierRequest",
+      "outcome": {
+        "haven": "success, answered as the user URI; checked on the live hub at Haven bafc5e6, 2026-11-15",
+        "mimid": "success, answered as mimi://b.example/u/alice",
+        "operation": "POST /identifierQuery/b.example, alice has a client",
+        "spec": "protocol-07 §5.8: \"the entire handle URI matches exactly (for example: im:alice.smith@a.example)\". Whether a handle is the mimi:// user URI is not said; if it is, proposed: compare by RFC 3986 §6.2.2"
+      }
+    },
+    {
+      "decode": "ok",
+      "description": "handle query, scheme and host in other case",
+      "hex": "1a01184d494d493a2f2f422e4578616d706c652f752f616c69636500",
+      "id": "jt-iq-02",
+      "kind": "IdentifierRequest",
+      "outcome": {
+        "haven": "success, answered as the user URI; checked on the live hub at Haven bafc5e6, 2026-11-15",
+        "mimid": "success, answered as mimi://b.example/u/alice",
+        "operation": "POST /identifierQuery/b.example, alice has a client",
+        "spec": "protocol-07 §5.8: \"the entire handle URI matches exactly (for example: im:alice.smith@a.example)\". Whether a handle is the mimi:// user URI is not said; if it is, proposed: compare by RFC 3986 §6.2.2"
+      }
+    },
+    {
+      "decode": "ok",
+      "description": "handle query, an unreserved character percent-encoded",
+      "hex": "1c011a6d696d693a2f2f622e6578616d706c652f752f2536316c69636500",
+      "id": "jt-iq-03",
+      "kind": "IdentifierRequest",
+      "outcome": {
+        "haven": "success, answered as the user URI; checked on the live hub at Haven bafc5e6, 2026-11-15",
+        "mimid": "success, answered as mimi://b.example/u/alice",
+        "operation": "POST /identifierQuery/b.example, alice has a client",
+        "spec": "protocol-07 §5.8: \"the entire handle URI matches exactly (for example: im:alice.smith@a.example)\". Whether a handle is the mimi:// user URI is not said; if it is, proposed: compare by RFC 3986 §6.2.2"
+      }
+    },
+    {
+      "decode": "ok",
+      "description": "handle query, the user part in other case",
+      "hex": "1a01186d696d693a2f2f622e6578616d706c652f752f414c49434500",
+      "id": "jt-iq-04",
+      "kind": "IdentifierRequest",
+      "outcome": {
+        "haven": "notFound, HTTP 200; checked on the live hub at Haven bafc5e6, 2026-11-15",
+        "mimid": "notFound, HTTP 200",
+        "operation": "POST /identifierQuery/b.example, alice has a client",
+        "spec": "notFound: the path is case-sensitive (RFC 3986 §6.2.2.1)"
+      }
+    },
+    {
+      "decode": "ok",
+      "description": "nick query, the bare user id",
+      "hex": "070205616c69636500",
+      "id": "jt-iq-05",
+      "kind": "IdentifierRequest",
+      "outcome": {
+        "haven": "success, answered as the user URI; checked on the live hub at Haven bafc5e6, 2026-11-15",
+        "mimid": "success, answered as mimi://b.example/u/alice",
+        "operation": "POST /identifierQuery/b.example, alice has a client",
+        "spec": "protocol-07 §5.8: \"nick means that the nickname or handle matches exactly\"; a bare name is a nick, not a handle"
+      }
+    },
+    {
+      "decode": "ok",
+      "description": "handle query, the bare user id",
+      "hex": "070105616c69636500",
+      "id": "jt-iq-06",
+      "kind": "IdentifierRequest",
+      "outcome": {
+        "haven": "notFound, HTTP 200; checked on the live hub at Haven bafc5e6, 2026-11-15",
+        "mimid": "notFound, HTTP 200",
+        "operation": "POST /identifierQuery/b.example, alice has a client",
+        "spec": "notFound: a handle is a URI (§5.8); a bare name is a nick"
+      }
+    },
+    {
+      "decode": "error",
+      "decode_haven": "ok",
+      "description": "success naming mimi://例え.jp/u/alice: a host outside RFC 3986, which is ASCII. mimid refuses it at decode; Haven's codec decodes it and its URI parser refuses it",
+      "hex": "0019186d696d693a2f2fe4be8be381882e6a702f752f616c6963650000",
+      "id": "jt-uri-01",
+      "kind": "IdentifierResponse"
+    },
+    {
+      "decode": "ok",
+      "description": "one role whose role_name is 1024 octets",
+      "hex": "44130000000244006e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e00000000000000000000000000",
+      "id": "jt-role-01",
+      "kind": "RoleData",
+      "outcome": {
+        "haven": "accepted",
+        "mimid": "accepted",
+        "operation": "a roles_list in a room's GroupContext or a Commit",
+        "spec": "no limit in the draft; proposed: receivers SHOULD accept at least 1024 octets"
+      }
+    },
+    {
+      "decode": "ok",
+      "decode_haven": "error",
+      "description": "one role whose role_name is 1025 octets",
+      "hex": "44140000000244016e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e00000000000000000000000000",
+      "id": "jt-role-02",
+      "kind": "RoleData",
+      "outcome": {
+        "haven": "refused at decode (1024-octet budget)",
+        "mimid": "refused (max_name_octets 1024)",
+        "operation": "a roles_list in a room's GroupContext or a Commit",
+        "spec": "no limit in the draft; proposed: receivers MAY refuse more than 1024 octets"
+      }
+    },
+    {
+      "decode": "error",
+      "description": "one role whose role_name is not UTF-8 (c3 28)",
+      "hex": "140000000202c32800000000000000000000000000",
+      "id": "jt-role-03",
+      "kind": "RoleData"
+    },
+    {
+      "decode": "ok",
+      "description": "body \"café\" in NFC",
+      "hex": "87505a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5af640f6f6a0850160017818746578742f706c61696e3b636861727365743d7574662d3845636166c3a9",
+      "id": "jt-content-01",
+      "kind": "MimiContent"
+    },
+    {
+      "decode": "ok",
+      "description": "body \"café\" in NFD: different bytes, not normalized",
+      "hex": "87505a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5af640f6f6a0850160017818746578742f706c61696e3b636861727365743d7574662d384663616665cc81",
+      "id": "jt-content-02",
+      "kind": "MimiContent"
+    },
+    {
+      "decode": "ok",
+      "description": "body with a right-to-left override",
+      "hex": "87505a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5af640f6f6a0850160017818746578742f706c61696e3b636861727365743d7574662d384ae280ae676e702e657865",
+      "id": "jt-content-03",
+      "kind": "MimiContent"
+    },
+    {
+      "decode": "ok",
+      "description": "body with a ZWJ emoji sequence",
+      "hex": "87505a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5af640f6f6a0850160017818746578742f706c61696e3b636861727365743d7574662d385819f09f91a8e2808df09f91a9e2808df09f91a7e2808df09f91a6",
+      "id": "jt-content-04",
+      "kind": "MimiContent"
+    },
+    {
+      "decode": "ok",
+      "description": "body with Turkish dotted capital I and dotless i",
+      "hex": "87505a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5af640f6f6a0850160017818746578742f706c61696e3b636861727365743d7574662d384cc4b07374616e62756c20c4b1",
+      "id": "jt-content-05",
+      "kind": "MimiContent"
+    }
+  ]
+}

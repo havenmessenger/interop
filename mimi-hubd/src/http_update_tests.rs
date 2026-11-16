@@ -410,6 +410,78 @@ fn participants_of(p: &SharedProvider, room: &str) -> Vec<String> {
         .collect()
 }
 
+/// Every vector in the joint IETF 127 UpdateRequest set (from mimid) is posted to a room that holds the vector's
+/// `participants_before` and the setup's roles and base policy, after its `earlier` requests (each accepted), and the
+/// hub answers as `answer_haven` (or `answer` where the two hubs agree) records and leaves the room as
+/// `participants_after` records.
+#[tokio::test]
+async fn every_joint_update_request_vector_gets_havens_recorded_answer() {
+    let vectors: serde_json::Value = serde_json::from_str(include_str!(
+        "../../tests/vectors/joint-ietf127-mls-vectors.json"
+    ))
+    .unwrap();
+    let mut checked = 0;
+    for vector in vectors["vectors"].as_array().unwrap() {
+        let id = vector["id"].as_str().unwrap();
+        let room = vector["room"].as_str().unwrap();
+        let p: SharedProvider = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::Provider::in_memory(vectors["setup"]["hub_domain"].as_str().unwrap()).unwrap(),
+        ));
+        let router = crate::http::build_router(p.clone());
+        let setup = &vectors["setup"];
+        let policy = mimi_core::room_policy::RoomPolicy {
+            base: mimi_core::room_policy_wire::decode_base_room_policy(&from_hex(
+                setup["base_room_policy"].as_str().unwrap(),
+            ))
+            .unwrap(),
+            roles: mimi_core::room_policy_wire::decode_role_data(&from_hex(
+                setup["roles_list"].as_str().unwrap(),
+            ))
+            .unwrap(),
+        };
+        let role = setup["participant_role_index"].as_u64().unwrap();
+        for user in vector["participants_before"].as_array().unwrap() {
+            p.lock()
+                .unwrap()
+                .add_participant(room, user.as_str().unwrap(), role)
+                .unwrap();
+        }
+        p.lock()
+            .unwrap()
+            .set_room_policy(room, &policy, 1_700_000_000)
+            .unwrap();
+        for earlier in vector["earlier"].as_array().unwrap() {
+            let answer = update_answer(
+                post(router.clone(), room, from_hex(earlier.as_str().unwrap())).await,
+            )
+            .await;
+            assert!(
+                matches!(answer, UpdateRoomResponse::Success { .. }),
+                "{id}: earlier: {answer:?}"
+            );
+        }
+        let body = from_hex(vector["hex"].as_str().unwrap());
+        let answer = update_answer(post(router, room, body).await).await;
+        let kind = match answer {
+            UpdateRoomResponse::Success { .. } => "success",
+            UpdateRoomResponse::NotAllowed { .. } => "notAllowed",
+            UpdateRoomResponse::InvalidProposal { .. } => "invalidProposal",
+            UpdateRoomResponse::WrongEpoch { .. } => "wrongEpoch",
+        };
+        let want = vector.get("answer_haven").unwrap_or(&vector["answer"]);
+        assert_eq!(kind, want.as_str().unwrap(), "{id}: answer");
+        let want: Vec<String> = vector["participants_after"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| u.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(participants_of(&p, room), want, "{id}: participants after");
+        checked += 1;
+    }
+    assert_eq!(checked, 3);
+}
+
 fn room_metadata_for(room: &str) -> Vec<u8> {
     mimi_core::room_metadata::encode_room_metadata(&mimi_core::room_metadata::RoomMetadata {
         room_uri: room.into(),
