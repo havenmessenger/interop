@@ -73,6 +73,13 @@ JSON compat lane's `submit_message` is intentionally left as the pre-existing un
 demo/admin path (`?recipient=` accepts any opaque string, no room semantics) - it predates and
 is independent of the wire protocol surface.
 
+The hub has the client such forwarding would go through (`mimi-hubd/src/outbound.rs`; SECURITY-INVARIANTS says what it
+refuses), and nothing sends through it yet. Two of its rules are this hub's, not the draft's. A URL it sends to must
+name the peer's own domain or a subdomain of it as its host, so a directory that points an endpoint at another host is
+refused, where protocol-07 §5.1 takes a directory's URLs as given. And the peer's server certificate is checked for the
+host connected to, by the same `dNSName` test DIV-16 applies inbound; for an endpoint on a subdomain that is the
+subdomain, not the provider domain §4.1 names.
+
 Protocol-07 §5.5 adds that the exemption for a client's own message does not cover a Welcome: the
 hub sends a Welcome to every provider associated with a `KeyPackageRef` in its `secrets` array,
 including the provider of the client that submitted it. This hub relays no Welcome to another

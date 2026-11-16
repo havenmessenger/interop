@@ -31,6 +31,7 @@ pub mod identifier_search;
 #[cfg(test)]
 mod mls_fixtures;
 pub mod notify_source;
+pub mod outbound;
 pub mod peer;
 pub mod policy;
 pub mod problem;

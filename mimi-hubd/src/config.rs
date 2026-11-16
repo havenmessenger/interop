@@ -26,6 +26,9 @@ const KNOWN_KEYS: &[&str] = &[
     "public_base_url",
     "activity_log",
     "peer_keys",
+    "outbound_allow",
+    "outbound_proxy",
+    "peer_trust",
 ];
 
 /// The settings this daemon takes from env vars, also loadable from a TOML file. Field names match the env var suffix in lowercase (`MIMI_PROVIDER_DOMAIN` ->
@@ -48,6 +51,13 @@ pub struct ConfigFile {
     /// `1` turns on the activity line (see `activity.rs`). Anything else, or no value, leaves it off.
     pub activity_log: Option<String>,
     pub peer_keys: Option<String>,
+    /// Address ranges taken out of the outbound refusal list, comma-separated `addr/len`. For test deployments.
+    pub outbound_allow: Option<String>,
+    /// An HTTP `CONNECT` proxy for outbound requests, `http://host:port`. Unset means direct.
+    pub outbound_proxy: Option<String>,
+    /// Which roots a peer's server certificate may chain to: `system` (the system roots plus the client CA bundle, the
+    /// default) or `bundle` (the bundle only).
+    pub peer_trust: Option<String>,
 }
 
 impl ConfigFile {
@@ -89,6 +99,9 @@ impl ConfigFile {
             "public_base_url" => self.public_base_url.as_ref(),
             "activity_log" => self.activity_log.as_ref(),
             "peer_keys" => self.peer_keys.as_ref(),
+            "outbound_allow" => self.outbound_allow.as_ref(),
+            "outbound_proxy" => self.outbound_proxy.as_ref(),
+            "peer_trust" => self.peer_trust.as_ref(),
             _ => None,
         }
     }
@@ -246,6 +259,19 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
     m.insert(
         "MIMI_PEER_KEYS",
         resolve("MIMI_PEER_KEYS", "peer_keys", file, None),
+    );
+    // No defaults: outbound requests refuse every special range, go direct, and trust the system roots plus the bundle.
+    m.insert(
+        "MIMI_OUTBOUND_ALLOW",
+        resolve("MIMI_OUTBOUND_ALLOW", "outbound_allow", file, None),
+    );
+    m.insert(
+        "MIMI_OUTBOUND_PROXY",
+        resolve("MIMI_OUTBOUND_PROXY", "outbound_proxy", file, None),
+    );
+    m.insert(
+        "MIMI_PEER_TRUST",
+        resolve("MIMI_PEER_TRUST", "peer_trust", file, None),
     );
     m
 }

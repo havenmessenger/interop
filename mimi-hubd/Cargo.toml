@@ -39,6 +39,13 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-pemfile = "2"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }  # the TLS stream type the peer-identity acceptor names
 tower = "0.5"                                           # Layer, to attach the peer certificate to a connection
+# The outbound client (`outbound.rs`): an HTTP/1.1 client connection over our own TCP connect and TLS, so the address
+# check sits at the connect and nothing else in the stack resolves a name. System roots for a peer's server certificate.
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+rustls-native-certs = "0.8"
 # Durable state - one store, no in-memory residue. bundled = sqlite compiled from source, so the
 # binary is container-portable with no system sqlite dependency.
 rusqlite = { version = "0.41", features = ["bundled"] }
@@ -49,7 +56,6 @@ openmls_rust_crypto = { git = "https://github.com/openmls/openmls", rev = "28369
 openmls_traits = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3" }
 
 [dev-dependencies]
-http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }        # ServiceExt::oneshot for router tests
 rcgen = "0.14"                                          # test cert generation (CA + server + client)
 tls_codec = "0.5"

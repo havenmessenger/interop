@@ -26,13 +26,16 @@ list gives that member and the room's policy (`mimi-hubd/src/role_checks.rs`, ro
 not authorize is refused and changes nothing. The policy and list are the group's from its GroupContext, so the
 operator's routes cannot change them for a tracked room. What is not checked yet is in DIV-15.
 
-## It makes no request to another hub
+## Its requests to other hubs go only where they are meant to
 
-The hub only answers requests. It has no HTTP client, opens no outbound connection, and reads the keys of peers that sign
-requests from a file a job on the host keeps current (`MIMI_PEER_KEYS`). So nothing a peer sends can make the hub connect
-anywhere, its own listeners included. Delivery to other hubs is not built yet (DIV-5); when it is, each outbound request
-is https with the hub's client certificate and refuses a loopback, link-local or unspecified destination before
-connecting.
+The hub reads the keys of peers that sign requests from a file a job on the host keeps current (`MIMI_PEER_KEYS`), and
+has one outbound client (`mimi-hubd/src/outbound.rs`), which nothing sends through yet: delivery to other hubs is not
+built (DIV-5). Every request that client makes is `https` to a host that is the peer's domain or a subdomain of it,
+presents the hub's certificate as the client certificate, and checks the peer's server certificate for that host. The
+host is resolved once; if any address it resolves to is loopback, unspecified, link-local, private, shared,
+unique-local, multicast, documentation or reserved, the request is refused and nothing connects, unless the operator's
+`MIMI_OUTBOUND_ALLOW` names that range. The connection goes to the checked address itself, and through a `CONNECT`
+proxy the tunnel names that address, so no second lookup can lead anywhere else. Redirects are not followed.
 
 ## Every peer request is from an authenticated provider
 

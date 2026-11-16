@@ -293,6 +293,9 @@ the file - see [`debian/mimi-hubd.toml.example`](debian/mimi-hubd.toml.example) 
 | `MIMI_POLICY` | `policy` | no | none | A TOML file of the deployment's choices, below. Unset means the drafts' defaults. A named file the hub cannot read, or one that is not a valid policy, stops the start. |
 | `MIMI_PEER_KEYS` | `peer_keys` | no | none | Path of a JSON file of peers' DNS-published signing keys, `{"<keyid>._mimi.<domain>": "<base64 Ed25519 public key>"}`, an empty value for a revoked key. Re-read when it changes. Without it, no signature verifies and only a client certificate admits a peer. |
 | `MIMI_ACTIVITY_LOG` | `activity_log` | no | off | `1` prints one line per request on the peer-facing listener to stderr: `[mimi-activity] method=POST route=/mimi/pl/update/:room_id status=200`. The route is the template the request matched (`route=unmatched` when none did), so no path, query string, header, certificate or body appears in it. Any other value, or none, leaves it off. The directory-only listener is not logged. |
+| `MIMI_OUTBOUND_ALLOW` | `outbound_allow` | no | none | Comma-separated `addr/len` ranges an outbound request may reach although they are special (loopback, private, link-local, ...), for a test deployment whose peers run on such addresses. A value that does not parse stops the start. See "Outbound requests" below. |
+| `MIMI_OUTBOUND_PROXY` | `outbound_proxy` | no | none | An HTTP `CONNECT` proxy for outbound requests, `http://host:port`. The tunnel is opened to the address the hub checked, and TLS with the hub's client certificate runs end to end inside it. |
+| `MIMI_PEER_TRUST` | `peer_trust` | no | `system` | The roots a peer's server certificate may chain to: `system` (the system's roots plus `MIMI_CLIENT_CA`) or `bundle` (`MIMI_CLIENT_CA` only). |
 
 The daemon never falls back to plain HTTP: a missing certificate, key, or CA path is a hard error
 at startup, not a degraded-but-running mode - and mTLS material is validated *before* the SQLite
@@ -336,6 +339,18 @@ so a route's own check of which provider is calling reads the same for both proo
 
 The hub does not query DNS. A job on the host resolves the key records through a DNSSEC-validating resolver (an answer
 that does not validate gives no key) and writes the `MIMI_PEER_KEYS` file; the record's TTL bounds how stale it may be.
+
+## Outbound requests
+
+Every request this hub makes to another provider goes through one client (`src/outbound.rs`), and nothing else opens a
+connection. Before connecting it requires an `https` URL whose host is the peer's domain or a subdomain of it, resolves
+the host once, and refuses the request if any address it resolves to is in a special range (loopback, unspecified,
+link-local, private, shared, unique-local, multicast, documentation, reserved), unless `MIMI_OUTBOUND_ALLOW` names it;
+it then connects to that checked address. TLS presents `MIMI_SERVER_CERT` as the client certificate on every request,
+so that certificate needs the `clientAuth` extended key usage as well as `serverAuth`; the peer's server certificate
+must be valid for the host connected to. Requests carry `From: mimi@<MIMI_PROVIDER_DOMAIN>`; redirects are not
+followed. The startup log says how the client reaches peers. Nothing is sent through it yet: delivery to other
+providers is not built (`../DIVERGENCES.md`, DIV-5).
 
 ## Endpoints
 

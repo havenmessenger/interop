@@ -23,6 +23,12 @@
 //!                          ::1), serving roomPolicy, memberRole and addParticipant; any other address stops the start
 //!   MIMI_PEER_KEYS         optional; JSON file of DNS-published peer keys ("<keyid>._mimi.<domain>": base64), kept
 //!                          current by a job on the host; without it only a client certificate admits a peer
+//!   MIMI_OUTBOUND_ALLOW    optional; comma-separated addr/len ranges an outbound request may reach although they are
+//!                          special (loopback, private, ...); for test deployments. A value that does not parse stops
+//!                          the start
+//!   MIMI_OUTBOUND_PROXY    optional; an HTTP CONNECT proxy for outbound requests, http://host:port
+//!   MIMI_PEER_TRUST        optional; `system` (default: the system roots plus MIMI_CLIENT_CA) or `bundle`
+//!                          (MIMI_CLIENT_CA only), the roots a peer's server certificate may chain to
 //!
 //! Startup order is deliberate: mTLS material is read and validated into a `ServerConfig` BEFORE
 //! any durable state is opened. A hub with bad or missing certificates should fail before it
@@ -119,6 +125,11 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("[mimi-hubd] client CA in the bundle: sha256={fingerprint}");
     }
     let tls_config = tls::build_mtls_server_config(&server_cert, &server_key, &client_ca)?;
+    // The outbound client, built from the same certificate and key (presented as the client certificate) and checked
+    // here like the listener's: a setting that does not parse stops the start. Nothing sends through it yet; delivery to
+    // other providers is not built (DIVERGENCES.md, DIV-5).
+    let outbound = outbound_client(&resolved, &domain, &server_cert, &server_key, &client_ca)?;
+    eprintln!("[mimi-hubd] outbound: {}", outbound.describe());
     // The operator's address is checked before any state is opened, like the certificates: a hub asked to serve its
     // operator's routes beyond loopback does not start.
     let admin_addr = resolved["MIMI_ADMIN_BIND_ADDR"]
@@ -191,6 +202,49 @@ async fn main() -> anyhow::Result<()> {
     );
     tls::serve_with_graceful_shutdown(bind, router, tls_config, Duration::from_secs(30)).await?;
     Ok(())
+}
+
+/// The outbound client from the resolved settings: the hub's certificate and key as the client certificate, the client CA
+/// bundle as extra trust anchors, and the address allowlist, proxy and trust setting.
+fn outbound_client(
+    resolved: &config::Resolved,
+    domain: &str,
+    server_cert: &[u8],
+    server_key: &[u8],
+    client_ca: &[u8],
+) -> anyhow::Result<mimi_hubd::outbound::PeerClient> {
+    use mimi_hubd::outbound::{
+        AddressPolicy, OutboundSettings, PeerClient, PeerTrust, ProxyAddr, SystemResolver,
+    };
+    let allow = resolved["MIMI_OUTBOUND_ALLOW"]
+        .as_deref()
+        .map(AddressPolicy::parse_allowlist)
+        .transpose()
+        .map_err(|why| anyhow::anyhow!("MIMI_OUTBOUND_ALLOW: {why}"))?
+        .unwrap_or_default();
+    let proxy = resolved["MIMI_OUTBOUND_PROXY"]
+        .as_deref()
+        .map(ProxyAddr::parse)
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
+    let trust = resolved["MIMI_PEER_TRUST"]
+        .as_deref()
+        .map(PeerTrust::parse)
+        .transpose()
+        .map_err(anyhow::Error::msg)?
+        .unwrap_or_default();
+    PeerClient::new(
+        OutboundSettings {
+            own_domain: domain.to_string(),
+            client_cert_pem: server_cert.to_vec(),
+            client_key_pem: server_key.to_vec(),
+            peer_bundle_pem: Some(client_ca.to_vec()),
+            trust,
+            addresses: AddressPolicy::with_allowlist(allow),
+            proxy,
+        },
+        Arc::new(SystemResolver),
+    )
 }
 
 /// A required mTLS material path, resolved from env-or-file, logged with WHICH layer supplied it,

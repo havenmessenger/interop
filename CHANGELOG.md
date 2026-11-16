@@ -17,6 +17,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   taken from its GroupContext when it is seeded, a Commit adding a first `roles_list` is refused (room-policy PR #52),
   and the operator's `roomPolicy`, `memberRole` and `addParticipant` answer 409 for it.
 - mimi-core: `Capability::RemoveSelf` (`canRemoveSelf`, `0x0006`) and `RoomPolicy::authorize_self_removal`.
+- mimi-hubd has an outbound client for requests to other providers, not yet used: https only, to the peer's domain or
+  a subdomain; the hub's certificate as the client certificate; every resolved address checked against the special
+  ranges before connecting, and the connection made to that address. New settings `MIMI_OUTBOUND_ALLOW`,
+  `MIMI_OUTBOUND_PROXY` and `MIMI_PEER_TRUST`. `MIMI_SERVER_CERT` needs the `clientAuth` extended key usage for it.
 
 ## 0.1.0 - 2026-11-16
 
