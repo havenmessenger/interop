@@ -1062,6 +1062,22 @@ impl Provider {
                 "an external Commit to a room whose ratchet tree this hub does not keep",
             ));
         }
+        // An external Commit's leaf is signed by the joiner's own key, so nothing in it ties the user it names to a provider:
+        // that user must belong to the provider whose proof came with the request, as on `groupInfo`.
+        if commit.external {
+            let joiner_provider = tracked
+                .as_ref()
+                .and_then(|staged| staged.joiner.as_deref())
+                .and_then(|joiner| mimi_core::uri::MimiUri::parse(joiner).ok())
+                .map(|uri| uri.authority);
+            if !joiner_provider
+                .is_some_and(|domain| peer.is_some_and(|peer| peer.authenticates(&domain)))
+            {
+                return Err(UpdateRefusal::Policy(
+                    "an external Commit's joiner is not a user of the provider that sent it",
+                ));
+            }
+        }
         // A tracked room's changes carried by value are the committer's to make (room-policy-04 §8.1); a change named
         // by reference was authorized for its own proposer when it was held.
         if let Some(staged) = &tracked {

@@ -37,7 +37,9 @@ A client can join a room by external Commit (protocol-07 §5.6), as the drafts d
   only while the room allows external Commits. After a Commit with a Partial GroupInfo or none, none is kept until the
   next Full one: a Partial one is not completed from the tree (DIV-12).
 - **An external Commit on `update`** is verified against the room's tree like any other (openmls `PublicGroup`), and is
-  refused (`notAllowed`, with the reason) when the room does not allow it, when its joiner may not join, when it changes
+  refused (`notAllowed`, with the reason) when the user its new leaf names is not of the provider whose proof came with
+  the request (the leaf is signed by the joiner's own key, so nothing else ties that user to a provider), when the
+  room does not allow it, when its joiner may not join, when it changes
   anything but its joiner's own entry in the list, when proposals are held for the epoch, or when the hub keeps no tree
   for the room (an untracked room refuses every external Commit, since nothing could verify it).
 - **No `externalProposals` staple**: §5.5 lets the hub re-issue, as its own external proposals, the held proposals an

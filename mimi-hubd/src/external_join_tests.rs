@@ -143,13 +143,12 @@ fn bobs_new_client(room: &Room) -> Vec<u8> {
 }
 
 fn apply(p: &Provider, commit: &[u8]) -> Result<(), UpdateRefusal> {
-    p.apply_commit_bundle(
-        ROOM,
-        commit,
-        None,
-        Some(&PeerIdentity::signed("example.com")),
-        NOW,
-    )
+    apply_from(p, commit, Some("example.com"))
+}
+
+fn apply_from(p: &Provider, commit: &[u8], peer: Option<&str>) -> Result<(), UpdateRefusal> {
+    let peer = peer.map(PeerIdentity::signed);
+    p.apply_commit_bundle(ROOM, commit, None, peer.as_ref(), NOW)
 }
 
 /// A listed user whose role holds canAddOwnClient adds a client by external Commit; the room's tree has it. Revert
@@ -167,6 +166,28 @@ fn a_listed_users_new_client_joins_by_external_commit() {
         .unwrap()
         .unwrap();
     assert_eq!(group.members().count(), 3);
+}
+
+/// The user an external Commit's new leaf names must belong to the provider that sent it: another provider, or a
+/// request with no provider's proof, cannot add a client in that user's name. Revert check: skip the provider check,
+/// and other.example adds a client as Bob.
+#[test]
+fn only_the_joiners_own_provider_sends_its_external_commit() {
+    let p = Provider::in_memory("example.com").unwrap();
+    let room = room(&p, &roles(true), None, true);
+    let commit = bobs_new_client(&room);
+    for peer in [Some("other.example"), None] {
+        assert!(
+            matches!(apply_from(&p, &commit, peer), Err(UpdateRefusal::Policy(_))),
+            "PLANT-EXTERNAL-PROVIDER: {peer:?} added a client as a user of example.com"
+        );
+    }
+    let tracking = p.room_tracking(ROOM).unwrap().unwrap();
+    let group = PublicGroup::load(&p.store.groups(), &GroupId::from_slice(&tracking.group_id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(group.members().count(), 2);
+    apply_from(&p, &commit, Some("example.com")).unwrap();
 }
 
 /// Without canAddOwnClient, with the room's policy saying no, or with the hub's policy denying a room that says
