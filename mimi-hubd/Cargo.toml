@@ -55,8 +55,23 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 openmls = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3", features = ["extensions-draft"] }
 openmls_rust_crypto = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3", features = ["extensions-draft"] }
 openmls_traits = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3" }
+# OTLP export (feature `otlp`, off by default): traces and metrics over OTLP/HTTP with protobuf bodies, sent with
+# hyper and the ring rustls provider this crate already uses.
+opentelemetry = { version = "=0.33.1", optional = true, default-features = false, features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "=0.33.1", optional = true, default-features = false, features = ["trace", "metrics"] }
+opentelemetry-otlp = { version = "=0.33.1", optional = true, default-features = false, features = ["http-proto", "trace", "metrics"] }
+opentelemetry-http = { version = "=0.33.1", optional = true, default-features = false, features = ["hyper"] }
+hyper-rustls = { version = "=0.27.10", optional = true, default-features = false, features = ["http1", "tls12", "ring"] }
+async-trait = { version = "0.1", optional = true }
+
+[features]
+default = []
+# Export traces and metrics over OTLP when MIMI_OTLP_ENDPOINT is set. The release binary is built with it.
+otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-http", "dep:hyper-rustls", "dep:async-trait"]
 
 [dev-dependencies]
+opentelemetry-proto = { version = "=0.33.1", default-features = false, features = ["gen-tonic-messages", "trace", "metrics"] }
+prost = "0.14"
 tower = { version = "0.5", features = ["util"] }        # ServiceExt::oneshot for router tests
 rcgen = "0.14"                                          # test cert generation (CA + server + client)
 tls_codec = "0.5"

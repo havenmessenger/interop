@@ -166,7 +166,17 @@ impl Directories {
             ),
             domain,
         )?;
-        let response = client.get(&url).await?;
+        let started = crate::telemetry::now();
+        let result = client.get(&url).await;
+        client.telemetry().record_peer_request(
+            domain,
+            "directory",
+            None,
+            started,
+            &result,
+            |response| response.status,
+        );
+        let response = result?;
         if response.status != 200 {
             return Err(DirectoryError::Status(response.status));
         }

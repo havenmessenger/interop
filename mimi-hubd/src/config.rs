@@ -25,6 +25,7 @@ const KNOWN_KEYS: &[&str] = &[
     "policy",
     "public_base_url",
     "activity_log",
+    "otlp_endpoint",
     "peer_keys",
     "outbound_allow",
     "outbound_proxy",
@@ -56,6 +57,8 @@ pub struct ConfigFile {
     pub public_base_url: Option<String>,
     /// `1` turns on the activity line (see `activity.rs`). Anything else, or no value, leaves it off.
     pub activity_log: Option<String>,
+    /// The OpenTelemetry collector's base URL (see `telemetry.rs`). Unset means no export.
+    pub otlp_endpoint: Option<String>,
     pub peer_keys: Option<String>,
     /// Address ranges taken out of the outbound refusal list, comma-separated `addr/len`. For test deployments.
     pub outbound_allow: Option<String>,
@@ -114,6 +117,7 @@ impl ConfigFile {
             "policy" => self.policy.as_ref(),
             "public_base_url" => self.public_base_url.as_ref(),
             "activity_log" => self.activity_log.as_ref(),
+            "otlp_endpoint" => self.otlp_endpoint.as_ref(),
             "peer_keys" => self.peer_keys.as_ref(),
             "outbound_allow" => self.outbound_allow.as_ref(),
             "outbound_proxy" => self.outbound_proxy.as_ref(),
@@ -276,6 +280,11 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
     m.insert(
         "MIMI_ACTIVITY_LOG",
         resolve("MIMI_ACTIVITY_LOG", "activity_log", file, None),
+    );
+    // No default: nothing is exported unless an operator names a collector.
+    m.insert(
+        "MIMI_OTLP_ENDPOINT",
+        resolve("MIMI_OTLP_ENDPOINT", "otlp_endpoint", file, None),
     );
     // No default: without a key file no signature verifies, and only a client certificate admits a peer.
     m.insert(

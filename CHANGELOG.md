@@ -6,6 +6,11 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- mimi-hubd can export traces and metrics over OTLP/HTTP to an OpenTelemetry collector: per peer provider, how many
+  requests each way, with what status or failure and how long they took. Built with the `otlp` feature (off in a source
+  build, on in the release binary and .deb) and on only when `MIMI_OTLP_ENDPOINT` names a collector, which must be
+  `https` or loopback `http`. A record carries the route template, never a path value, user or room. Besides the
+  outbound client, the exporter is the one connection the hub opens, and only to the operator's collector.
 - Every refusal mimi-hubd answers with an HTTP error status carries an RFC 9457 problem body
   (`application/problem+json`) on each of its listeners: a type named by its anchor in `docs/problems.md` for each
   condition a peer can act on, and `http-error` for any other status. Error bodies were empty or text written for a

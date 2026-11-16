@@ -30,7 +30,8 @@ operator's routes cannot change them for a tracked room. What is not checked yet
 
 The hub reads the keys of peers that sign requests from a file a job on the host keeps current (`MIMI_PEER_KEYS`), and
 has one outbound client (`mimi-hubd/src/outbound.rs`); the outbox worker (`outbox.rs`) and the directory lookup
-(`peer_directory.rs`) send through it and nothing else does. Every request that
+(`peer_directory.rs`) send through it, and nothing else reaches another provider. (The one other connection the hub can
+open is to the operator's own OpenTelemetry collector, below.) Every request that
 client makes is `https` to a host that is the peer's domain or a subdomain of it, endpoint URLs from a peer's directory
 included, is signed with the provider's DNS-published key when one is configured (`request_signing.rs`), presents a
 client certificate when one is configured (`MIMI_CLIENT_CERT`; the server's, for a hub that does not sign), and checks
@@ -39,6 +40,16 @@ host is resolved once; if any address it resolves to is loopback, unspecified, l
 unique-local, multicast, documentation or reserved, the request is refused and nothing connects, unless the operator's
 `MIMI_OUTBOUND_ALLOW` names that range. The connection goes to the checked address itself, and through a `CONNECT`
 proxy the tunnel names that address, so no second lookup can lead anywhere else. Redirects are not followed.
+
+## What it tells an OpenTelemetry collector, and only the operator's
+
+A build with the `otlp` feature, the published binary among them, exports traces and metrics only when
+`MIMI_OTLP_ENDPOINT` names a collector (`telemetry.rs`, `otlp.rs`). That address is the operator's setting, not a peer's,
+so it does not go through the outbound gate; instead it must be `https`, or `http` to a loopback address only. A record
+holds the method, the route template this crate's router matched, the status or a failure's class, the provider domain
+the request was authenticated as or sent to, a refusal's problem type, and for a queued delivery its attempt number, and
+nothing else: no path value, query, header, certificate, body, user or room. Export runs on threads of its own, so a
+collector that is slow or down drops records and never slows or fails a request.
 
 ## Every peer request is from an authenticated provider
 

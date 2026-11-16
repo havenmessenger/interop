@@ -55,8 +55,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+      # The published binary and .deb carry OTLP export (feature `otlp`); it stays off until MIMI_OTLP_ENDPOINT is set.
       - name: build the release binary
-        run: cargo build --release -p mimi-hubd --target ${{ matrix.target }}
+        run: cargo build --release -p mimi-hubd --features otlp --target ${{ matrix.target }}
       - name: package the raw binary
         run: |
           mkdir -p dist
@@ -69,7 +70,7 @@ jobs:
       - name: install cargo-deb
         run: cargo install cargo-deb --locked
       - name: build the .deb
-        run: cargo deb -p mimi-hubd --target ${{ matrix.target }} -o dist/
+        run: cargo deb -p mimi-hubd --features otlp --target ${{ matrix.target }} -o dist/
       - name: checksum the .deb
         run: |
           cd dist

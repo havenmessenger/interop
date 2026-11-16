@@ -15,6 +15,8 @@
 //!   MIMI_PUBLIC_BASE_URL   https URL the directory's endpoint URLs start at (default https://{domain})
 //!                          (mTLS peer-trust allowlist; see README.md for how to generate one)
 //!   MIMI_ACTIVITY_LOG      optional; 1 prints one line per peer request (method, route template, status); off otherwise
+//!   MIMI_OTLP_ENDPOINT     optional; an OpenTelemetry collector's base URL (https, or http to loopback); traces and
+//!                          metrics per peer go there over OTLP/HTTP. Needs a build with the `otlp` feature
 //!   MIMI_DIRECTORY_BIND_ADDR  optional; a second listener, plain HTTP, that serves the directory document only
 //!   MIMI_POLICY            optional; a TOML file of the deployment's choices (accepted ciphersuites, who
 //!                          identifierQuery finds); without it the hub follows the drafts. A named
@@ -170,8 +172,12 @@ async fn main() -> anyhow::Result<()> {
     // The outbox worker delivers fan-out queued for other providers, in order per room and provider; the provider wakes
     // it after queueing.
     let wake = Arc::new(tokio::sync::Notify::new());
+    // OTLP export: built with the `otlp` feature, and on only when MIMI_OTLP_ENDPOINT names a collector.
+    let (telemetry, otlp_line) =
+        mimi_hubd::telemetry::start(resolved["MIMI_OTLP_ENDPOINT"].as_deref())?;
+    eprintln!("[mimi-hubd] {otlp_line}");
     let access = Arc::new(mimi_hubd::peer_directory::PeerAccess {
-        client: Arc::new(outbound),
+        client: Arc::new(outbound.with_telemetry(telemetry.clone())),
         directories: Arc::new(mimi_hubd::peer_directory::Directories::new(peer_bases)),
     });
     let mut provider = provider
@@ -206,17 +212,20 @@ async fn main() -> anyhow::Result<()> {
             .as_deref()
             .map(std::path::PathBuf::from),
     ));
-    let router = with_activity_log(
-        mimi_hubd::provider_auth::with_provider_auth_settings(
-            build_router(shared.clone()),
-            Arc::new(mimi_hubd::provider_auth::ProviderAuth {
-                keys: peer_keys,
-                nonces: mimi_hubd::signature::NonceLedger::default(),
-                require_nonce_on_key_material,
-            }),
+    let router = mimi_hubd::telemetry::with_telemetry(
+        with_activity_log(
+            mimi_hubd::provider_auth::with_provider_auth_settings(
+                build_router(shared.clone()),
+                Arc::new(mimi_hubd::provider_auth::ProviderAuth {
+                    keys: peer_keys,
+                    nonces: mimi_hubd::signature::NonceLedger::default(),
+                    require_nonce_on_key_material,
+                }),
+            ),
+            activity_enabled(resolved["MIMI_ACTIVITY_LOG"].as_deref()),
+            Arc::new(|line| eprintln!("{line}")),
         ),
-        activity_enabled(resolved["MIMI_ACTIVITY_LOG"].as_deref()),
-        Arc::new(|line| eprintln!("{line}")),
+        telemetry,
     );
 
     // The operator's listener, when asked for: loopback only, no client certificate, the three operator routes.

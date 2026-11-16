@@ -14,6 +14,10 @@ pub const PROBLEM_JSON: &str = "application/problem+json";
 /// The page each problem type's URI points into.
 const PROBLEMS_PAGE: &str = "https://github.com/havenmessenger/interop/blob/main/docs/problems.md";
 
+/// The problem type an answer carries, as a response extension, for the telemetry record (`crate::telemetry`).
+#[derive(Clone, Copy, Debug)]
+pub struct ProblemAnchor(pub &'static str);
+
 /// A problem type: its anchor on the problems page, its title and the status it is answered with.
 pub struct ProblemType {
     pub anchor: &'static str,
@@ -174,7 +178,7 @@ pub const ALL: [&ProblemType; 16] = [
 
 /// The answer for an error status no handler gave a problem body (one axum answers itself, such as an unmatched route,
 /// a wrong method or an extractor's rejection): the type for that status, or `http-error` for any other.
-fn for_status(status: StatusCode) -> Body {
+fn for_status(status: StatusCode) -> (&'static str, Body) {
     let known = match status {
         StatusCode::BAD_REQUEST => Some(&MALFORMED_REQUEST),
         StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED => Some(&NOT_AUTHENTICATED),
@@ -188,13 +192,16 @@ fn for_status(status: StatusCode) -> Body {
         _ => None,
     };
     match known.filter(|problem| problem.status == status) {
-        Some(problem) => problem.body(),
-        None => Body {
-            kind: format!("{PROBLEMS_PAGE}#http-error"),
-            title: "The request was refused",
-            status: status.as_u16(),
-            detail: "The HTTP status says why; no more specific type applies.",
-        },
+        Some(problem) => (problem.anchor, problem.body()),
+        None => (
+            "http-error",
+            Body {
+                kind: format!("{PROBLEMS_PAGE}#http-error"),
+                title: "The request was refused",
+                status: status.as_u16(),
+                detail: "The HTTP status says why; no more specific type applies.",
+            },
+        ),
     }
 }
 
@@ -215,7 +222,9 @@ pub async fn fallback(response: Response) -> Response {
     parts
         .headers
         .insert(header::CONTENT_TYPE, HeaderValue::from_static(PROBLEM_JSON));
-    let json = serde_json::to_vec(&for_status(status)).unwrap_or_default();
+    let (anchor, body) = for_status(status);
+    parts.extensions.insert(ProblemAnchor(anchor));
+    let json = serde_json::to_vec(&body).unwrap_or_default();
     Response::from_parts(parts, axum::body::Body::from(json))
 }
 
@@ -250,6 +259,7 @@ impl ProblemType {
         response
             .headers_mut()
             .insert(header::CONTENT_TYPE, HeaderValue::from_static(PROBLEM_JSON));
+        response.extensions_mut().insert(ProblemAnchor(self.anchor));
         response
     }
 }

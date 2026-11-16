@@ -431,6 +431,7 @@ pub struct PeerClient {
     addresses: AddressPolicy,
     proxy: Option<ProxyAddr>,
     resolver: Arc<dyn Resolve>,
+    telemetry: crate::telemetry::Telemetry,
 }
 
 impl PeerClient {
@@ -495,7 +496,19 @@ impl PeerClient {
             addresses: settings.addresses,
             proxy: settings.proxy,
             resolver,
+            telemetry: crate::telemetry::Telemetry::off(),
         })
+    }
+
+    /// Record this client's requests to `telemetry` (`crate::telemetry`).
+    pub fn with_telemetry(mut self, telemetry: crate::telemetry::Telemetry) -> Self {
+        self.telemetry = telemetry;
+        self
+    }
+
+    /// Where this client's requests are recorded.
+    pub fn telemetry(&self) -> &crate::telemetry::Telemetry {
+        &self.telemetry
     }
 
     /// One line saying how this client reaches peers, for the startup log.

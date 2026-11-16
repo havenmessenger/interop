@@ -85,7 +85,8 @@ async fn gate(auth: &ProviderAuth, request: Request, next: Next) -> Response {
             .get(axum::http::header::FROM)
             .and_then(|value| value.to_str().ok())
             .and_then(crate::peer::provider_of_from_header);
-        if !matches!((named, peer), (Some(domain), Some(peer)) if peer.authenticates(&domain)) {
+        if !matches!((named.as_deref(), peer), (Some(domain), Some(peer)) if peer.authenticates(domain))
+        {
             eprintln!(
                 "[mimi-hubd] provider auth refused {} {}: no From naming a domain the certificate carries",
                 request.method(),
@@ -93,7 +94,14 @@ async fn gate(auth: &ProviderAuth, request: Request, next: Next) -> Response {
             );
             return crate::problem::NOT_AUTHENTICATED.response();
         }
-        return next.run(request).await;
+        let authenticated = named;
+        let mut response = next.run(request).await;
+        if let Some(domain) = authenticated {
+            response
+                .extensions_mut()
+                .insert(crate::telemetry::AuthenticatedPeer(domain));
+        }
+        return response;
     }
     let (mut parts, body) = request.into_parts();
     let Ok(body) = axum::body::to_bytes(body, MAX_SIGNED_BODY).await else {
@@ -158,7 +166,11 @@ async fn gate(auth: &ProviderAuth, request: Request, next: Next) -> Response {
             parts
                 .extensions
                 .insert(PeerCert(Some(PeerIdentity::signed(&domain))));
-            next.run(Request::from_parts(parts, Body::from(body))).await
+            let mut response = next.run(Request::from_parts(parts, Body::from(body))).await;
+            response
+                .extensions_mut()
+                .insert(crate::telemetry::AuthenticatedPeer(domain));
+            response
         }
         Err(refusal) => {
             eprintln!(

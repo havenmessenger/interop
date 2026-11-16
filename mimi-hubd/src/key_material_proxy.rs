@@ -136,14 +136,23 @@ pub async fn forward_key_material(
     let url = directory
         .endpoint("keyMaterial", "targetUser", target_uri, domain)
         .map_err(|error| error.to_string())?;
-    let response = access
+    let started = crate::telemetry::now();
+    let result = access
         .client
         .post(&url, "application/mimi-protocol", body)
-        .await
-        .map_err(|error| {
-            access.directories.forget(domain);
-            error.to_string()
-        })?;
+        .await;
+    access.client.telemetry().record_peer_request(
+        domain,
+        "keyMaterial",
+        None,
+        started,
+        &result,
+        |response| response.status,
+    );
+    let response = result.map_err(|error| {
+        access.directories.forget(domain);
+        error.to_string()
+    })?;
     if response.status != 200 {
         return Err(format!("answered {}", response.status));
     }

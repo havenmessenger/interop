@@ -142,11 +142,20 @@ impl OutboxWorker {
                 return failed(error.to_string());
             }
         };
-        match self
+        let started = crate::telemetry::now();
+        let result = self
             .client
             .post(&url, "application/mimi-protocol", row.body.clone())
-            .await
-        {
+            .await;
+        self.client.telemetry().record_peer_request(
+            &row.domain,
+            "notify",
+            Some(row.attempts.saturating_add(1)),
+            started,
+            &result,
+            |response| response.status,
+        );
+        match result {
             Ok(response) if response.status == 201 => Attempt::Delivered,
             Ok(response) if refused_for_good(response.status) => Attempt::Refused(response.status),
             Ok(response) => {

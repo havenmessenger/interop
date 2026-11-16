@@ -36,6 +36,8 @@ pub mod key_material_proxy;
 #[cfg(test)]
 mod mls_fixtures;
 pub mod notify_source;
+#[cfg(feature = "otlp")]
+mod otlp;
 pub mod outbound;
 pub mod outbox;
 pub mod peer;
@@ -49,6 +51,7 @@ pub mod room_tree;
 pub mod signature;
 pub mod store;
 mod store_canonical;
+pub mod telemetry;
 pub mod tls;
 
 use mimi_core::commit_wire::{
