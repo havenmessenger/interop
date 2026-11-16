@@ -106,10 +106,22 @@ the target provider's directory `keyMaterial` URL; a `200` answer must decode as
 routed there. The answer is returned as received. A peer that fails or answers anything else is `502`. The hub does not
 check the request's signature before forwarding: the target provider does (DIV-6).
 
+**A room on another hub**, as this provider's users see it (`mimi-hubd/src/follower.rs`): a Welcome its hub sends is
+queued for each user here whose published KeyPackage it names and makes that user a member of the room here; what
+the hub sends after that (Commits, proposals, application messages) is queued, as its MLSMessage without the
+FanoutMessage's tail, for every member here, in arrival order. A message for a room with no member here is refused
+with `404` and the problem `no-local-member` (DIV-16). A FanoutMessage already delivered for the room is answered
+`201` and not delivered again, whether the hub resends the same body (§5.5) or the same message with another
+timestamp.
+
 Not built yet:
 
-- **A room on another hub**: this provider's `notify` still refuses anything but a Welcome for such a room (DIV-16),
-  and it does not relay its own users' `update` or `submitMessage` to that room's hub.
+- **A member's removal, on this side.** A user stays a member of a room on another hub, and keeps getting what its
+  hub sends, after a Commit removes them: this provider holds neither the room's participant list nor its tree, so it
+  cannot tell which user a list index or a leaf is. mimid's follower does the same, until an explicit leave.
+- **Our own users' requests to another hub**: this provider does not relay its users' `update` or `submitMessage` to
+  the hub of a room hosted elsewhere.
+- **Several FanoutMessages in one `notify` body**: §5.5 allows them; this hub sends one per request and reads one.
 
 `submitMessage` checks the sender first (`authorize_sender`: an active, unremoved participant whose role may send).
 The JSON compatibility lane's `submit_message` is the older unauthenticated path (`?recipient=` takes any opaque
@@ -515,13 +527,12 @@ read. The same question gates the JSON-lane `/mimi/v1/notify`, which takes a `ro
 
 What a `/notify` delivers: a Welcome is queued for each local user whose published KeyPackage it names (this provider
 records each KeyPackage's `KeyPackageRef` when it is published, so the recipient comes from its own map and never from
-the peer). Anything else (an application message, a Commit, a proposal) is for a room another hub hosts, and this
-provider does not deliver those yet: it keeps no membership for such a room, so it cannot say which local users the
-message is for. It refuses them with 422 and the RFC 9457 problem `remote-room-not-delivered`
-([docs/problems.md](docs/problems.md#remote-room-not-delivered)) rather than answering 201 for a message it would not
-deliver, and the sender should drop the delivery rather than retry it. The refusal is decided before the dedup ledger
-records the body, so a resend of a refused message is refused again; §5.5's "MUST return 201" for a duplicate covers a
-duplicate of what was accepted. The JSON compatibility lane `/mimi/v1/notify` still records any body it is sent and
+the peer), and makes that user a member of the room here. Anything else (an application message, a Commit, a
+proposal) is queued for the room's members here (DIV-5). For a room with no member here it is refused with `404` and
+the RFC 9457 problem `no-local-member` ([docs/problems.md](docs/problems.md#no-local-member)) rather than answered 201
+and delivered to nobody, and the sender should drop the delivery rather than retry it. The refusal is decided before
+the dedup ledger records the body, so a resend of a refused message is refused again; §5.5's "MUST return 201" for a
+duplicate covers a duplicate of what was accepted. The JSON compatibility lane `/mimi/v1/notify` still records any body it is sent and
 answers 201; it delivers nothing.
 
 - **What this does not bind.** The check says which names a certificate carries. It does not say

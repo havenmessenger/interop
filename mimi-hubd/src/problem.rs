@@ -22,13 +22,13 @@ pub struct ProblemType {
     pub detail: &'static str,
 }
 
-/// A `notify` (protocol-07 §5.5) carrying an application message or a Commit for a room hosted on another hub: this hub
-/// does not deliver those yet, so it refuses them instead of accepting what it would not deliver.
-pub const REMOTE_ROOM_NOT_DELIVERED: ProblemType = ProblemType {
-    anchor: "remote-room-not-delivered",
-    title: "Not delivered: the room is hosted on another hub",
-    status: StatusCode::UNPROCESSABLE_ENTITY,
-    detail: "This hub does not yet deliver application messages or Commits for rooms hosted on another hub.",
+/// A `notify` (protocol-07 §5.5) carrying a Commit, proposals or an application message for a room hosted on another hub
+/// that no user of this provider is a member of: refused, rather than accepted and delivered to nobody.
+pub const NO_LOCAL_MEMBER: ProblemType = ProblemType {
+    anchor: "no-local-member",
+    title: "Not delivered: no member of the room here",
+    status: StatusCode::NOT_FOUND,
+    detail: "No user of this provider is a member of the room: no Welcome for it has named one.",
 };
 
 #[derive(Serialize)]

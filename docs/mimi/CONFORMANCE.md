@@ -97,7 +97,7 @@ mechanism and a client calls it.
 | W1 | 5.4 | `submitMessage` | Implemented | `src/protocol_wire.rs`, `/mimi/pl/submitMessage/{roomId}` |
 | W2 | 5.7 | `requestConsent`, `updateConsent` | Implemented | `/mimi/pl/requestConsent`, `/mimi/pl/updateConsent` |
 | W3 | 5.2 | `keyMaterial` | Implemented | `/mimi/pl/keyMaterial/{targetUser}` |
-| W5 | 5.5 | `notify` (receiving) | Implemented | `/mimi/pl/notify/{roomId}` |
+| W5 | 5.5 | `notify` (receiving) | Implemented | `/mimi/pl/notify/{roomId}`: a Welcome makes its users members here, and what follows is queued for them (DIV-5) |
 | W7 | 5.1 | The directory names the wire endpoints | Implemented | `Provider::directory` |
 | W8 | 2 | TLS presentation language as the wire encoding | Implemented | The `/mimi/pl/*` routes |
 | W10 | 7.5 | Participant-list indices are positions; added users appended | Implemented | `src/participant_list.rs` |

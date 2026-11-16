@@ -81,15 +81,16 @@ HTTP_STATUS=200
 # response: userStatus=success, one ClientKeyMaterial entry, the KeyPackage as published)
 ```
 
-`notify` (an application message wrapped as `FanoutMessage`) and `identifierQuery` (a
-wire-encoded query for a user the hub does not answer for, which gets the same `notFound` answer as a name nobody
-has):
+`notify` (an application message wrapped as `FanoutMessage`, for a room on another hub that no user here is a member
+of, so it is refused with the `no-local-member` problem) and `identifierQuery` (a wire-encoded query for a user the
+hub does not answer for, which gets the same `notFound` answer as a name nobody has):
 
 ```
 $ curl -s --cacert ca-cert.pem --cert client-cert.pem --key client-key.pem \
     -X POST --data-binary @notify.bin \
     https://localhost:8443/mimi/pl/notify/mimi%3A%2F%2Fexample.com%2Fr%2Fdemo -w '\nHTTP_STATUS=%{http_code}\n'
-HTTP_STATUS=201
+{"type":"https://github.com/havenmessenger/interop/blob/main/docs/problems.md#no-local-member","title":"Not delivered: no member of the room here","status":404,"detail":"No user of this provider is a member of the room: no Welcome for it has named one."}
+HTTP_STATUS=404
 
 # The same body for a room hosted by another provider: this certificate is not that provider's.
 $ curl -s --cacert ca-cert.pem --cert client-cert.pem --key client-key.pem \

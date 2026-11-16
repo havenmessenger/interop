@@ -26,6 +26,7 @@ pub mod activity;
 pub mod admin;
 pub mod enroll;
 pub mod fanout;
+pub mod follower;
 pub mod group_store;
 pub mod http;
 pub mod identifier_search;
@@ -484,17 +485,28 @@ impl Provider {
         message_and_tail: &[u8],
         now_unix: u64,
     ) -> anyhow::Result<usize> {
+        Ok(self
+            .deliver_notified_welcome_to(message_and_tail, now_unix)?
+            .len())
+    }
+
+    /// As [`Self::deliver_notified_welcome`], returning the users it was queued for.
+    pub fn deliver_notified_welcome_to(
+        &self,
+        message_and_tail: &[u8],
+        now_unix: u64,
+    ) -> anyhow::Result<Vec<String>> {
         let Ok((welcome, members)) = mimi_core::gate::welcome_new_members(message_and_tail) else {
-            return Ok(0);
+            return Ok(Vec::new());
         };
-        let mut queued = 0;
+        let mut users = Vec::new();
         for kpref in members {
             if let Some(user) = self.store.client_for_kpref(&kpref)? {
                 self.relay_welcome(&user, &welcome, now_unix)?;
-                queued += 1;
+                users.push(user);
             }
         }
-        Ok(queued)
+        Ok(users)
     }
 
     pub fn fetch_welcome(&self, recipient: &str) -> anyhow::Result<Option<Vec<u8>>> {
@@ -523,7 +535,8 @@ impl Provider {
     pub fn sweep_expired(&self, now_unix: u64) -> anyhow::Result<usize> {
         let ttl_cutoff = now_unix.saturating_sub(DELIVERY_TTL_SECS);
         let delivery = self.store.sweep_expired(ttl_cutoff)?;
-        let notify = self.store.sweep_expired_notify_seen(ttl_cutoff)?;
+        let notify = self.store.sweep_expired_notify_seen(ttl_cutoff)?
+            + self.store.sweep_followed_seen(ttl_cutoff)?;
         let keypackages = self.store.sweep_expired_keypackages(now_unix)?;
         Ok(delivery + notify + keypackages)
     }

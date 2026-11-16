@@ -493,10 +493,10 @@ async fn notify_from_the_hub(router: Router, body: Vec<u8>) -> axum::response::R
 }
 
 #[tokio::test]
-async fn a_message_for_a_room_on_another_hub_is_refused_with_the_problem_and_not_recorded() {
+async fn a_message_for_a_room_with_no_member_here_is_refused_with_the_problem_and_not_recorded() {
     let (router, p) = app();
     let response = notify_from_the_hub(router.clone(), fanout(real_mls_envelope_bytes())).await;
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(
         response.headers().get("content-type").unwrap(),
         crate::problem::PROBLEM_JSON
@@ -505,18 +505,15 @@ async fn a_message_for_a_room_on_another_hub_is_refused_with_the_problem_and_not
         .await
         .unwrap();
     let problem: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(
-        problem["type"],
-        crate::problem::REMOTE_ROOM_NOT_DELIVERED.uri()
-    );
-    assert_eq!(problem["status"], 422);
+    assert_eq!(problem["type"], crate::problem::NO_LOCAL_MEMBER.uri());
+    assert_eq!(problem["status"], 404);
     assert!(
         nothing_was_stored(&p),
         "a refused message reached the dedup ledger"
     );
     // Sent again, it is refused again: only what was accepted can be a duplicate answered 201.
     let again = notify_from_the_hub(router, fanout(real_mls_envelope_bytes())).await;
-    assert_eq!(again.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(again.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

@@ -32,6 +32,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 - mimi-hubd forwards keyMaterial for another provider's user to that provider, for a room it hosts and from a
   participant who may add participants, and records each returned KeyPackage's provider for routing its Welcome.
   Any other such request is answered `noConsent`; a failing peer is `502`.
+- mimi-hubd delivers what another hub fans out for a room it hosts to this provider's members of that room: a Welcome
+  makes the users it names members here, and the Commits, proposals and application messages that follow are queued
+  for them, each message once. A message for a room with no member here is answered `404` with the new problem
+  `no-local-member`; `remote-room-not-delivered` (422) is retired.
 
 ## 0.1.0 - 2026-11-16
 

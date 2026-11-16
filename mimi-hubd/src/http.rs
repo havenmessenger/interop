@@ -578,11 +578,11 @@ fn accept_notify(p: &SharedProvider, source: &VerifiedNotifySource, body: &[u8])
 /// `FanoutMessage` (an MLS envelope, not garbage) before handing the SAME opaque bytes the JSON lane would receive to
 /// the identical dedup-by-content-hash store call. Rejecting undecodable bodies with 400, rather than treating them as
 /// valid-but-different content the way `submit_notify` treats any other byte string, keeps the wire lane to the
-/// protocol it speaks. A Welcome in the fan-out is queued for each local user whose published KeyPackage it names
-/// (`Provider::deliver_notified_welcome`). Anything else (an application message, a Commit, a proposal) is for a room
-/// another hub hosts, which this hub does not deliver yet, so it is refused with 422 and the `remote-room-not-delivered`
-/// problem (`docs/problems.md`) rather than accepted and dropped. The refusal comes before the dedup ledger records the
-/// body, so sending it again is refused again: only what was accepted can be a duplicate answered 201.
+/// protocol it speaks. Then `Provider::deliver_followed` (`follower.rs`): a Welcome is queued for each local user whose
+/// published KeyPackage it names, who becomes a member of the room here; anything else is queued for the room's members
+/// here, and for a room with none it is refused with 404 and the `no-local-member` problem (`docs/problems.md`) rather
+/// than accepted and dropped. The refusal comes before the dedup ledger records the body, so sending it again is refused
+/// again: only what was accepted can be a duplicate answered 201.
 async fn notify_wire(
     State(p): State<SharedProvider>,
     Path(room_id): Path<String>,
@@ -611,31 +611,22 @@ async fn notify_wire(
             return StatusCode::BAD_REQUEST.into_response();
         }
     };
-    if matches!(
-        mimi_core::gate::welcome_new_members(&fanout.message_and_tail),
-        Err(mimi_core::gate::GateError::NotAWelcome)
-    ) {
-        eprintln!("[mimi-hubd] notify: 422 (not a Welcome; messages for rooms on other hubs are not delivered)");
-        return crate::problem::REMOTE_ROOM_NOT_DELIVERED.response();
-    }
-    let g = lock(&p);
-    let status = match g.submit_notify(&source, &body, now_unix()) {
-        Ok(NotifyOutcome::Process) => {
-            // A Welcome for a local user is queued for that user; anything else is accepted and not stored.
-            match g.deliver_notified_welcome(&fanout.message_and_tail, now_unix()) {
-                Ok(0) => {}
-                Ok(queued) => {
-                    eprintln!("[mimi-hubd] notify: Welcome queued for {queued} local user(s)")
-                }
-                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            }
-            StatusCode::CREATED
+    let outcome = lock(&p).deliver_followed(&source, &room_id, &body, &fanout, now_unix());
+    match outcome {
+        Ok(crate::follower::FollowedDelivery::Delivered(queued)) => {
+            eprintln!("[mimi-hubd] notify: 201, queued for {queued} member(s) here");
+            StatusCode::CREATED.into_response()
         }
-        Ok(NotifyOutcome::DuplicateIgnored) => StatusCode::CREATED,
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    eprintln!("[mimi-hubd] notify: {status}");
-    status.into_response()
+        Ok(crate::follower::FollowedDelivery::Duplicate) => {
+            eprintln!("[mimi-hubd] notify: 201 (already delivered)");
+            StatusCode::CREATED.into_response()
+        }
+        Ok(crate::follower::FollowedDelivery::NoLocalMember) => {
+            eprintln!("[mimi-hubd] notify: 404 (no member of the room here)");
+            crate::problem::NO_LOCAL_MEMBER.response()
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -1108,6 +1099,9 @@ mod wire_tests;
 #[cfg(test)]
 #[path = "http_key_material_tests.rs"]
 mod key_material_tests;
+#[cfg(test)]
+#[path = "http_notify_follow_tests.rs"]
+mod notify_follow_tests;
 #[cfg(test)]
 #[path = "http_notify_tests.rs"]
 mod notify_tests;
