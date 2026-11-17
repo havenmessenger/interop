@@ -156,8 +156,27 @@ pub const UPSTREAM_FAILED: ProblemType = ProblemType {
     detail: "The request had to be forwarded to another provider, which could not be reached or answered with something this hub cannot read.",
 };
 
+/// A client-lane request that the lane did not authenticate.
+pub const CLIENT_NOT_AUTHENTICATED: ProblemType = ProblemType {
+    anchor: "client-not-authenticated",
+    title: "The client lane request is not authenticated",
+    status: StatusCode::UNAUTHORIZED,
+    detail: "The request carries no lane signature this hub accepts, or acts for no user of this provider.",
+};
+
+/// A client-lane caller sent more requests for one user than the lane takes in a minute.
+pub const CLIENT_RATE_LIMITED: ProblemType = ProblemType {
+    anchor: "client-rate-limited",
+    title: "Too many client lane requests for this user",
+    status: StatusCode::TOO_MANY_REQUESTS,
+    detail:
+        "The lane takes a bounded number of requests per user per minute. Retry after a minute.",
+};
+
 /// Every problem type, for the page check and the fallback.
-pub const ALL: [&ProblemType; 16] = [
+pub const ALL: [&ProblemType; 18] = [
+    &CLIENT_NOT_AUTHENTICATED,
+    &CLIENT_RATE_LIMITED,
     &NO_LOCAL_MEMBER,
     &MALFORMED_REQUEST,
     &MATERIAL_NOT_ACCEPTED,

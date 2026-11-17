@@ -22,6 +22,10 @@ const KNOWN_KEYS: &[&str] = &[
     "client_ca",
     "directory_bind_addr",
     "admin_bind_addr",
+    "lane_bind_addr",
+    "lane_cert",
+    "lane_key",
+    "lane_keys",
     "policy",
     "public_base_url",
     "activity_log",
@@ -52,6 +56,13 @@ pub struct ConfigFile {
     pub directory_bind_addr: Option<String>,
     /// Where the operator's listener binds, a loopback address only. Unset means there is none.
     pub admin_bind_addr: Option<String>,
+    /// Where the client lane's listener binds (see `client_lane.rs`). Unset means there is none.
+    pub lane_bind_addr: Option<String>,
+    /// PEM paths of the client lane's own TLS certificate and key.
+    pub lane_cert: Option<String>,
+    pub lane_key: Option<String>,
+    /// The client lane's key file: `"<keyid>._mimi.client-lane": "<base64 Ed25519 public key>"`.
+    pub lane_keys: Option<String>,
     /// The policy file (see `policy.rs`). Unset means the drafts' defaults.
     pub policy: Option<String>,
     pub public_base_url: Option<String>,
@@ -114,6 +125,10 @@ impl ConfigFile {
             "client_ca" => self.client_ca.as_ref(),
             "directory_bind_addr" => self.directory_bind_addr.as_ref(),
             "admin_bind_addr" => self.admin_bind_addr.as_ref(),
+            "lane_bind_addr" => self.lane_bind_addr.as_ref(),
+            "lane_cert" => self.lane_cert.as_ref(),
+            "lane_key" => self.lane_key.as_ref(),
+            "lane_keys" => self.lane_keys.as_ref(),
             "policy" => self.policy.as_ref(),
             "public_base_url" => self.public_base_url.as_ref(),
             "activity_log" => self.activity_log.as_ref(),
@@ -270,6 +285,15 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
         "MIMI_ADMIN_BIND_ADDR",
         resolve("MIMI_ADMIN_BIND_ADDR", "admin_bind_addr", file, None),
     );
+    // No defaults: the client lane exists only where a provider configures all four.
+    for (env, key) in [
+        ("MIMI_LANE_BIND_ADDR", "lane_bind_addr"),
+        ("MIMI_LANE_CERT", "lane_cert"),
+        ("MIMI_LANE_KEY", "lane_key"),
+        ("MIMI_LANE_KEYS", "lane_keys"),
+    ] {
+        m.insert(env, resolve(env, key, file, None));
+    }
     // No default: without a policy file the hub follows the drafts' defaults.
     m.insert("MIMI_POLICY", resolve("MIMI_POLICY", "policy", file, None));
     m.insert(

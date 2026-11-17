@@ -272,6 +272,30 @@ pub struct QueueRefused(pub String);
 // Store-and-forward bounds (anti-DoS; ephemeral relay state). A recipient cannot queue more than
 // these, and items expire - the provider is a delivery service, not durable storage.
 pub const MAX_ITEM_BYTES: usize = 64 * 1024; // per welcome/message
+/// The two per-recipient queues.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueKind {
+    Welcomes,
+    Messages,
+}
+
+impl QueueKind {
+    fn table(self) -> &'static str {
+        match self {
+            Self::Welcomes => "welcomes",
+            Self::Messages => "messages",
+        }
+    }
+}
+
+/// One queued item as a reader sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueuedItem {
+    pub id: i64,
+    pub bytes: Vec<u8>,
+    pub received_at: i64,
+}
+
 pub const MAX_QUEUE_WELCOMES: i64 = 32; // pending welcomes per recipient
 pub const MAX_QUEUE_MESSAGES: i64 = 256; // pending messages per recipient
 pub const RECIPIENT_MAX_LEN: usize = 256; // routing-key length bound
@@ -965,6 +989,76 @@ impl SqliteStore {
             )
             .optional()?;
         Ok(row)
+    }
+
+    /// The oldest items queued for any of `recipients` after `after` (by id), at most `limit`, without removing them.
+    /// The client lane reads this way and removes what it has handled with [`Self::ack_queue`].
+    pub fn peek_queue(
+        &self,
+        kind: QueueKind,
+        recipients: &[&str],
+        after: i64,
+        limit: usize,
+    ) -> anyhow::Result<Vec<QueuedItem>> {
+        let table = kind.table();
+        let names: Vec<String> = recipients
+            .iter()
+            .map(|r| mimi_core::uri::canonical(r))
+            .collect();
+        let mut out = Vec::new();
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT id, bytes, ts FROM {table} WHERE recipient IN (?1, ?2) AND id > ?3 ORDER BY id LIMIT ?4"
+        ))?;
+        let first = names.first().map(String::as_str).unwrap_or("");
+        let second = names.get(1).map(String::as_str).unwrap_or(first);
+        let rows = statement.query_map(
+            params![
+                first,
+                second,
+                after,
+                i64::try_from(limit).unwrap_or(i64::MAX)
+            ],
+            |r| {
+                Ok(QueuedItem {
+                    id: r.get(0)?,
+                    bytes: r.get(1)?,
+                    received_at: r.get(2)?,
+                })
+            },
+        )?;
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Remove the items queued for any of `recipients` with an id up to `up_to`; returns how many went.
+    pub fn ack_queue(
+        &self,
+        kind: QueueKind,
+        recipients: &[&str],
+        up_to: i64,
+    ) -> anyhow::Result<usize> {
+        let table = kind.table();
+        let names: Vec<String> = recipients
+            .iter()
+            .map(|r| mimi_core::uri::canonical(r))
+            .collect();
+        let first = names.first().map(String::as_str).unwrap_or("");
+        let second = names.get(1).map(String::as_str).unwrap_or(first);
+        Ok(self.conn.execute(
+            &format!("DELETE FROM {table} WHERE recipient IN (?1, ?2) AND id <= ?3"),
+            params![first, second, up_to],
+        )?)
+    }
+
+    /// Remove every KeyPackage published for `username`; returns how many went.
+    pub fn remove_key_packages(&self, username: &str) -> anyhow::Result<usize> {
+        let username = mimi_core::uri::canonical(username);
+        Ok(self.conn.execute(
+            "DELETE FROM keypackages WHERE username = ?1",
+            params![username],
+        )?)
     }
 
     pub fn enqueue_welcome(

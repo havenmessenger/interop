@@ -23,6 +23,12 @@
 //!                          file that cannot be read or is not a valid policy stops the start
 //!   MIMI_ADMIN_BIND_ADDR   optional; the operator's listener, plain HTTP on a loopback address only (127.0.0.0/8 or
 //!                          ::1), serving roomPolicy, memberRole and addParticipant; any other address stops the start
+//!   MIMI_LANE_BIND_ADDR    optional; the client lane's listener (see `client_lane`), TLS with its own certificate and
+//!                          no client certificate; each request is signed by the provider's client-facing service for
+//!                          one of its users. Needs all of:
+//!   MIMI_LANE_CERT         PEM path, the lane's TLS certificate (the one the client-facing service pins)
+//!   MIMI_LANE_KEY          PEM path, its private key
+//!   MIMI_LANE_KEYS         JSON file of the service's keys ("<keyid>._mimi.client-lane": base64 Ed25519 public key)
 //!   MIMI_PEER_KEYS         optional; JSON file of DNS-published peer keys ("<keyid>._mimi.<domain>": base64), kept
 //!                          current by a job on the host; without it only a client certificate admits a peer
 //!   MIMI_OUTBOUND_ALLOW    optional; comma-separated addr/len ranges an outbound request may reach although they are
@@ -145,6 +151,9 @@ async fn main() -> anyhow::Result<()> {
         "[mimi-hubd] peers with their own base: {}; any other at https://<domain>",
         peer_bases.len()
     );
+    // The client lane's settings, checked before any state is opened: a lane named without its certificate, key and key
+    // file does not start.
+    let lane = lane_settings(&resolved)?;
     // The operator's address is checked before any state is opened, like the certificates: a hub asked to serve its
     // operator's routes beyond loopback does not start.
     let admin_addr = resolved["MIMI_ADMIN_BIND_ADDR"]
@@ -247,11 +256,37 @@ async fn main() -> anyhow::Result<()> {
     if let Some(addr) = resolved["MIMI_DIRECTORY_BIND_ADDR"].as_deref() {
         let addr: std::net::SocketAddr = addr.parse()?;
         let listener = tokio::net::TcpListener::bind(addr).await?;
-        let directory = build_directory_router(shared);
+        let directory = build_directory_router(shared.clone());
         eprintln!("[mimi-hubd] directory only (no client certificate) listening on {addr}");
         tokio::spawn(async move {
             if let Err(error) = axum::serve(listener, directory).await {
                 eprintln!("[mimi-hubd] directory listener stopped: {error}");
+            }
+        });
+    }
+
+    // The client lane, when configured: its own TLS listener, its own router, every request signed for one local user.
+    if let Some((addr, lane_tls, lane_keys)) = lane {
+        let started_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| {
+                i64::try_from(since.as_secs()).unwrap_or(i64::MAX)
+            });
+        let auth = std::sync::Arc::new(mimi_hubd::client_lane::ClientLaneAuth {
+            keys: mimi_hubd::signature::PeerKeys::from_file(Some(lane_keys)),
+            nonces: mimi_hubd::signature::NonceLedger::default(),
+            started_unix,
+            domain: domain.clone(),
+        });
+        let lane_router = mimi_hubd::client_http::build_client_router(shared.clone(), auth);
+        let tls = axum_server::tls_rustls::RustlsConfig::from_config(lane_tls);
+        eprintln!("[mimi-hubd] client lane (TLS, signed per request) listening on {addr}");
+        tokio::spawn(async move {
+            if let Err(error) = axum_server::bind_rustls(addr, tls)
+                .serve(lane_router.into_make_service())
+                .await
+            {
+                eprintln!("[mimi-hubd] client lane listener stopped: {error}");
             }
         });
     }
@@ -263,6 +298,42 @@ async fn main() -> anyhow::Result<()> {
     );
     tls::serve_with_graceful_shutdown(bind, router, tls_config, Duration::from_secs(30)).await?;
     Ok(())
+}
+
+/// The client lane's address, TLS config and key file, when `MIMI_LANE_BIND_ADDR` is set; all four settings or none.
+fn lane_settings(
+    resolved: &config::Resolved,
+) -> anyhow::Result<
+    Option<(
+        std::net::SocketAddr,
+        std::sync::Arc<rustls::ServerConfig>,
+        std::path::PathBuf,
+    )>,
+> {
+    let Some(addr) = resolved["MIMI_LANE_BIND_ADDR"].as_deref() else {
+        return Ok(None);
+    };
+    let addr: std::net::SocketAddr = addr
+        .parse()
+        .map_err(|_| anyhow::anyhow!("MIMI_LANE_BIND_ADDR {addr} is not an address"))?;
+    let path = |name: &str| {
+        resolved[name]
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("MIMI_LANE_BIND_ADDR is set, so {name} is required"))
+    };
+    let (cert, key, keys) = (
+        path("MIMI_LANE_CERT")?,
+        path("MIMI_LANE_KEY")?,
+        path("MIMI_LANE_KEYS")?,
+    );
+    let read = |file: &str| {
+        std::fs::read(file).map_err(|error| anyhow::anyhow!("cannot read {file}: {error}"))
+    };
+    let tls = tls::build_server_config(&read(&cert)?, &read(&key)?)?;
+    if !std::path::Path::new(&keys).is_file() {
+        anyhow::bail!("MIMI_LANE_KEYS {keys} is not a file");
+    }
+    Ok(Some((addr, tls, std::path::PathBuf::from(keys))))
 }
 
 /// The outbound client from the resolved settings: `MIMI_CLIENT_CERT`/`KEY` as the client certificate, else the hub's

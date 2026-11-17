@@ -1161,6 +1161,9 @@ mod consent_cancel_tests;
 mod wire_tests;
 
 #[cfg(test)]
+#[path = "http_client_lane_tests.rs"]
+mod client_lane_tests;
+#[cfg(test)]
 #[path = "http_key_material_tests.rs"]
 mod key_material_tests;
 #[cfg(test)]

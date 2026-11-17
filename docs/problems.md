@@ -57,6 +57,30 @@ Any endpoint, for a body, path or query it cannot read: a wire body that does no
 
 The JSON lane's `submitMessage`: the store's bounds refuse the message (empty, too large, a recipient it does not keep a queue for, or a full queue). A full queue may drain; anything else is the same on retry.
 
+## client-not-authenticated
+
+| field | value |
+|---|---|
+| `type` | `https://github.com/havenmessenger/interop/blob/main/docs/problems.md#client-not-authenticated` |
+| `title` | The client lane request is not authenticated |
+| `status` | 401 |
+
+The client lane's gate: no lane signature, one that does not verify with a key in the lane's key file, a missing or
+reused nonce, a signature older than 30 seconds or made before the hub started, or a `mimi-client-user` that is not a
+user of this provider. The hub logs which; the body does not say. Only the provider's own client-facing service can
+retry, with a fresh signature.
+
+## client-rate-limited
+
+| field | value |
+|---|---|
+| `type` | `https://github.com/havenmessenger/interop/blob/main/docs/problems.md#client-rate-limited` |
+| `title` | Too many client lane requests for this user |
+| `status` | 429 |
+
+The client lane takes a bounded number of requests per user per minute, a backstop to the client-facing service's own
+limits. Retry after a minute.
+
 ## not-authenticated
 
 | field | value |

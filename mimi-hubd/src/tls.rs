@@ -82,6 +82,23 @@ pub fn build_mtls_server_config(
     Ok(Arc::new(config))
 }
 
+/// A TLS `ServerConfig` that asks for no client certificate: for the client lane, whose requests are each
+/// authenticated by their signature, and whose caller pins this certificate.
+pub fn build_server_config(
+    server_cert_pem: &[u8],
+    server_key_pem: &[u8],
+) -> anyhow::Result<Arc<ServerConfig>> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()?
+        .with_no_client_auth()
+        .with_single_cert(
+            certs_from_pem(server_cert_pem)?,
+            key_from_pem(server_key_pem)?,
+        )?;
+    Ok(Arc::new(config))
+}
+
 /// Serve `router` over mTLS on `addr`. mTLS terminates here; only clients presenting a cert signed
 /// by the CA baked into `config` complete the handshake.
 pub async fn serve(
