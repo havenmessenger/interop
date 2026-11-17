@@ -24,6 +24,7 @@
 
 pub mod activity;
 pub mod admin;
+pub mod client_lane;
 pub mod enroll;
 pub mod external_join;
 pub mod fanout;

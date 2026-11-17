@@ -105,27 +105,86 @@ pub fn verify(
     verify_signed(request, now, keys).map(|verified| verified.domain)
 }
 
+/// Where the domain a signature authenticates comes from, which also names the key it is checked against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignedDomain {
+    /// The provider the `From` header names (draft-atwood-mimi-provider-auth §5.3).
+    FromHeader,
+    /// A fixed name: the key is `<keyid>._mimi.<name>` in the profile's own key file.
+    Fixed(&'static str),
+}
+
+/// What one kind of signed request must carry, and how old it may be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifyProfile {
+    /// The `tag` parameter that names the signature among others.
+    pub tag: &'static str,
+    /// With `strict_tag`, only a member with this tag is considered; otherwise a member covering the required
+    /// components is accepted when none carries the tag.
+    pub strict_tag: bool,
+    /// The components a signature must cover when the request has content, and when it has none.
+    pub required_with_body: &'static [&'static str],
+    pub required_without_body: &'static [&'static str],
+    /// Whether `Content-Digest` is checked on every request, an empty body included.
+    pub digest_always: bool,
+    /// Whether a signature with no `nonce` is refused.
+    pub nonce_required: bool,
+    pub max_age_secs: i64,
+    pub max_skew_secs: i64,
+    pub domain: SignedDomain,
+}
+
+/// Provider-to-provider requests (draft-atwood-mimi-provider-auth §5).
+pub const PEER: VerifyProfile = VerifyProfile {
+    tag: "mimi",
+    strict_tag: false,
+    required_with_body: &["@method", "@target-uri", "from", "content-digest"],
+    required_without_body: &["@method", "@target-uri", "from"],
+    digest_always: false,
+    nonce_required: false,
+    max_age_secs: MAX_AGE_SECS,
+    max_skew_secs: MAX_SKEW_SECS,
+    domain: SignedDomain::FromHeader,
+};
+
 /// As [`verify`], with the signature's key, nonce and time.
 pub fn verify_signed(
     request: &SignedRequest<'_>,
     now: SystemTime,
     keys: &PeerKeys,
 ) -> Result<Verified, Refusal> {
+    verify_with(request, now, keys, &PEER)
+}
+
+/// A signature on `request` checked against `profile`: the key, nonce and time it was made with, and the domain it
+/// authenticates.
+pub fn verify_with(
+    request: &SignedRequest<'_>,
+    now: SystemTime,
+    keys: &PeerKeys,
+    profile: &VerifyProfile,
+) -> Result<Verified, Refusal> {
     let input = (request.header)("signature-input").ok_or(Refusal::NoSignature)?;
     let signatures = (request.header)("signature").ok_or(Refusal::NoSignature)?;
     let members = parse_signature_input(&input)?;
     let has_body = !request.body.is_empty();
-    let required: &[&str] = if has_body {
-        &["@method", "@target-uri", "from", "content-digest"]
+    let required = if has_body {
+        profile.required_with_body
     } else {
-        &["@method", "@target-uri", "from"]
+        profile.required_without_body
     };
     let covers = |m: &InputMember| required.iter().all(|c| m.components.iter().any(|x| x == c));
-    let member = members
+    let tagged = members
         .iter()
-        .find(|m| m.param("tag").as_deref() == Some("mimi"))
-        .or_else(|| members.iter().find(|m| covers(m)))
-        .ok_or(Refusal::MissingComponent("a signature tagged mimi"))?;
+        .find(|m| m.param("tag").as_deref() == Some(profile.tag));
+    let member = if profile.strict_tag {
+        tagged
+    } else {
+        tagged.or_else(|| members.iter().find(|m| covers(m)))
+    }
+    .ok_or(Refusal::MissingComponent(
+        "a signature with the expected tag",
+    ))?;
     for component in required {
         if !member.components.iter().any(|c| c == component) {
             return Err(Refusal::MissingComponent(component));
@@ -147,10 +206,10 @@ pub fn verify_signed(
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    if created < now - MAX_AGE_SECS {
+    if created < now - profile.max_age_secs {
         return Err(Refusal::Expired);
     }
-    if created > now + MAX_SKEW_SECS {
+    if created > now + profile.max_skew_secs {
         return Err(Refusal::NotYetValid);
     }
     if let Some(expires) = member.param("expires").and_then(|e| e.parse::<i64>().ok()) {
@@ -158,9 +217,18 @@ pub fn verify_signed(
             return Err(Refusal::Expired);
         }
     }
-    let from = (request.header)("from").ok_or(Refusal::NoFrom)?;
-    let domain = provider_of_from_header(from.trim()).ok_or(Refusal::NoFrom)?;
-    if has_body || member.components.iter().any(|c| c == "content-digest") {
+    let domain = match profile.domain {
+        SignedDomain::FromHeader => {
+            let from = (request.header)("from").ok_or(Refusal::NoFrom)?;
+            provider_of_from_header(from.trim()).ok_or(Refusal::NoFrom)?
+        }
+        SignedDomain::Fixed(name) => name.to_string(),
+    };
+    if profile.nonce_required && member.param("nonce").is_none() {
+        return Err(Refusal::NoNonce);
+    }
+    if profile.digest_always || has_body || member.components.iter().any(|c| c == "content-digest")
+    {
         let digest = (request.header)("content-digest").ok_or(Refusal::DigestMismatch)?;
         if !digest_matches(&digest, request.body) {
             return Err(Refusal::DigestMismatch);
