@@ -72,10 +72,7 @@ async fn each_refusal_names_its_problem_type() {
             "malformed-request",
         ),
         (
-            post(
-                "/mimi/v1/keyMaterial/ingest?user=carol",
-                b"not a key package",
-            ),
+            post("/mimi/v1/keyMaterial/ingest", b"not a key package"),
             StatusCode::BAD_REQUEST,
             "material-not-accepted",
         ),

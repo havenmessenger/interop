@@ -1,5 +1,6 @@
-//! `/mimi/v1/keyMaterial/ingest?user=`: a KeyPackage is published for a user of this provider, or for another
-//! provider's user only by a peer whose certificate is that provider's.
+//! `/mimi/v1/keyMaterial/ingest?user=`: a peer publishes a KeyPackage only for a user of its own provider, the one its
+//! certificate names. A user of this provider takes KeyPackages from no peer; its operator publishes for it
+//! (`admin.rs`).
 
 use axum::{
     body::Body,
@@ -36,16 +37,22 @@ async fn publish(router: Router, user: &str, from: Option<PeerCert>) -> StatusCo
 }
 
 #[tokio::test]
-async fn our_users_take_keypackages_from_anyone_mtls_admits() {
+async fn our_users_take_keypackages_from_no_peer() {
     let (router, _p) = app();
-    assert_eq!(
-        publish(router.clone(), "alice", None).await,
-        StatusCode::NO_CONTENT
-    );
-    assert_eq!(
-        publish(router, "mimi://havenmessenger.com/u/alice", None).await,
-        StatusCode::NO_CONTENT
-    );
+    for from in [
+        None,
+        Some(peer(&["other.example"])),
+        Some(peer(&["havenmessenger.com"])),
+    ] {
+        assert_eq!(
+            publish(router.clone(), "alice", from.clone()).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            publish(router.clone(), "mimi://havenmessenger.com/u/alice", from).await,
+            StatusCode::FORBIDDEN
+        );
+    }
 }
 
 #[tokio::test]

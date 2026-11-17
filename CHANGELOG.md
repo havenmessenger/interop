@@ -6,6 +6,11 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- On the provider path a peer acts only for users of the provider its proof names: it publishes KeyPackages only for
+  them (`/mimi/v1/keyMaterial/ingest?user=`), and pulls only what is queued for them (`/mimi/v1/welcome` and
+  `/mimi/v1/message`). A user of this provider, by bare name or by URI, takes KeyPackages from no peer, and what is
+  queued for one is read by no peer. The operator's loopback listener gains `operator/keyMaterial`,
+  `operator/welcome` and `operator/message` for this provider's users; `examples/seed_table.sh` publishes there.
 - mimi-hubd can export traces and metrics over OTLP/HTTP to an OpenTelemetry collector: per peer provider, how many
   requests each way, with what status or failure and how long they took. Built with the `otlp` feature (off in a source
   build, on in the release binary and .deb) and on only when `MIMI_OTLP_ENDPOINT` names a collector, which must be

@@ -117,8 +117,8 @@ key_material_answer() {
 publish_key_packages() {
     local key=$1 dir=$2 file status
     for file in "$dir"/kp-*.bin; do
-        status=$(hub -X POST -H 'Content-Type: application/octet-stream' --data-binary "@$file" \
-            "$HUB/mimi/v1/keyMaterial/ingest?user=$(urlencode "$key")")
+        status=$(admin -X POST -H 'Content-Type: application/octet-stream' --data-binary "@$file" \
+            "$ADMIN/mimi/v1/operator/keyMaterial?user=$(urlencode "$key")")
         expect 204 "$status" "publishing a KeyPackage for $key"
     done
 }

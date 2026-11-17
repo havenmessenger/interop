@@ -172,7 +172,7 @@ async fn label_wire_body(mut response: Response) -> Response {
     response
 }
 
-fn lock(p: &SharedProvider) -> std::sync::MutexGuard<'_, Provider> {
+pub(crate) fn lock(p: &SharedProvider) -> std::sync::MutexGuard<'_, Provider> {
     // A poisoned lock means a handler panicked mid-mutation; recovering the guard is safe here
     // because our state is plain data (no broken invariant survives a panic in these handlers).
     p.lock().unwrap_or_else(|e| e.into_inner())
@@ -183,8 +183,8 @@ async fn directory(State(p): State<SharedProvider>) -> Json<serde_json::Value> {
 }
 
 #[derive(Deserialize)]
-struct UserQuery {
-    user: String,
+pub(crate) struct UserQuery {
+    pub(crate) user: String,
 }
 
 /// Serve one one-time KeyPackage for a local user (K1/K2). 200 + bytes, 404 if none live, 500 on a
@@ -447,9 +447,22 @@ async fn ingest_welcome(
     }
 }
 
-/// Recipient pulls one queued Welcome (deliver-once, FIFO). 200 + bytes, 404 when none.
-async fn fetch_welcome(State(p): State<SharedProvider>, Query(q): Query<UserQuery>) -> Response {
-    match lock(&p).fetch_welcome(&q.user) {
+/// A peer pulls one Welcome queued for one of its own users (deliver-once, FIFO): 200 + bytes, 404 when none. Only
+/// for a user of a domain the peer's proof authenticates; what is queued for a user of this provider is served only
+/// to its operator (`admin.rs`), so a peer gets 403 for one.
+async fn fetch_welcome(
+    State(p): State<SharedProvider>,
+    Query(q): Query<UserQuery>,
+    peer: Option<Extension<PeerCert>>,
+) -> Response {
+    let peer = peer
+        .as_ref()
+        .and_then(|Extension(PeerCert(identity))| identity.as_ref());
+    let g = lock(&p);
+    if !g.peer_serves_user(&q.user, peer) {
+        return crate::problem::NOT_PERMITTED.response();
+    }
+    match g.fetch_welcome(&q.user) {
         Ok(Some(bytes)) => (StatusCode::OK, bytes).into_response(),
         Ok(None) => crate::problem::NOT_FOUND.response(),
         Err(_) => crate::problem::INTERNAL_ERROR.response(),
@@ -522,9 +535,22 @@ async fn submit_message_wire(
     (StatusCode::OK, outcome.encode()).into_response()
 }
 
-/// Recipient pulls one queued message (deliver-once, FIFO). 200 + bytes, 404 when none.
-async fn fetch_message(State(p): State<SharedProvider>, Query(q): Query<UserQuery>) -> Response {
-    match lock(&p).fetch_message(&q.user) {
+/// A peer pulls one message queued for one of its own users (deliver-once, FIFO): 200 + bytes, 404 when none. Only
+/// for a user of a domain the peer's proof authenticates; what is queued for a user of this provider is served only
+/// to its operator (`admin.rs`), so a peer gets 403 for one.
+async fn fetch_message(
+    State(p): State<SharedProvider>,
+    Query(q): Query<UserQuery>,
+    peer: Option<Extension<PeerCert>>,
+) -> Response {
+    let peer = peer
+        .as_ref()
+        .and_then(|Extension(PeerCert(identity))| identity.as_ref());
+    let g = lock(&p);
+    if !g.peer_serves_user(&q.user, peer) {
+        return crate::problem::NOT_PERMITTED.response();
+    }
+    match g.fetch_message(&q.user) {
         Ok(Some(bytes)) => (StatusCode::OK, bytes).into_response(),
         Ok(None) => crate::problem::NOT_FOUND.response(),
         Err(_) => crate::problem::INTERNAL_ERROR.response(),
@@ -1061,7 +1087,7 @@ async fn authorize_sender(
     }
 }
 
-fn now_unix() -> u64 {
+pub(crate) fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -1117,6 +1143,9 @@ mod notify_tests;
 #[cfg(test)]
 #[path = "http_notify_welcome_tests.rs"]
 mod notify_welcome_tests;
+#[cfg(test)]
+#[path = "http_peer_path_users_tests.rs"]
+mod peer_path_users_tests;
 #[cfg(test)]
 #[path = "http_problem_tests.rs"]
 mod problem_tests;
@@ -1520,7 +1549,9 @@ mod tests {
 
     #[tokio::test]
     async fn message_submit_then_fetch_roundtrip_delivers_once() {
-        let (router, _p) = app();
+        let (router, p) = app();
+        // A local recipient's queue is the operator's to take (admin.rs), not a peer's.
+        let operator = crate::admin::build_admin_router(p.clone());
         // submit an opaque app message for the recipient (provider never decrypts it)
         let submit = router
             .clone()
@@ -1536,11 +1567,11 @@ mod tests {
         assert_eq!(submit.status(), StatusCode::CREATED);
 
         // recipient fetches it (deliver-once)
-        let fetch = router
+        let fetch = operator
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/mimi/v1/message?user=xxx@haven")
+                    .uri("/mimi/v1/operator/message?user=xxx@haven")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1555,10 +1586,11 @@ mod tests {
         );
 
         // queue now empty → 404
-        let empty = router
+        let empty = operator
+            .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/mimi/v1/message?user=xxx@haven")
+                    .uri("/mimi/v1/operator/message?user=xxx@haven")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1593,7 +1625,9 @@ mod tests {
 
     #[tokio::test]
     async fn welcome_relay_rejects_garbage_but_message_is_opaque() {
-        let (router, _p) = app();
+        let (router, p) = app();
+        // A local recipient's queue is the operator's to take (admin.rs), not a peer's.
+        let operator = crate::admin::build_admin_router(p.clone());
         // welcome RELAY still suite-gates (garbage rejected before it ever queues)
         let bad_welcome = router
             .clone()
@@ -1612,10 +1646,11 @@ mod tests {
             "welcome relay is suite-gated"
         );
         // and nothing got queued for the recipient
-        let none = router
+        let none = operator
+            .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/mimi/v1/welcome?user=xxx@haven")
+                    .uri("/mimi/v1/operator/welcome?user=xxx@haven")
                     .body(Body::empty())
                     .unwrap(),
             )

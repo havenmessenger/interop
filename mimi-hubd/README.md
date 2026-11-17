@@ -58,20 +58,20 @@ $ curl -s --cacert ca-cert.pem --cert client-cert.pem --key client-key.pem \
 HTTP_STATUS=200
 # response body: 01 00 00000000 6a4d6bba  (protocol=mls10, code=accepted, accepted_timestamp)
 
-$ curl -s --cacert ca-cert.pem --cert client-cert.pem --key client-key.pem \
-    "https://localhost:8443/mimi/v1/message?user=xxx@haven" -o fetched.bin
+$ curl -s "http://127.0.0.1:8445/mimi/v1/operator/message?user=xxx@haven" -o fetched.bin
 # fetched.bin is byte-identical to the MLS envelope inside submit_message.bin: the wire and
-# JSON lanes read from the same store.
+# JSON lanes read from the same store. A local user's queue is the operator's to read (on the
+# loopback listener, MIMI_ADMIN_BIND_ADDR), never a peer's.
 ```
 
 `keyMaterial`, published over the *JSON* lane and served back over the *wire* lane, proving the two
 lanes share one store in both directions, not just one:
 
 ```
-$ curl -s --cacert ca-cert.pem --cert client-cert.pem --key client-key.pem \
-    -X POST --data-binary @bob_kp.bin \
-    "https://localhost:8443/mimi/v1/keyMaterial/ingest?user=bob" -w 'HTTP_STATUS=%{http_code}\n'
+$ curl -s -X POST --data-binary @bob_kp.bin \
+    "http://127.0.0.1:8445/mimi/v1/operator/keyMaterial?user=bob" -w 'HTTP_STATUS=%{http_code}\n'
 HTTP_STATUS=204
+# Bob is a user of this hub, so his KeyPackage is published by its operator, on the loopback listener.
 
 $ curl -s --cacert ca-cert.pem --cert client-cert.pem --key client-key.pem \
     -X POST --data-binary @km_req.bin \
@@ -146,6 +146,7 @@ openssl x509 -req -in $CERTDIR/client-req.pem -CA $CERTDIR/ca-cert.pem -CAkey $C
 # already absolute, so this does not need to run from $CERTDIR).
 MIMI_PROVIDER_DOMAIN=example.com \
 MIMI_BIND_ADDR=127.0.0.1:8443 \
+MIMI_ADMIN_BIND_ADDR=127.0.0.1:8445 \
 MIMI_DB_PATH=/tmp/mimi-hubd-demo/hub.db \
 MIMI_SERVER_CERT=/tmp/mimi-hubd-demo/server-cert.pem \
 MIMI_SERVER_KEY=/tmp/mimi-hubd-demo/server-key.pem \
@@ -291,7 +292,7 @@ the file - see [`debian/mimi-hubd.toml.example`](debian/mimi-hubd.toml.example) 
 | `MIMI_DB_PATH` | `db_path` | no | `/var/lib/mimi/provider.db` | SQLite file path for durable state. This binary-level default is unchanged by packaging - the shipped `.toml.example` template recommends `/var/lib/mimi-hubd/hub.db` instead (matching the systemd unit's `StateDirectory=`), but that is the template's choice, not a change to this daemon's own default. |
 | `MIMI_PUBLIC_BASE_URL` | `public_base_url` | no | `https://{MIMI_PROVIDER_DOMAIN}` | The `https://` URL the directory's endpoint URLs start at, for a hub behind a reverse proxy, on a port other than 443, or on a dedicated host. Identifiers keep using `MIMI_PROVIDER_DOMAIN`. One trailing `/` is dropped; a query, fragment or non-`https` URL is a hard error at startup. |
 | `MIMI_DIRECTORY_BIND_ADDR` | `directory_bind_addr` | no | none | A second listener, plain HTTP and with no client certificate, that answers `GET /.well-known/mimi-protocol-directory` and nothing else. It is meant to sit behind whatever terminates TLS for the public name. Unset means there is no such listener. |
-| `MIMI_ADMIN_BIND_ADDR` | `admin_bind_addr` | no | none | The operator's listener: plain HTTP with no client certificate, serving `roomPolicy`, `memberRole`, `addParticipant`, `untrackRoom`, `outbox` and `dropOutbox` and nothing else. It must be a loopback `ip:port` (127.0.0.0/8 or `::1`); any other address stops the hub at start. Unset means there is no such listener, and no request can change a room's policy, roles or participants except a peer's `update`. |
+| `MIMI_ADMIN_BIND_ADDR` | `admin_bind_addr` | no | none | The operator's listener: plain HTTP with no client certificate, serving `roomPolicy`, `memberRole`, `addParticipant`, `untrackRoom`, `outbox`, `dropOutbox` and the three `operator/` routes for local users, and nothing else. It must be a loopback `ip:port` (127.0.0.0/8 or `::1`); any other address stops the hub at start. Unset means there is no such listener, and no request can change a room's policy, roles or participants except a peer's `update`. |
 | `MIMI_POLICY` | `policy` | no | none | A TOML file of the deployment's choices, below. Unset means the drafts' defaults. A named file the hub cannot read, or one that is not a valid policy, stops the start. |
 | `MIMI_PEER_KEYS` | `peer_keys` | no | none | Path of a JSON file of peers' DNS-published signing keys, `{"<keyid>._mimi.<domain>": "<base64 Ed25519 public key>"}`, an empty value for a revoked key. Re-read when it changes. Without it, no signature verifies and only a client certificate admits a peer. |
 | `MIMI_ACTIVITY_LOG` | `activity_log` | no | off | `1` prints one line per request on the peer-facing listener to stderr: `[mimi-activity] method=POST route=/mimi/pl/update/:room_id status=200`. The route is the template the request matched (`route=unmatched` when none did), so no path, query string, header, certificate or body appears in it. Any other value, or none, leaves it off. The directory-only listener is not logged. |
@@ -384,12 +385,12 @@ returns is recorded so the Welcome that uses it goes there; any other such reque
 |---|---|---|
 | GET | `/.well-known/mimi-protocol-directory` | Advertises supported ciphersuite, draft revisions, and endpoint URLs. |
 | GET | `/mimi/v1/keyMaterial?user=` | Serve one local user's one-time KeyPackage. |
-| POST | `/mimi/v1/keyMaterial/ingest` | Gate + optionally publish a KeyPackage: for a user of this provider, or for another provider's user only by a peer whose certificate is that provider's (403 otherwise). |
+| POST | `/mimi/v1/keyMaterial/ingest` | Gate + optionally publish a KeyPackage, for a user of the provider the peer's proof names (403 otherwise; never for a user of this provider, whose operator publishes on its own listener). |
 | POST | `/mimi/v1/notify?room=` | Idempotent fanout receipt; the peer must be the hub of `room` (403 otherwise). |
 | POST | `/mimi/v1/welcome/ingest` | Gate + optionally relay a Welcome. |
-| GET | `/mimi/v1/welcome?user=` | Deliver-once pull of a queued Welcome. |
+| GET | `/mimi/v1/welcome?user=` | Deliver-once pull of a Welcome queued for a user of the peer's own provider (403 for a user of this provider). |
 | POST | `/mimi/v1/submitMessage?recipient=` | Deposit an opaque application message for a recipient. |
-| GET | `/mimi/v1/message?user=` | Deliver-once pull of a queued message. |
+| GET | `/mimi/v1/message?user=` | Deliver-once pull of a message queued for a user of the peer's own provider (403 for a user of this provider). |
 | POST | `/mimi/v1/identifierQuery` | Opt-in-only identifier lookup. |
 | POST | `/mimi/v1/requestConsent` | Consent request or cancel (§5.7 C1), always 201. A cancel withdraws only a pending request, and only from the requester's provider. The wire route answers 202, and 422 for an operation it does not take. |
 | POST | `/mimi/v1/updateConsent` | Consent grant/revoke (§5.7 C2), always 201. |
@@ -406,6 +407,9 @@ not MIMI routes; a peer changes a room's roster or policy through `update`.
 | POST | `/mimi/v1/untrackRoom?room=` | Drop the room's ratchet tree; its next bundle with a Full GroupInfo and a full tree seeds it again. |
 | GET | `/mimi/v1/outbox` | Each queue of fan-out waiting for another provider: room, domain, depth, oldest row, and its head's attempts and last outcome. A queue the outbound client refuses (for example a peer resolving into a refused range) never moves on its own; its last outcome says why. |
 | POST | `/mimi/v1/dropOutbox?room=&domain=` | Drop that queue, every row of it; answers how many. |
+| POST | `/mimi/v1/operator/keyMaterial?user=` | Publish a KeyPackage for a user of this provider (a bare name or a URI on its domain), through the suite gate. |
+| GET | `/mimi/v1/operator/welcome?user=` | Take one Welcome queued for a user of this provider (deliver-once). |
+| GET | `/mimi/v1/operator/message?user=` | Take one message queued for a user of this provider (deliver-once). |
 
 ### How user and room URIs compare
 

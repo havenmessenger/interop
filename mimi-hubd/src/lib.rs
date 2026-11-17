@@ -431,18 +431,34 @@ impl Provider {
     /// THEN stored with a TTL. (Distinct from `ingest_foreign_keypackage`, which only validates.)
     /// Whether `user` (a bare name, or a user URI) may have KeyPackages published for it by `peer`: a user of this
     /// provider always; another provider's user only when the peer's certificate authenticates that provider.
-    pub fn may_publish_for(&self, user: &str, peer: Option<&crate::peer::PeerIdentity>) -> bool {
+    /// Whether `peer` may act on the provider path for `user`: only for a user of a domain its proof authenticates.
+    /// Never for a user of this provider (a URI on its domain, or a bare name): a peer neither publishes KeyPackages
+    /// under one's name nor reads what is queued for one. The operator does both on its own listener (`admin.rs`).
+    pub fn peer_serves_user(&self, user: &str, peer: Option<&crate::peer::PeerIdentity>) -> bool {
         if !user.contains("://") {
-            return true;
+            return false;
         }
         match MimiUri::parse(user) {
-            Ok(uri) if uri.kind == Some(MimiKind::User) => {
-                uri.is_local_to(&self.domain)
-                    || user_domain(user)
-                        .is_some_and(|domain| peer.is_some_and(|peer| peer.authenticates(&domain)))
+            Ok(uri) if uri.kind == Some(MimiKind::User) && !uri.is_local_to(&self.domain) => {
+                user_domain(user)
+                    .is_some_and(|domain| peer.is_some_and(|peer| peer.authenticates(&domain)))
             }
             _ => false,
         }
+    }
+
+    /// Whether a peer may publish KeyPackages for `user` (see [`Self::peer_serves_user`]).
+    pub fn may_publish_for(&self, user: &str, peer: Option<&crate::peer::PeerIdentity>) -> bool {
+        self.peer_serves_user(user, peer)
+    }
+
+    /// Whether `user` is a user of this provider: a bare name, or a user URI on its domain.
+    pub fn is_local_user(&self, user: &str) -> bool {
+        if !user.contains("://") {
+            return true;
+        }
+        MimiUri::parse(user)
+            .is_ok_and(|uri| uri.kind == Some(MimiKind::User) && uri.is_local_to(&self.domain))
     }
 
     pub fn publish_key_package(

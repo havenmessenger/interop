@@ -11,6 +11,12 @@
 //!   POST /mimi/v1/untrackRoom?room=                 (drop a room's ratchet tree; its next full bundle seeds it again)
 //!   GET  /mimi/v1/outbox                            (each queue of fan-out waiting for another provider)
 //!   POST /mimi/v1/dropOutbox?room=&domain=          (drop one such queue, every row of it)
+//!   POST /mimi/v1/operator/keyMaterial?user=        (publish a KeyPackage for a user of this provider)
+//!   GET  /mimi/v1/operator/welcome?user=            (take one Welcome queued for a user of this provider)
+//!   GET  /mimi/v1/operator/message?user=            (take one message queued for a user of this provider)
+//!
+//! The last three are the operator's way to stand in for a local user, for demos and tests: on the provider path a peer
+//! does them only for its own users.
 //!
 //! The listener is safe without credentials only while nothing a peer sends can make the hub connect to it. The hub's
 //! one outbound client (`outbound.rs`) refuses loopback unless the operator allowlists it, and speaks only TLS, which
@@ -39,6 +45,12 @@ pub fn build_admin_router(provider: SharedProvider) -> Router {
         .route("/mimi/v1/untrackRoom", post(untrack_room))
         .route("/mimi/v1/outbox", get(outbox))
         .route("/mimi/v1/dropOutbox", post(drop_outbox))
+        .route(
+            "/mimi/v1/operator/keyMaterial",
+            post(publish_for_local_user),
+        )
+        .route("/mimi/v1/operator/welcome", get(take_welcome))
+        .route("/mimi/v1/operator/message", get(take_message))
         .with_state(provider)
         .layer(axum::middleware::map_response(crate::problem::fallback))
         .layer(axum::middleware::map_response(server_header))
@@ -104,3 +116,52 @@ pub fn admin_bind_addr(value: &str) -> anyhow::Result<SocketAddr> {
 #[cfg(test)]
 #[path = "admin_tests.rs"]
 mod tests;
+
+/// Publish a KeyPackage for a user of this provider (a bare name, or a URI on its domain): 204, or 400 when the suite
+/// gate refuses it; 403 for another provider's user, whom only that provider publishes for.
+async fn publish_for_local_user(
+    State(p): State<SharedProvider>,
+    Query(q): Query<crate::http::UserQuery>,
+    body: axum::body::Bytes,
+) -> Response {
+    let g = crate::http::lock(&p);
+    if !g.is_local_user(&q.user) {
+        return crate::problem::NOT_PERMITTED.response();
+    }
+    match g.publish_key_package(&q.user, &body, crate::http::now_unix()) {
+        Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
+        Err(_) => crate::problem::MATERIAL_NOT_ACCEPTED.response(),
+    }
+}
+
+/// Take one queued Welcome for a user of this provider: 200 + bytes, 404 when none.
+async fn take_welcome(
+    State(p): State<SharedProvider>,
+    Query(q): Query<crate::http::UserQuery>,
+) -> Response {
+    let g = crate::http::lock(&p);
+    if !g.is_local_user(&q.user) {
+        return crate::problem::NOT_PERMITTED.response();
+    }
+    taken(g.fetch_welcome(&q.user))
+}
+
+/// Take one queued message for a user of this provider: 200 + bytes, 404 when none.
+async fn take_message(
+    State(p): State<SharedProvider>,
+    Query(q): Query<crate::http::UserQuery>,
+) -> Response {
+    let g = crate::http::lock(&p);
+    if !g.is_local_user(&q.user) {
+        return crate::problem::NOT_PERMITTED.response();
+    }
+    taken(g.fetch_message(&q.user))
+}
+
+fn taken(item: anyhow::Result<Option<Vec<u8>>>) -> Response {
+    match item {
+        Ok(Some(bytes)) => (axum::http::StatusCode::OK, bytes).into_response(),
+        Ok(None) => crate::problem::NOT_FOUND.response(),
+        Err(_) => crate::problem::INTERNAL_ERROR.response(),
+    }
+}
