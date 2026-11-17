@@ -427,10 +427,6 @@ impl Provider {
     // It never decrypts. KeyPackages + Welcomes are suite-gated at ingest against the policy's suites;
     // application messages are opaque PrivateMessages (size-bounded only, their suite is not in clear).
 
-    /// Publish a local user's one-time KeyPackage so cross-provider peers can claim it. Suite-gated,
-    /// THEN stored with a TTL. (Distinct from `ingest_foreign_keypackage`, which only validates.)
-    /// Whether `user` (a bare name, or a user URI) may have KeyPackages published for it by `peer`: a user of this
-    /// provider always; another provider's user only when the peer's certificate authenticates that provider.
     /// Whether `peer` may act on the provider path for `user`: only for a user of a domain its proof authenticates.
     /// Never for a user of this provider (a URI on its domain, or a bare name): a peer neither publishes KeyPackages
     /// under one's name nor reads what is queued for one. The operator does both on its own listener (`admin.rs`).
@@ -461,6 +457,8 @@ impl Provider {
             .is_ok_and(|uri| uri.kind == Some(MimiKind::User) && uri.is_local_to(&self.domain))
     }
 
+    /// Publish a local user's one-time KeyPackage so cross-provider peers can claim it. Suite-gated,
+    /// THEN stored with a TTL. (Distinct from `ingest_foreign_keypackage`, which only validates.)
     pub fn publish_key_package(
         &self,
         username: &str,
