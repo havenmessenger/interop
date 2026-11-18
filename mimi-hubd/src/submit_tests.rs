@@ -59,3 +59,15 @@ fn a_non_participant_is_refused_and_nothing_is_queued() {
     assert!(!p.accept_application_message(ROOM, ALICE, b"hello", 10));
     assert!(p.fetch_message(DAVE).unwrap().is_none());
 }
+
+/// A fan-out that fails on a store error (here, the message table is gone) refuses the message, so the sender is not
+/// told it was taken. Revert check: answer accepted whatever the fan-out did, and this message "is accepted".
+#[test]
+fn a_fan_out_store_error_refuses_the_message() {
+    let p = room_of(&[ALICE, DAVE]);
+    p.store.break_message_queue_for_test();
+    assert!(
+        !p.accept_application_message(ROOM, ALICE, b"hello", 10),
+        "PLANT-ROOM-FANOUT-ERROR: a message nothing queued was reported accepted"
+    );
+}
