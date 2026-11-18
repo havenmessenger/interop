@@ -26,6 +26,11 @@ impl<'a> From<Option<&'a PeerIdentity>> for Requester<'a> {
 
 impl Requester<'_> {
     /// Whether this requester may act for `user`, whose provider is `authority`, at the hub of `local_domain`.
+    ///
+    /// `authority` must be the host of `user`'s own parsed URI, never a value from the request: a peer is trusted for
+    /// exactly the users its proof authenticates, so an authority the requester could choose would let it speak for
+    /// anyone. Every caller passes one read from a parsed URI: a joiner's (`MimiUri::parse`), a stored participant
+    /// row's (set from the member's URI when the row was written), or a GroupInfo signer's (`provider_of`).
     pub fn may_speak_for(&self, user: &str, authority: &str, local_domain: &str) -> bool {
         match self {
             Requester::Peer(peer) => {
