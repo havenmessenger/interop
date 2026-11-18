@@ -9,6 +9,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 - `submitMessage` (`/mimi/pl/submitMessage/{roomId}`) takes a message only from a peer submitting as a user of a
   domain its proof authenticates: never as a user of this provider, and not as a third provider's user. A refused
   message is answered `notAllowed` and is neither stored nor fanned out.
+- The JSON lane's deposits, `/mimi/v1/submitMessage?recipient=` and `/mimi/v1/welcome/ingest?recipient=`, take an
+  item only for a user of a domain the peer's proof authenticates (403 otherwise). A user of this provider's queues are
+  filled only by this hub's own fan-out and its operator.
 - On the provider path a peer acts only for users of the provider its proof names: it publishes KeyPackages only for
   them (`/mimi/v1/keyMaterial/ingest?user=`), and pulls only what is queued for them (`/mimi/v1/welcome` and
   `/mimi/v1/message`). A user of this provider, by bare name or by URI, takes KeyPackages from no peer, and what is

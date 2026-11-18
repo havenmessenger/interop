@@ -419,15 +419,26 @@ async fn ingest_keypackage(
     }
 }
 
-/// Foreign Welcome. `?recipient=X` → suite-gate THEN RELAY (queue for fetch). No recipient →
-/// validate-only (204). The suite gate runs before any queue/openmls touch, closing the path
+/// Foreign Welcome. `?recipient=X`, a user of a domain the peer's proof authenticates (403 otherwise) → suite-gate
+/// THEN RELAY (queue for fetch). No recipient → validate-only (204). The suite gate runs before any queue/openmls touch, closing the path
 /// that would otherwise drive openmls's libcrux ChaCha implementation on an unvalidated suite.
 async fn ingest_welcome(
     State(p): State<SharedProvider>,
     Query(k): Query<RouteKey>,
+    peer: Option<Extension<PeerCert>>,
     body: Bytes,
 ) -> Response {
+    let peer = peer
+        .as_ref()
+        .and_then(|Extension(PeerCert(identity))| identity.as_ref());
     let g = lock(&p);
+    // A Welcome is queued only for a user of a domain the peer's proof authenticates; validating one queues nothing.
+    if k.recipient
+        .as_deref()
+        .is_some_and(|rcpt| !g.peer_serves_user(rcpt, peer))
+    {
+        return crate::problem::NOT_PERMITTED.response();
+    }
     let queued = k.recipient.is_some();
     let r = match k.recipient {
         Some(rcpt) => g.relay_welcome(&rcpt, &body, now_unix()),
@@ -469,18 +480,27 @@ async fn fetch_welcome(
     }
 }
 
-/// Deposit an opaque application message (MLS PrivateMessage) for `?recipient=X`. The provider stores
-/// ciphertext only - it never decrypts; the store bounds size + queue depth. 201 on
-/// accept, 400 if the bounds reject (empty/oversize/queue-full/bad recipient).
+/// Deposit an opaque application message (MLS PrivateMessage) for `?recipient=X`, a user of a domain the peer's proof
+/// authenticates. The provider stores ciphertext only - it never decrypts; the store bounds size + queue depth. 201 on
+/// accept, 400 if the bounds reject (empty/oversize/queue-full/bad recipient), 403 for a recipient of this provider or
+/// of a third provider: this provider's users' queues are filled only by its own fan-out and its operator.
 async fn submit_message(
     State(p): State<SharedProvider>,
     Query(k): Query<RouteKey>,
+    peer: Option<Extension<PeerCert>>,
     body: Bytes,
 ) -> Response {
     let Some(rcpt) = k.recipient else {
         return crate::problem::MALFORMED_REQUEST.response();
     };
-    match lock(&p).submit_message(&rcpt, &body, now_unix()) {
+    let peer = peer
+        .as_ref()
+        .and_then(|Extension(PeerCert(identity))| identity.as_ref());
+    let g = lock(&p);
+    if !g.peer_serves_user(&rcpt, peer) {
+        return crate::problem::NOT_PERMITTED.response();
+    }
+    match g.submit_message(&rcpt, &body, now_unix()) {
         Ok(()) => StatusCode::CREATED.into_response(),
         Err(_) => crate::problem::MESSAGE_NOT_QUEUED.response(),
     }
@@ -1153,6 +1173,9 @@ mod notify_tests;
 #[path = "http_notify_welcome_tests.rs"]
 mod notify_welcome_tests;
 #[cfg(test)]
+#[path = "http_peer_deposit_tests.rs"]
+mod peer_deposit_tests;
+#[cfg(test)]
 #[path = "http_peer_path_users_tests.rs"]
 mod peer_path_users_tests;
 #[cfg(test)]
@@ -1176,6 +1199,23 @@ mod tests {
     use axum::http::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt; // oneshot
+
+    /// A request as the provider `name` sends it: its certificate names that domain.
+    trait WithPeer {
+        fn with_peer(self, name: &str) -> Self;
+    }
+
+    impl WithPeer for Request<Body> {
+        fn with_peer(mut self, name: &str) -> Self {
+            let (ca, _) = crate::tls::tests::make_ca();
+            let (cert_pem, _) = crate::tls::tests::issue(&ca, vec![name.to_string()], "peer");
+            let chain = crate::tls::certs_from_pem(cert_pem.as_bytes()).unwrap();
+            self.extensions_mut().insert(crate::peer::PeerCert(Some(
+                crate::peer::PeerIdentity::new(chain[0].clone().into_owned()),
+            )));
+            self
+        }
+    }
 
     pub(super) fn app() -> (Router, SharedProvider) {
         let p = Arc::new(Mutex::new(
@@ -1561,31 +1601,33 @@ mod tests {
 
     #[tokio::test]
     async fn message_submit_then_fetch_roundtrip_delivers_once() {
-        let (router, p) = app();
-        // A local recipient's queue is the operator's to take (admin.rs), not a peer's.
-        let operator = crate::admin::build_admin_router(p.clone());
+        // The recipient is a user of other.example, and other.example deposits and pulls for it: a peer acts only for
+        // its own provider's users.
+        let (router, _p) = app();
         // submit an opaque app message for the recipient (provider never decrypts it)
         let submit = router
             .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/mimi/v1/submitMessage?recipient=xxx@haven")
+                    .uri("/mimi/v1/submitMessage?recipient=mimi%3A%2F%2Fother.example%2Fu%2Fxxx")
                     .body(Body::from(&b"opaque-ciphertext"[..]))
-                    .unwrap(),
+                    .unwrap()
+                    .with_peer("other.example"),
             )
             .await
             .unwrap();
         assert_eq!(submit.status(), StatusCode::CREATED);
 
         // recipient fetches it (deliver-once)
-        let fetch = operator
+        let fetch = router
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/mimi/v1/operator/message?user=xxx@haven")
+                    .uri("/mimi/v1/message?user=mimi%3A%2F%2Fother.example%2Fu%2Fxxx")
                     .body(Body::empty())
-                    .unwrap(),
+                    .unwrap()
+                    .with_peer("other.example"),
             )
             .await
             .unwrap();
@@ -1598,13 +1640,14 @@ mod tests {
         );
 
         // queue now empty → 404
-        let empty = operator
+        let empty = router
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/mimi/v1/operator/message?user=xxx@haven")
+                    .uri("/mimi/v1/message?user=mimi%3A%2F%2Fother.example%2Fu%2Fxxx")
                     .body(Body::empty())
-                    .unwrap(),
+                    .unwrap()
+                    .with_peer("other.example"),
             )
             .await
             .unwrap();
@@ -1637,18 +1680,19 @@ mod tests {
 
     #[tokio::test]
     async fn welcome_relay_rejects_garbage_but_message_is_opaque() {
-        let (router, p) = app();
-        // A local recipient's queue is the operator's to take (admin.rs), not a peer's.
-        let operator = crate::admin::build_admin_router(p.clone());
+        // The recipient is a user of other.example, and other.example deposits and pulls for it: a peer acts only for
+        // its own provider's users.
+        let (router, _p) = app();
         // welcome RELAY still suite-gates (garbage rejected before it ever queues)
         let bad_welcome = router
             .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/mimi/v1/welcome/ingest?recipient=xxx@haven")
+                    .uri("/mimi/v1/welcome/ingest?recipient=mimi%3A%2F%2Fother.example%2Fu%2Fxxx")
                     .body(Body::from(&b"not a welcome"[..]))
-                    .unwrap(),
+                    .unwrap()
+                    .with_peer("other.example"),
             )
             .await
             .unwrap();
@@ -1658,13 +1702,14 @@ mod tests {
             "welcome relay is suite-gated"
         );
         // and nothing got queued for the recipient
-        let none = operator
+        let none = router
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/mimi/v1/operator/welcome?user=xxx@haven")
+                    .uri("/mimi/v1/welcome?user=mimi%3A%2F%2Fother.example%2Fu%2Fxxx")
                     .body(Body::empty())
-                    .unwrap(),
+                    .unwrap()
+                    .with_peer("other.example"),
             )
             .await
             .unwrap();

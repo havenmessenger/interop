@@ -387,9 +387,9 @@ returns is recorded so the Welcome that uses it goes there; any other such reque
 | GET | `/mimi/v1/keyMaterial?user=` | Serve one local user's one-time KeyPackage. |
 | POST | `/mimi/v1/keyMaterial/ingest` | Gate + optionally publish a KeyPackage, for a user of the provider the peer's proof names (403 otherwise; never for a user of this provider, whose operator publishes on its own listener). |
 | POST | `/mimi/v1/notify?room=` | Idempotent fanout receipt; the peer must be the hub of `room` (403 otherwise). |
-| POST | `/mimi/v1/welcome/ingest` | Gate + optionally relay a Welcome. |
+| POST | `/mimi/v1/welcome/ingest` | Gate a Welcome; with `?recipient=`, relay it for a user of the peer's own provider (403 for a user of this provider). |
 | GET | `/mimi/v1/welcome?user=` | Deliver-once pull of a Welcome queued for a user of the peer's own provider (403 for a user of this provider). |
-| POST | `/mimi/v1/submitMessage?recipient=` | Deposit an opaque application message for a recipient. |
+| POST | `/mimi/v1/submitMessage?recipient=` | Deposit an opaque application message for a user of the peer's own provider (403 for a user of this provider, whose queue only this hub's fan-out and operator fill). |
 | GET | `/mimi/v1/message?user=` | Deliver-once pull of a message queued for a user of the peer's own provider (403 for a user of this provider). |
 | POST | `/mimi/v1/identifierQuery` | Opt-in-only identifier lookup. |
 | POST | `/mimi/v1/requestConsent` | Consent request or cancel (§5.7 C1), always 201. A cancel withdraws only a pending request, and only from the requester's provider. The wire route answers 202, and 422 for an operation it does not take. |
