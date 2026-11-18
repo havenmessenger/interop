@@ -19,8 +19,9 @@ external join; DIV-1), and `update` (§5.3, bounded - see below). Every wire rou
 client would send and calls the identical business logic the JSON lane calls, so state written
 through one lane is readable through the other (proven below for `keyMaterial`). The path segment
 on the request/consent/keyMaterial/update/reportAbuse routes plays the same opaque routing-key role
-the JSON lane's query parameters play; it is not the draft's room-participant-list fanout, which
-this reference hub does not implement for message delivery. The directory (`/.well-known/mimi-
+the JSON lane's query parameters play. Message delivery follows the room's participant list: what the
+hub accepts for a room it hosts goes to each local participant's queue and, as a FanoutMessage, to
+each other provider with a participant (DIVERGENCES.md, DIV-5). The directory (`/.well-known/mimi-
 protocol-directory`) advertises all eight under `wireEndpoints`, with concrete path templates.
 
 `update` (§5.3) takes an `UpdateRequest` and answers an `UpdateRoomResponse`. It handles one bounded
