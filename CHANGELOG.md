@@ -6,6 +6,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- An example, `mimi-hubd/examples/probe_bodies.rs`, makes the bodies a peer probe sends to a live hub, fresh each run:
+  a `SubmitMessageRequest` from a named sender, a KeyPackage for a named user, and the notify `FanoutMessage` carrying
+  a Welcome that adds that KeyPackage's holder. Each is a real openmls object encoded with the types the hub decodes.
 - A room takes every message its members may send, however many arrive within the delivery lifetime. An accepted
   application message is no longer also queued under the room's own URI, a queue nothing read: it filled to its cap of
   256 within the delivery lifetime and then refused every sender in the room, though each member read their own queue.
