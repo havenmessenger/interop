@@ -12,8 +12,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   hosted here, sends messages and sends updates to them. What a created room starts with (its room policy, the
   creator's role, whether it allows external Commits) is the deployment's, from `MIMI_LANE_ROOM_POLICY`, by default a
   neutral profile that refuses external Commits; the client names none of it. On the lane a user speaks only for themself: a leave removes
-  only them, an external Commit joins only them, and a GroupInfo that seeds a room's tree is signed by them. The
-  provider path's checks are unchanged. A local extension, not a MIMI route (DIV-19).
+  only them, an external Commit joins only them, and a GroupInfo that seeds a room's tree is signed by them. On the
+  provider path a peer no longer speaks for a user of this hub in a room change, even when its proof names this hub's
+  domain: a leave removing one, an external Commit joining one, or a seeding GroupInfo signed by one is refused. A local extension, not a MIMI route (DIV-19).
 - One local member whose queue refuses an item (full: 256 messages or 32 Welcomes, or the item out of bounds) no
   longer stops fan-out to the others: that member is skipped and logged, and every other local member still gets
   the Commit, Welcome, held proposal, application message or followed room's message. A member's items (a held

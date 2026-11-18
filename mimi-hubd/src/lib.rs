@@ -1123,7 +1123,9 @@ impl Provider {
                         .ok()
                         .map(|uri| (joiner, uri.authority))
                 });
-            if !joiner.is_some_and(|(joiner, domain)| requester.may_speak_for(joiner, &domain)) {
+            if !joiner.is_some_and(|(joiner, domain)| {
+                requester.may_speak_for(joiner, &domain, &self.domain)
+            }) {
                 return Err(UpdateRefusal::Policy(
                     "an external Commit's joiner is not a user of the provider that sent it",
                 ));
@@ -1771,7 +1773,7 @@ impl Provider {
             let row = rows.get(*index as usize).ok_or(UpdateRefusal::Invalid(
                 "the participant list update does not fit the room",
             ))?;
-            if !requester.may_speak_for(&row.member_uri, &row.authority) {
+            if !requester.may_speak_for(&row.member_uri, &row.authority, &self.domain) {
                 return Err(UpdateRefusal::NotAllowed);
             }
         }

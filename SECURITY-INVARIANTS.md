@@ -81,7 +81,8 @@ nor a lane request on the peer listener. A lane request verifies only with a key
 (`mimi-hubd/src/client_lane.rs`); its `mimi-client-user` must be a user URI on this hub's domain. Every route acts for
 that user and takes no user from the body (`client_http.rs`). In a room change the user speaks only for themself
 (`requester.rs`): a leave removes only them, an external Commit joins only them, a GroupInfo that seeds a room's tree
-is signed by them. A KeyPackage the user publishes names them, exactly, in its basic credential. Each user has a
+is signed by them. A peer never speaks for a user of this hub, whatever domains its proof names: a leave removing one,
+an external Commit joining one, or a GroupInfo signed by one is refused from the provider path. A KeyPackage the user publishes names them, exactly, in its basic credential. Each user has a
 bounded number of requests a minute.
 
 ## The operator's routes listen on loopback only

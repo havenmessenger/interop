@@ -461,7 +461,7 @@ impl Provider {
             .ok_or(Some("its GroupInfo's signer names no user"))?;
         let provider =
             provider_of(&signer).ok_or(Some("its GroupInfo's signer names no provider"))?;
-        if !requester.may_speak_for(&signer, &provider) {
+        if !requester.may_speak_for(&signer, &provider, &self.domain) {
             return Err(Some(
                 "its GroupInfo's signer is not of the provider that sent it",
             ));

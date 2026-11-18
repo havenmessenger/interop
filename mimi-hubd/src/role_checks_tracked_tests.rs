@@ -19,7 +19,7 @@ use crate::peer::PeerIdentity;
 use crate::room_tree::{PARTICIPANT_LIST_COMPONENT, ROLES_LIST_COMPONENT};
 use crate::{Provider, UpdateRefusal};
 
-const ROOM: &str = "mimi://example.com/r/room";
+const ROOM: &str = "mimi://hub.example/r/room";
 const GROUP: &[u8] = b"mimi://example.com/g/room";
 const ALICE: &str = "mimi://example.com/u/alice";
 const BOB: &str = "mimi://example.com/u/bob";
@@ -186,7 +186,7 @@ fn role_of(p: &Provider, uri: &str) -> Option<u32> {
 /// operator's roles stay.
 #[test]
 fn seeding_takes_the_policy_and_list_from_the_group_context() {
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let stored = RoomPolicy {
         base: BaseRoomPolicy::default(),
         roles: vec![role(5, vec![Capability::SendMessage], &[])],
@@ -201,7 +201,7 @@ fn seeding_takes_the_policy_and_list_from_the_group_context() {
     assert_eq!(role_of(&p, ALICE), Some(ADMIN));
     assert_eq!(role_of(&p, BOB), Some(MEMBER));
 
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     p.set_room_policy(ROOM, &stored, NOW).unwrap();
     let _room = tracked_room(&p, None);
     assert!(p.room_policy(ROOM).unwrap().is_none());
@@ -212,7 +212,7 @@ fn seeding_takes_the_policy_and_list_from_the_group_context() {
 /// accepted.
 #[test]
 fn a_commits_changes_are_authorized_for_its_committer() {
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let mut room = tracked_room(&p, Some(&roles(true)));
     let bobs = app_data_commit(
         &mut room.bob_group,
@@ -252,7 +252,7 @@ fn a_commits_changes_are_authorized_for_its_committer() {
 /// first `roles_list` is accepted.
 #[test]
 fn a_first_roles_list_by_commit_is_refused() {
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let mut room = tracked_room(&p, None);
     let roles_list = encode_role_data(&roles(true));
     let first = app_data_commit(
@@ -266,7 +266,7 @@ fn a_first_roles_list_by_commit_is_refused() {
     );
     assert!(p.room_policy(ROOM).unwrap().is_none());
 
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let mut room = tracked_room(&p, Some(&roles(true)));
     let narrower = encode_role_data(&roles(false));
     let replace = app_data_commit(
@@ -313,13 +313,13 @@ fn bobs_leave(room: &mut Room) -> Vec<Vec<u8>> {
 #[test]
 fn a_held_leave_is_authorized_for_the_leaver() {
     let peer = PeerIdentity::signed("example.com");
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let mut room = tracked_room(&p, Some(&roles(true)));
     let leave = bobs_leave(&mut room);
     p.hold_leave_proposals(ROOM, Some(&peer), leave.iter(), NOW)
         .unwrap();
 
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let mut room = tracked_room(&p, Some(&roles(false)));
     let leave = bobs_leave(&mut room);
     assert!(
@@ -338,7 +338,7 @@ async fn the_operators_routes_refuse_a_tracked_room() {
     use axum::http::{Method, Request, StatusCode};
     use tower::ServiceExt;
 
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let _room = tracked_room(&p, Some(&roles(true)));
     let shared = std::sync::Arc::new(std::sync::Mutex::new(p));
     let router = crate::admin::build_admin_router(shared.clone());
@@ -377,7 +377,7 @@ async fn the_operators_routes_refuse_a_tracked_room() {
     assert!(role_of(&shared.lock().unwrap(), carol).is_none());
     assert_eq!(role_of(&shared.lock().unwrap(), BOB), Some(MEMBER));
 
-    let untracked = "mimi://example.com/r/other";
+    let untracked = "mimi://hub.example/r/other";
     assert_eq!(
         send(format!(
             "/mimi/v1/addParticipant?room={untracked}&member={carol}"
@@ -394,7 +394,7 @@ async fn the_operators_routes_refuse_a_tracked_room() {
 fn a_policy_change_needs_its_capability() {
     use mimi_core::room_policy::BaseRoomPolicy;
     use mimi_core::room_policy_wire::encode_base_room_policy;
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let mut room = tracked_room(&p, Some(&roles(true)));
     let narrower = encode_role_data(&roles(false));
     let bobs = app_data_commit(

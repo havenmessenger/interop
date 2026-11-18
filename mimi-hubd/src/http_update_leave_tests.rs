@@ -25,10 +25,11 @@ use crate::tls::certs_from_pem;
 use crate::tls::tests::{issue, make_ca};
 use crate::UpdateRefusal;
 
-const HOME: &str = "havenmessenger.com";
+/// Alice and Bob's provider: another than this hub, so a leave reaches the hub from it as a peer.
+const HOME: &str = "home.example";
 const OTHER: &str = "other.example";
-const ALICE: &str = "mimi://havenmessenger.com/u/alice";
-const BOB: &str = "mimi://havenmessenger.com/u/bob";
+const ALICE: &str = "mimi://home.example/u/alice";
+const BOB: &str = "mimi://home.example/u/bob";
 const CAROL: &str = "mimi://other.example/u/carol";
 /// Bob's index in the participants vector, and his device's leaf.
 const BOB_AT: u32 = 1;
@@ -649,4 +650,40 @@ async fn on_the_client_lane_a_user_sends_only_their_own_leave() {
         vec![ALICE, BOB, CAROL],
         "a leave is held, not applied"
     );
+}
+
+/// A peer never sends a leave for a user of this hub, even one whose proof names this hub's domain: that user leaves
+/// through the client lane. Dana, of this hub, sits where Bob does; her leave from a peer naming this hub is refused,
+/// and the same leave from the lane, as Dana, is held. Revert check: let a peer speak for this provider's users, and
+/// the peer's leave is held.
+#[tokio::test]
+async fn a_peer_never_sends_a_leave_for_a_user_of_this_hub() {
+    use crate::requester::Requester;
+    const DANA: &str = "mimi://havenmessenger.com/u/dana";
+    let (router, p) = app();
+    for user in [ALICE, DANA, CAROL] {
+        p.lock().unwrap().add_participant(ROOM, user, 1).unwrap();
+    }
+    let first = commit_of(0, &[by_value_change(&list_change(&[], &[]))]);
+    assert!(is_success(
+        &post_from(router.clone(), None, bundle_of(first)).await
+    ));
+    let (danas_leave, _, _) = bobs_leave();
+    let as_peer = post_from(
+        router.clone(),
+        Some("havenmessenger.com"),
+        bundle(&danas_leave),
+    )
+    .await;
+    assert!(
+        is_not_allowed(&as_peer),
+        "PLANT-PEER-LOCAL-LEAVE: a peer sent a leave for a user of this hub: {as_peer:?}"
+    );
+    let as_lane = p.lock().unwrap().apply_update_request(
+        ROOM,
+        &bundle(&danas_leave),
+        Requester::LaneUser(DANA),
+        super::now_unix(),
+    );
+    assert!(as_lane.is_ok(), "{as_lane:?}");
 }

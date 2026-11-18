@@ -9,7 +9,6 @@ use openmls::prelude::{GroupId, MlsMessageBodyIn, MlsMessageIn, PublicGroup};
 use super::tests::update_answer;
 use super::update_tests::post;
 use crate::http::SharedProvider;
-use crate::peer::PeerIdentity;
 
 fn from_hex(h: &str) -> Vec<u8> {
     (0..h.len())
@@ -83,10 +82,12 @@ async fn the_joint_vectors_get_their_answers_with_the_tree_tracked() {
                 representation: GroupInfoRepresentation::Full,
                 payload: bare_group_info(&from_hex(setup["group_info"].as_str().unwrap())),
             };
+            // The setup's creator is a user of this hub, so the GroupInfo they signed reaches it through the client
+            // lane, never through a peer.
             hub.seed_room_tree(
                 room,
                 setup_epoch - 1,
-                Some(&PeerIdentity::signed(setup["hub_domain"].as_str().unwrap())),
+                crate::requester::Requester::LaneUser(setup["creator"].as_str().unwrap()),
                 &group_info,
                 &tree,
             );

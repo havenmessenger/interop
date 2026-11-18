@@ -8,11 +8,11 @@ use super::*;
 use crate::mls_fixtures::{add_commit, group_info_after, Member};
 use crate::peer::PeerIdentity;
 
-const ROOM: &str = "mimi://example.com/r/room";
+const ROOM: &str = "mimi://hub.example/r/room";
 const GROUP: &[u8] = b"mimi://example.com/g/room";
 
 fn hub() -> Provider {
-    Provider::in_memory("example.com").unwrap()
+    Provider::in_memory("hub.example").unwrap()
 }
 
 fn full(group_info: &[u8]) -> GroupInfoOption {
@@ -328,4 +328,37 @@ fn on_the_client_lane_only_the_group_info_signer_seeds_the_room() {
         &tree_option(&room.tree),
     );
     assert!(p.room_tracking(ROOM).unwrap().is_some());
+}
+
+/// A peer never seeds a room's tree for a user of this hub, even one whose proof names this hub's domain; the same
+/// GroupInfo from the lane, as its signer, seeds it. Revert check: let a peer speak for this provider's users, and the
+/// peer seeds the room.
+#[test]
+fn a_peer_never_seeds_a_tree_for_a_user_of_this_hub() {
+    use crate::requester::Requester;
+    let room = room(&hub());
+    let p = Provider::in_memory("example.com").unwrap();
+    let local = "mimi://example.com/r/room";
+    for user in ["mimi://example.com/u/alice", "mimi://example.com/u/bob"] {
+        p.add_participant(local, user, 1).unwrap();
+    }
+    p.seed_room_tree(
+        local,
+        0,
+        Some(&example_peer()),
+        &full(&room.group_info),
+        &tree_option(&room.tree),
+    );
+    assert!(
+        p.room_tracking(local).unwrap().is_none(),
+        "PLANT-PEER-LOCAL-SEED: a peer seeded a tree for a user of this hub"
+    );
+    p.seed_room_tree(
+        local,
+        0,
+        Requester::LaneUser("mimi://example.com/u/alice"),
+        &full(&room.group_info),
+        &tree_option(&room.tree),
+    );
+    assert!(p.room_tracking(local).unwrap().is_some());
 }

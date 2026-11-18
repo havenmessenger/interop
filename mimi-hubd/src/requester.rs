@@ -1,7 +1,9 @@
 //! Who asked for a room change: a peer provider on the provider path, or a user of this hub on the client lane.
 //!
 //! The room-change paths ask one question of the requester at every point where authority matters: may it speak for
-//! a given user? A peer speaks for every user of a domain its proof authenticates. A lane user speaks only for itself,
+//! a given user? A peer speaks for every user of a domain its proof authenticates, except this provider's own: what a
+//! user of this provider does reaches the hub through the client lane, never through a peer. A lane user speaks only
+//! for itself,
 //! so on the lane a leave removes only its sender, an external Commit joins only its sender, and a GroupInfo that seeds
 //! a room's tree is signed by its sender.
 
@@ -23,10 +25,13 @@ impl<'a> From<Option<&'a PeerIdentity>> for Requester<'a> {
 }
 
 impl Requester<'_> {
-    /// Whether this requester may act for `user`, whose provider is `authority`.
-    pub fn may_speak_for(&self, user: &str, authority: &str) -> bool {
+    /// Whether this requester may act for `user`, whose provider is `authority`, at the hub of `local_domain`.
+    pub fn may_speak_for(&self, user: &str, authority: &str, local_domain: &str) -> bool {
         match self {
-            Requester::Peer(peer) => peer.is_some_and(|peer| peer.authenticates(authority)),
+            Requester::Peer(peer) => {
+                !authority.eq_ignore_ascii_case(local_domain)
+                    && peer.is_some_and(|peer| peer.authenticates(authority))
+            }
             Requester::LaneUser(lane_user) => {
                 mimi_core::uri::canonical(user) == mimi_core::uri::canonical(lane_user)
             }

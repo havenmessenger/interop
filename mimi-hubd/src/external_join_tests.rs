@@ -19,10 +19,11 @@ use crate::mls_fixtures::{
 };
 use crate::peer::PeerIdentity;
 use crate::policy::{ExternalCommitWhenUnset, HubPolicy};
+use crate::requester::Requester;
 use crate::room_tree::{PARTICIPANT_LIST_COMPONENT, ROLES_LIST_COMPONENT};
 use crate::{Provider, UpdateRefusal};
 
-const ROOM: &str = "mimi://example.com/r/room";
+const ROOM: &str = "mimi://hub.example/r/room";
 const GROUP: &[u8] = b"mimi://example.com/g/room";
 const ALICE: &str = "mimi://example.com/u/alice";
 const BOB: &str = "mimi://example.com/u/bob";
@@ -78,6 +79,25 @@ struct Room {
 /// Alice's room with Bob added, its GroupContext carrying the list, `roles` and `ops` if given; the hub seeded from it
 /// (or not, with `track` false: the hub then only lists the two).
 fn room(p: &Provider, roles: &[Role], ops: Option<&OperationalParameters>, track: bool) -> Room {
+    room_in(
+        p,
+        ROOM,
+        roles,
+        ops,
+        track,
+        Requester::Peer(Some(&PeerIdentity::signed("example.com"))),
+    )
+}
+
+/// [`room`] at `room_uri`, its tree (when tracked) seeded as `seeder` asks.
+fn room_in(
+    p: &Provider,
+    room_uri: &str,
+    roles: &[Role],
+    ops: Option<&OperationalParameters>,
+    track: bool,
+    seeder: Requester<'_>,
+) -> Room {
     let alice = Member::new(ALICE);
     let bob = Member::new(BOB);
     let list = ParticipantListData {
@@ -113,19 +133,19 @@ fn room(p: &Provider, roles: &[Role], ops: Option<&OperationalParameters>, track
             .tls_serialize_detached()
             .unwrap();
         p.seed_room_tree(
-            ROOM,
+            room_uri,
             0,
-            Some(&PeerIdentity::signed("example.com")),
+            seeder,
             &GroupInfoOption {
                 representation: GroupInfoRepresentation::Full,
                 payload: group_info_after(&group, &alice),
             },
             &[&[1u8][..], &tree].concat(),
         );
-        assert!(p.room_tracking(ROOM).unwrap().is_some());
+        assert!(p.room_tracking(room_uri).unwrap().is_some());
     } else {
-        p.add_participant(ROOM, ALICE, NOW).unwrap();
-        p.add_participant(ROOM, BOB, NOW).unwrap();
+        p.add_participant(room_uri, ALICE, NOW).unwrap();
+        p.add_participant(room_uri, BOB, NOW).unwrap();
     }
     Room {
         alice,
@@ -155,7 +175,7 @@ fn apply_from(p: &Provider, commit: &[u8], peer: Option<&str>) -> Result<(), Upd
 /// check: refuse every external Commit, and this one is refused.
 #[test]
 fn a_listed_users_new_client_joins_by_external_commit() {
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let room = room(&p, &roles(true), None, true);
     assert!(
         apply(&p, &bobs_new_client(&room)).is_ok(),
@@ -173,7 +193,7 @@ fn a_listed_users_new_client_joins_by_external_commit() {
 /// and other.example adds a client as Bob.
 #[test]
 fn only_the_joiners_own_provider_sends_its_external_commit() {
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let room = room(&p, &roles(true), None, true);
     let commit = bobs_new_client(&room);
     for peer in [Some("other.example"), None] {
@@ -195,7 +215,7 @@ fn only_the_joiners_own_provider_sends_its_external_commit() {
 /// second client joins without the capability.
 #[test]
 fn the_role_and_the_policies_decide() {
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let room_ = room(&p, &roles(false), None, true);
     assert!(
         matches!(
@@ -205,7 +225,7 @@ fn the_role_and_the_policies_decide() {
         "PLANT-EXTERNAL-ROLE: a client joined without canAddOwnClient"
     );
 
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let room_ = room(&p, &roles(true), Some(&operational(false)), true);
     assert!(
         matches!(
@@ -223,7 +243,7 @@ fn the_role_and_the_policies_decide() {
         external_commit_when_unset: ExternalCommitWhenUnset::Deny,
         ..HubPolicy::default()
     };
-    let p = Provider::in_memory("example.com")
+    let p = Provider::in_memory("hub.example")
         .unwrap()
         .with_policy(deny);
     let room_ = room(&p, &roles(true), None, true);
@@ -233,7 +253,7 @@ fn the_role_and_the_policies_decide() {
     ));
 
     // An open room keeps the seeding bundle's GroupInfo; after a Commit with no Full GroupInfo it keeps none.
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let room_ = room(&p, &roles(true), Some(&operational(true)), true);
     assert!(p.store.kept_group_info(ROOM).unwrap().is_some());
     assert!(apply(&p, &bobs_new_client(&room_)).is_ok());
@@ -244,7 +264,7 @@ fn the_role_and_the_policies_decide() {
 /// tree the hub does not keep.
 #[test]
 fn held_proposals_and_an_untracked_room_refuse_it() {
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let mut room_ = room(&p, &roles(true), None, true);
     let remove = room_
         .bob_group
@@ -285,7 +305,7 @@ fn held_proposals_and_an_untracked_room_refuse_it() {
         "PLANT-EXTERNAL-HELD: an external Commit passed held proposals"
     );
 
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let room_ = room(&p, &roles(true), None, false);
     assert!(matches!(
         apply(&p, &bobs_new_client(&room_)),
@@ -297,7 +317,7 @@ fn held_proposals_and_an_untracked_room_refuse_it() {
 /// Alice (with it) sets it. Revert check: skip the capability check, and Bob's change is applied.
 #[test]
 fn an_operational_policy_change_needs_its_capability() {
-    let p = Provider::in_memory("example.com").unwrap();
+    let p = Provider::in_memory("hub.example").unwrap();
     let mut room_ = room(&p, &roles(true), Some(&operational(true)), true);
     let closed = encode_operational_parameters(&operational(false));
     let bobs = app_data_commit(
@@ -329,6 +349,37 @@ fn an_operational_policy_change_needs_its_capability() {
 }
 
 // ---------------------------------------------------------------- the groupInfo route
+
+/// A peer never sends an external Commit for a user of this hub, even one whose proof names this hub's domain: that
+/// user's client reaches the hub through the client lane. The same Commit from the lane, as the joiner, is applied.
+/// Revert check: let a peer speak for this provider's users, and the peer's Commit is applied.
+#[test]
+fn a_peer_never_sends_an_external_commit_for_a_user_of_this_hub() {
+    let p = Provider::in_memory("example.com").unwrap();
+    let local = "mimi://example.com/r/room";
+    let room = room_in(
+        &p,
+        local,
+        &roles(true),
+        None,
+        true,
+        Requester::LaneUser(ALICE),
+    );
+    let commit = bobs_new_client(&room);
+    let as_peer = p.apply_commit_bundle(
+        local,
+        &commit,
+        None,
+        Some(&PeerIdentity::signed("example.com")),
+        NOW,
+    );
+    assert!(
+        matches!(as_peer, Err(UpdateRefusal::Policy(_))),
+        "PLANT-PEER-LOCAL-JOIN: a peer joined a user of this hub: {as_peer:?}"
+    );
+    let as_lane = p.apply_commit_bundle(local, &commit, None, Requester::LaneUser(BOB), NOW);
+    assert!(as_lane.is_ok(), "{as_lane:?}");
+}
 
 mod group_info_route {
     use std::sync::{Arc, Mutex};
@@ -405,7 +456,7 @@ mod group_info_route {
 
     fn signed_hub(p: Provider) -> Provider {
         p.with_hub_signer(Arc::new(
-            crate::group_info_endpoint::hub_signer_from_seed(&[5u8; 32], "example.com").unwrap(),
+            crate::group_info_endpoint::hub_signer_from_seed(&[5u8; 32], "hub.example").unwrap(),
         ))
     }
 
@@ -414,7 +465,7 @@ mod group_info_route {
     /// check: answer without signing, and the answer does not verify.
     #[tokio::test]
     async fn a_listed_user_gets_the_groupinfo_signed_and_encrypted() {
-        let p = Provider::in_memory("example.com").unwrap();
+        let p = Provider::in_memory("hub.example").unwrap();
         let _room = room(&p, &roles(true), None, true);
         let (epoch, kept) = p.store.kept_group_info(ROOM).unwrap().unwrap();
         assert_eq!(epoch, 1);
@@ -460,7 +511,7 @@ mod group_info_route {
     #[tokio::test]
     async fn what_may_not_fetch_it_is_not_authorized() {
         let not_authorized = |answer: &[u8]| answer.last() == Some(&2) && answer.len() < 64;
-        let p = Provider::in_memory("example.com").unwrap();
+        let p = Provider::in_memory("hub.example").unwrap();
         let _room = room(&p, &roles(false), None, true);
         let (status, answer) = ask(signed_hub(p), ROOM, "example.com", request(BOB, None).0).await;
         assert_eq!(status, StatusCode::OK);
@@ -474,7 +525,7 @@ mod group_info_route {
             ("other.example", None, true),
             ("example.com", None, false),
         ] {
-            let p = Provider::in_memory("example.com").unwrap();
+            let p = Provider::in_memory("hub.example").unwrap();
             let _room = room(&p, &roles(true), None, true);
             let p = if signer { signed_hub(p) } else { p };
             let (status, answer) = ask(p, ROOM, peer, request(BOB, code).0).await;
@@ -482,7 +533,7 @@ mod group_info_route {
             assert!(not_authorized(&answer), "{peer} {code:?} {signer}");
         }
 
-        let p = signed_hub(Provider::in_memory("example.com").unwrap());
+        let p = signed_hub(Provider::in_memory("hub.example").unwrap());
         let (status, _) = ask(
             p,
             "mimi://other.example/r/room",
