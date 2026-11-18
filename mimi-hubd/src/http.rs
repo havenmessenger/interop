@@ -496,8 +496,9 @@ async fn submit_message(
 ///
 /// The path segment is the room this message targets (draft §5.1's `{roomId}` template - see
 /// `directory()`'s flat-key comment). Unlike `submit_message` (the JSON compat/admin lane, whose
-/// `?recipient=` key can be any opaque string), this wire twin enforces sender authorization:
-/// `authorize_sender` (active participation, not removed, room-policy canSendMessage) must pass
+/// `?recipient=` key can be any opaque string), this wire twin enforces sender authorization: the peer submits only as
+/// a user of a domain its proof authenticates (never as a user of this provider, who sends through its own provider's
+/// client lane), and `authorize_sender` (active participation, not removed, room-policy canSendMessage) must pass
 /// before anything is stored, and `NotAllowed` is
 /// returned otherwise (a `room_id` that doesn't even parse as a room this hub hosts also lands
 /// here, via `authorize_sender`'s own `assert_hub_of_record`). On success, the message is queued
@@ -507,6 +508,7 @@ async fn submit_message(
 async fn submit_message_wire(
     State(p): State<SharedProvider>,
     Path(room_id): Path<String>,
+    peer: Option<Extension<PeerCert>>,
     body: Bytes,
 ) -> Response {
     let req = match SubmitMessageRequest::decode(&body) {
@@ -514,7 +516,14 @@ async fn submit_message_wire(
         Err(_) => return crate::problem::MALFORMED_REQUEST.response(),
     };
     let sending_uri = &req.sending_uri.0;
+    let peer = peer
+        .as_ref()
+        .and_then(|Extension(PeerCert(identity))| identity.as_ref());
     let g = lock(&p);
+    if !g.peer_serves_user(sending_uri, peer) {
+        eprintln!("[mimi-hubd] submitMessage: notAllowed (the sender is not a user of the requesting provider)");
+        return (StatusCode::OK, SubmitMessageResponse::NotAllowed.encode()).into_response();
+    }
     if g.authorize_sender(&room_id, sending_uri).is_err() {
         eprintln!("[mimi-hubd] submitMessage: notAllowed (the sender is not an active participant, or lacks canSendMessage)");
         return (StatusCode::OK, SubmitMessageResponse::NotAllowed.encode()).into_response();
@@ -1152,6 +1161,9 @@ mod problem_tests;
 #[cfg(test)]
 #[path = "http_publish_tests.rs"]
 mod publish_tests;
+#[cfg(test)]
+#[path = "http_submit_sender_tests.rs"]
+mod submit_sender_tests;
 
 #[cfg(test)]
 #[path = "http_directory_tests.rs"]
@@ -1731,6 +1743,12 @@ mod tests {
         let room = "mimi://havenmessenger.com/r/x";
         let alice = "mimi://havenmessenger.com/u/alice";
         let bob = "mimi://havenmessenger.com/u/bob";
+        // The sender is another provider's member, submitted by that provider: a peer submits only as its own users.
+        let carol = "mimi://other.example/u/carol";
+        p.lock()
+            .unwrap()
+            .add_participant(room, carol, now_unix())
+            .unwrap();
         p.lock()
             .unwrap()
             .add_participant(room, alice, now_unix())
@@ -1744,18 +1762,20 @@ mod tests {
         let req = SubmitMessageRequest {
             protocol: mimi_core::protocol_wire::PROTOCOL_MLS10,
             app_message: app_message.clone(),
-            sending_uri: mimi_core::protocol_wire::IdentifierUri(alice.to_string()),
+            sending_uri: mimi_core::protocol_wire::IdentifierUri(carol.to_string()),
         };
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/mimi/pl/submitMessage/{}", urlencode_path(room)))
-                    .body(Body::from(req.encode().unwrap()))
-                    .unwrap(),
-            )
-            .await
+        let (ca, _) = crate::tls::tests::make_ca();
+        let (cert_pem, _) = crate::tls::tests::issue(&ca, vec!["other.example".into()], "other");
+        let chain = crate::tls::certs_from_pem(cert_pem.as_bytes()).unwrap();
+        let mut request = Request::builder()
+            .method("POST")
+            .uri(format!("/mimi/pl/submitMessage/{}", urlencode_path(room)))
+            .body(Body::from(req.encode().unwrap()))
             .unwrap();
+        request.extensions_mut().insert(crate::peer::PeerCert(Some(
+            crate::peer::PeerIdentity::new(chain[0].clone().into_owned()),
+        )));
+        let resp = router.oneshot(request).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         assert!(
