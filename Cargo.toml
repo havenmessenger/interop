@@ -80,7 +80,10 @@ hex = "0.4"
 default = []
 external-ops = []
 test-helpers = ["dep:hex"]
-browser-js = ["openmls/js"]
+# Builds the library for a browser (wasm32-unknown-unknown): each source of randomness it links, openmls's and the
+# virtual clients' reuse guard (getrandom 0.2), reads the browser's crypto.getRandomValues. No effect on other
+# targets.
+browser-js = ["openmls/js", "getrandom/js"]
 
 [lints.clippy]
 # Discipline: no panics/unwrap in non-test code (the prod fns return Result;

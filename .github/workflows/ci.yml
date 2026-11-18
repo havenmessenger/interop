@@ -81,6 +81,18 @@ jobs:
           fi
           PRE_COMMIT_FROM_REF="$from" PRE_COMMIT_TO_REF="$to" python3 scripts/check_commit_message_hygiene.py
 
+  browser:
+    # The library with `browser-js` builds for wasm32-unknown-unknown, the target a browser consumer links.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@stable
+      # The repository pins its toolchain (rust-toolchain.toml); the target goes to that one, not to stable.
+      - name: add the wasm32 target to the pinned toolchain
+        run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+      - name: check for wasm32
+        run: cargo check -p mimi-core --lib --locked --target wasm32-unknown-unknown --features browser-js
   spec-profile:
     # CI leg 1/3: `external-ops` on exercises openmls's own external-commit/external-proposal
     # capability directly (spec_capability_proof; see its module doc for the exact scope - it is a

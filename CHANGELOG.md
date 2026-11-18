@@ -6,6 +6,8 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `browser-js` now builds the library for wasm32-unknown-unknown: it also turns on getrandom's `js` feature, which the
+  virtual clients' reuse guard needs in a browser. CI checks that build.
 - openmls moves to its main branch as of 2026-11-18, the commit `Cargo.toml` pins. With `extensions-draft` (`mimi-hubd`), commit staging
   now enforces every AppDataUpdate list rule of draft-ietf-mls-extensions-10 §4.7: one Remove per component, no Remove
   together with an Update, and no Remove of a component with no data; Update, Remove and SelfRemove proposals are
