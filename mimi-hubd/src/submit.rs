@@ -21,6 +21,10 @@ impl Provider {
     /// [`Acceptance::Failed`] when the fan-out fails on a store error, so a sender is never told a message was taken
     /// that was not queued.
     ///
+    /// A store error can come part-way through the fan-out (other providers' outbox rows are queued before local members'
+    /// queues), so a failed message may already have reached some members; a resent copy reaches them again, and MLS drops
+    /// it as a replay.
+    ///
     /// Nothing is kept under the room itself: fan-out queues the message for each other local member and for each other
     /// provider with a participant, and those queues alone bound delivery. A room-keyed copy would have no reader, and
     /// a room's own queue, filled to its cap within the delivery lifetime, would refuse every sender.
