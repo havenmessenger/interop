@@ -1168,6 +1168,9 @@ mod client_lane_rooms_tests;
 #[path = "http_client_lane_tests.rs"]
 mod client_lane_tests;
 #[cfg(test)]
+#[path = "http_client_lane_two_hubs_tests.rs"]
+mod client_lane_two_hubs_tests;
+#[cfg(test)]
 #[path = "http_key_material_tests.rs"]
 mod key_material_tests;
 #[cfg(test)]

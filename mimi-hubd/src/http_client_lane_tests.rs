@@ -57,6 +57,15 @@ pub(super) fn lane(test: &str) -> Lane {
 
 /// [`lane`], with `rooms` as the deployment's lane room profile.
 pub(super) fn lane_with(test: &str, rooms: crate::client_lane_rooms::LaneRoomProfile) -> Lane {
+    lane_at(test, DOMAIN, rooms)
+}
+
+/// [`lane_with`], for a hub of `domain`.
+pub(super) fn lane_at(
+    test: &str,
+    domain: &str,
+    rooms: crate::client_lane_rooms::LaneRoomProfile,
+) -> Lane {
     let key = Ed25519KeyPair::from_seed_unchecked(&[7u8; 32]).expect("seed");
     let dir = std::env::temp_dir().join(format!("mimi-lane-http-{}-{test}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("dir");
@@ -70,12 +79,12 @@ pub(super) fn lane_with(test: &str, rooms: crate::client_lane_rooms::LaneRoomPro
     )
     .expect("key file");
     let provider: SharedProvider =
-        Arc::new(Mutex::new(Provider::in_memory(DOMAIN).expect("provider")));
+        Arc::new(Mutex::new(Provider::in_memory(domain).expect("provider")));
     let auth = Arc::new(ClientLaneAuth {
         keys: PeerKeys::from_file(Some(path)),
         nonces: NonceLedger::default(),
         started_unix: i64::try_from(seconds()).unwrap_or(0) - 10,
-        domain: DOMAIN.into(),
+        domain: domain.into(),
     });
     Lane {
         key,
