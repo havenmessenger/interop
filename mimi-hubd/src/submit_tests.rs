@@ -1,6 +1,7 @@
 //! A room takes every message its members may send, however many: nothing collects under the room itself, so its
 //! members' own queues are what bound delivery.
 
+use super::Acceptance;
 use crate::Provider;
 
 const ROOM: &str = "mimi://hub.example/r/room";
@@ -24,8 +25,9 @@ fn a_room_takes_more_messages_than_a_queue_holds_while_its_members_read_them() {
     let count = u64::try_from(crate::store::MAX_QUEUE_MESSAGES).unwrap() + 44;
     for n in 0..count {
         let body = format!("m{n}");
-        assert!(
+        assert_eq!(
             p.accept_application_message(ROOM, ALICE, body.as_bytes(), 10 + n),
+            Acceptance::Accepted,
             "PLANT-ROOM-QUEUE: message {n} of {count} was refused"
         );
         assert_eq!(p.fetch_message(DAVE).unwrap(), Some(body.into_bytes()));
@@ -40,34 +42,43 @@ fn a_room_takes_more_messages_than_a_queue_holds_while_its_members_read_them() {
 #[test]
 fn an_empty_or_oversize_message_is_refused_and_reaches_no_one() {
     let p = room_of(&[ALICE, DAVE]);
-    assert!(!p.accept_application_message(ROOM, ALICE, b"", 10));
+    assert_eq!(
+        p.accept_application_message(ROOM, ALICE, b"", 10),
+        Acceptance::Refused
+    );
     let oversize = vec![7u8; crate::store::MAX_ITEM_BYTES + 1];
-    assert!(!p.accept_application_message(ROOM, ALICE, &oversize, 11));
+    assert_eq!(
+        p.accept_application_message(ROOM, ALICE, &oversize, 11),
+        Acceptance::Refused
+    );
     assert!(p.fetch_message(DAVE).unwrap().is_none());
-    assert!(p.accept_application_message(
-        ROOM,
-        ALICE,
-        &vec![7u8; crate::store::MAX_ITEM_BYTES],
-        12
-    ));
+    assert_eq!(
+        p.accept_application_message(ROOM, ALICE, &vec![7u8; crate::store::MAX_ITEM_BYTES], 12),
+        Acceptance::Accepted
+    );
 }
 
 /// A sender who is not a participant is refused before anything is queued.
 #[test]
 fn a_non_participant_is_refused_and_nothing_is_queued() {
     let p = room_of(&[DAVE]);
-    assert!(!p.accept_application_message(ROOM, ALICE, b"hello", 10));
+    assert_eq!(
+        p.accept_application_message(ROOM, ALICE, b"hello", 10),
+        Acceptance::Refused
+    );
     assert!(p.fetch_message(DAVE).unwrap().is_none());
 }
 
-/// A fan-out that fails on a store error (here, the message table is gone) refuses the message, so the sender is not
-/// told it was taken. Revert check: answer accepted whatever the fan-out did, and this message "is accepted".
+/// A fan-out that fails on a store error (here, the message table is gone) is the hub's own failure, never an
+/// acceptance, so the sender is not told the message was taken. Revert check: answer accepted whatever the fan-out
+/// did, and this message "is accepted".
 #[test]
-fn a_fan_out_store_error_refuses_the_message() {
+fn a_fan_out_store_error_is_a_failure_not_an_acceptance() {
     let p = room_of(&[ALICE, DAVE]);
     p.store.break_message_queue_for_test();
-    assert!(
-        !p.accept_application_message(ROOM, ALICE, b"hello", 10),
-        "PLANT-ROOM-FANOUT-ERROR: a message nothing queued was reported accepted"
+    assert_eq!(
+        p.accept_application_message(ROOM, ALICE, b"hello", 10),
+        Acceptance::Failed,
+        "PLANT-ROOM-FANOUT-ERROR: a message nothing queued was not reported as the hub's failure"
     );
 }

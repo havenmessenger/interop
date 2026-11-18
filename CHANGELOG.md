@@ -10,8 +10,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   application message is no longer also queued under the room's own URI, a queue nothing read: it filled to its cap of
   256 within the delivery lifetime and then refused every sender in the room, though each member read their own queue.
   Fan-out alone queues the message, for each other local member and each other provider with a participant. A message
-  that is empty or larger than one queued item is still refused (`notAllowed`) and reaches no one, and so is one whose
-  fan-out fails on a store error: a sender is never told a message was taken that was not queued.
+  that is empty or larger than one queued item is still refused (`notAllowed`) and reaches no one. A message whose
+  fan-out fails on a store error is answered as the hub's own failure (500 `internal-error`, on the wire and on the
+  client lane; `SubmitMessageResponse` has no code for it), never as accepted.
 - A client lane (`MIMI_LANE_BIND_ADDR`, off by default): a separate TLS listener on which a provider's client-facing
   service acts for one of this hub's users at a time, by an RFC 9421 signature tagged `mimi-client-lane`. The user
   publishes and withdraws their KeyPackages, reads and acknowledges their queued Welcomes and messages, creates rooms

@@ -118,3 +118,33 @@ async fn a_peer_cannot_submit_as_a_third_providers_user() {
     );
     assert_eq!(queued_for(&p, ALICE), 0, "nothing was fanned out");
 }
+
+/// A fan-out that fails on a store error is answered 500 `internal-error`: the wire response has no code for the
+/// hub's own failure, and it is never `accepted`. Revert check: answer it in-band as accepted, and the status is 200.
+#[tokio::test]
+async fn a_store_error_is_answered_as_the_hubs_failure() {
+    let (router, p) = room();
+    p.lock().expect("lock").store.break_message_queue_for_test();
+    let body = SubmitMessageRequest {
+        protocol: PROTOCOL_MLS10,
+        app_message: real_mls_envelope_bytes(),
+        sending_uri: IdentifierUri(CAROL.into()),
+    }
+    .encode()
+    .expect("encode");
+    let mut request = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/mimi/pl/submitMessage/{}",
+            ROOM.replace(':', "%3A").replace('/', "%2F")
+        ))
+        .body(Body::from(body))
+        .expect("request");
+    request.extensions_mut().insert(peer("other.example"));
+    let response = router.oneshot(request).await.expect("answer");
+    assert_eq!(
+        response.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "PLANT-WIRE-STORE-ERROR: a store error was not answered as the hub's failure"
+    );
+}

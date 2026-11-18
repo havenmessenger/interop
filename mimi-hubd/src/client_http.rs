@@ -373,15 +373,15 @@ async fn submit_message(
     let Ok(message) = STANDARD.decode(&request.message) else {
         return crate::problem::MALFORMED_REQUEST.response();
     };
-    if crate::http::lock(&state.provider).accept_application_message(
+    match crate::http::lock(&state.provider).accept_application_message(
         &request.room,
         &user.user,
         &message,
         now_unix(),
     ) {
-        Json(Empty {}).into_response()
-    } else {
-        crate::problem::NOT_PERMITTED.response()
+        crate::submit::Acceptance::Accepted => Json(Empty {}).into_response(),
+        crate::submit::Acceptance::Refused => crate::problem::NOT_PERMITTED.response(),
+        crate::submit::Acceptance::Failed => crate::problem::INTERNAL_ERROR.response(),
     }
 }
 

@@ -523,7 +523,9 @@ async fn submit_message(
 /// returned otherwise (a `room_id` that doesn't even parse as a room this hub hosts also lands
 /// here, via `authorize_sender`'s own `assert_hub_of_record`). On success, the message is fanned out
 /// (`Provider::fan_out_application`): to every other local participant's queue, and to the outbox for
-/// every other provider with a participant (DIVERGENCES.md, DIV-5). Nothing is queued under the room itself.
+/// every other provider with a participant (DIVERGENCES.md, DIV-5). Nothing is queued under the room itself. A fan-out
+/// that fails on a store error is answered 500 `internal-error`: `SubmitMessageResponse` has no code for the hub's own
+/// failure, and it is never answered `accepted`.
 async fn submit_message_wire(
     State(p): State<SharedProvider>,
     Path(room_id): Path<String>,
@@ -543,13 +545,14 @@ async fn submit_message_wire(
         eprintln!("[mimi-hubd] submitMessage: notAllowed (the sender is not a user of the requesting provider)");
         return (StatusCode::OK, SubmitMessageResponse::NotAllowed.encode()).into_response();
     }
+    // The response has no code for the hub's own failure, so a store error is answered at the HTTP layer instead.
     let outcome =
-        if g.accept_application_message(&room_id, sending_uri, &req.app_message, now_unix()) {
-            SubmitMessageResponse::Accepted {
+        match g.accept_application_message(&room_id, sending_uri, &req.app_message, now_unix()) {
+            crate::submit::Acceptance::Accepted => SubmitMessageResponse::Accepted {
                 accepted_timestamp: now_unix_millis(),
-            }
-        } else {
-            SubmitMessageResponse::NotAllowed
+            },
+            crate::submit::Acceptance::Refused => SubmitMessageResponse::NotAllowed,
+            crate::submit::Acceptance::Failed => return crate::problem::INTERNAL_ERROR.response(),
         };
     (StatusCode::OK, outcome.encode()).into_response()
 }
