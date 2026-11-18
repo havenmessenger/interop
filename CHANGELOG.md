@@ -7,7 +7,7 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 ## Unreleased
 
 - A client lane (`MIMI_LANE_BIND_ADDR`, off by default): a separate TLS listener on which a provider's client-facing
-  service acts for one of this hub's users at a time, by an RFC 9421 signature tagged `haven-client-lane`. The user
+  service acts for one of this hub's users at a time, by an RFC 9421 signature tagged `mimi-client-lane`. The user
   publishes and withdraws their KeyPackages, reads and acknowledges their queued Welcomes and messages, creates rooms
   hosted here, sends messages and sends updates to them. What a created room starts with (its room policy, the
   creator's role, whether it allows external Commits) is the deployment's, from `MIMI_LANE_ROOM_POLICY`, by default a

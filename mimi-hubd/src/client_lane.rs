@@ -2,7 +2,7 @@
 //!
 //! MIMI leaves the client-to-provider interface to each provider. Here the provider's client-facing service (the one
 //! that authenticates its users' sessions) signs every request it forwards with HTTP Message Signatures (RFC 9421,
-//! Ed25519), covering the user it acts for. The signature (`tag="haven-client-lane"`) covers, in order:
+//! Ed25519), covering the user it acts for. The signature (`tag="mimi-client-lane"`) covers, in order:
 //!
 //! ```text
 //! "@method" "@target-uri" "content-digest" "mimi-client-user" "mimi-client-device"
@@ -33,7 +33,7 @@ pub const MAX_HEADER_VALUE_LEN: usize = 512;
 
 /// What a lane request's signature must cover and how old it may be.
 pub const LANE: VerifyProfile = VerifyProfile {
-    tag: "haven-client-lane",
+    tag: "mimi-client-lane",
     strict_tag: true,
     required_with_body: &[
         "@method",

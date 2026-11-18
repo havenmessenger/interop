@@ -12,8 +12,8 @@ const USER: &str = "mimi://mimi.example.org/u/ana";
 const DEVICE: &str = "dev-handle-0123456789a";
 const BODY: &[u8] = br#"{"after":0,"limit":50}"#;
 const DIGEST: &str = "sha-256=:3Ecv0of+AaZz8QdLHHa5NMuBdzjiu4LNhMowvznk93o=:";
-const INPUT: &str = r#"haven=("@method" "@target-uri" "content-digest" "mimi-client-user" "mimi-client-device");created=1700000000;nonce="AAECAwQFBgcICQoLDA0ODw";keyid="lane1";tag="haven-client-lane""#;
-const SIGNATURE: &str = "haven=:C80+TOo8WjQVYQlB9ucwmjQ23I8uHaI0uuw04FQc0D6IJHcZvCrZtt9Z0fEeT7AI7WoX4uceJWWE+9ir/r82CA==:";
+const INPUT: &str = r#"haven=("@method" "@target-uri" "content-digest" "mimi-client-user" "mimi-client-device");created=1700000000;nonce="AAECAwQFBgcICQoLDA0ODw";keyid="lane1";tag="mimi-client-lane""#;
+const SIGNATURE: &str = "haven=:Ny/e/mZfTf6TzMvewSi81IVmjdbbNJNPxiwU2knYMNZck888gI62TSa8YfePMhNgef9tzaSkN8BDpJFmxfG5Dw==:";
 
 /// A lane key file of its own for each test, so tests running at once never share one.
 fn lane_auth(test: &str, started: u64) -> (ClientLaneAuth, std::path::PathBuf) {
@@ -160,7 +160,7 @@ fn every_covered_part_is_bound() {
 #[test]
 fn a_peer_signature_is_not_a_lane_signature() {
     let (auth, dir) = lane_auth("peer-tag", CREATED - 60);
-    let input = INPUT.replace(r#"tag="haven-client-lane""#, r#"tag="mimi""#);
+    let input = INPUT.replace(r#"tag="mimi-client-lane""#, r#"tag="mimi""#);
     let got = check(
         &auth,
         "POST",

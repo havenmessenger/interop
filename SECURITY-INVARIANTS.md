@@ -77,7 +77,7 @@ for the epoch; and changing nothing but the joiner's own entry in the list. A Gr
 
 The client lane (`MIMI_LANE_BIND_ADDR`, off when unset) is a listener of its own; a peer request is not served there,
 nor a lane request on the peer listener. A lane request verifies only with a key in `MIMI_LANE_KEYS`, under the tag
-`haven-client-lane` and nothing else, with a new nonce, at most 30 s old, signed after the process started
+`mimi-client-lane` and nothing else, with a new nonce, at most 30 s old, signed after the process started
 (`mimi-hubd/src/client_lane.rs`); its `mimi-client-user` must be a user URI on this hub's domain. Every route acts for
 that user and takes no user from the body (`client_http.rs`). In a room change the user speaks only for themself
 (`requester.rs`): a leave removes only them, an external Commit joins only them, a GroupInfo that seeds a room's tree

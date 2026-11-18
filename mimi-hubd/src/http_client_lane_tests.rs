@@ -108,7 +108,7 @@ pub(super) fn signed(key: &Ed25519KeyPair, route: &str, user: &str, body: &str) 
     ))[..22]
         .to_string();
     let params = format!(
-        r#"("@method" "@target-uri" "content-digest" "mimi-client-user" "mimi-client-device");created={};nonce="{nonce}";keyid="lane1";tag="haven-client-lane""#,
+        r#"("@method" "@target-uri" "content-digest" "mimi-client-user" "mimi-client-device");created={};nonce="{nonce}";keyid="lane1";tag="mimi-client-lane""#,
         seconds()
     );
     let base = format!(

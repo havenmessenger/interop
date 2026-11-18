@@ -408,7 +408,7 @@ this hub's answer for a provider whose client-facing service authenticates its u
 request for one of this hub's users, and the hub acts for that user and no other. It is a local extension, not a MIMI
 route (DIVERGENCES, DIV-19), served only on the listener `MIMI_LANE_BIND_ADDR` names, under `/mimi/client/v1/`.
 
-Every request is an RFC 9421 signature with tag `haven-client-lane`, covering `@method`, `@target-uri`,
+Every request is an RFC 9421 signature with tag `mimi-client-lane`, covering `@method`, `@target-uri`,
 `content-digest`, `mimi-client-user` and `mimi-client-device`, with `created`, `nonce` and `keyid`; it verifies with a
 key in `MIMI_LANE_KEYS`, its nonce is new, it is at most 30 s old, and it was signed after this process started.
 `mimi-client-user` must be a user URI on this hub's domain; the routes act for that user and take no user from a body.
