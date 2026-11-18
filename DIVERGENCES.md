@@ -24,7 +24,7 @@ A client can join a room by external Commit (protocol-07 §5.6), as the drafts d
   (`external_commit_when_unset = "deny"` in the hub policy).
 - **Who may join**: a listed participant whose role holds `canAddOwnClient` (a new client of its user), or an unlisted
   user when role 0 holds `canOpenJoin`, whose external Commit then adds that user, and only that user, to the
-  participant list. A room with no roles has no role checks (room-policy PR #52). Preauthorized users are not read and
+  participant list. A room with no roles has no role checks (room-policy PR #52: "A room that has no `roles_list` has no role-based restrictions."). Preauthorized users are not read and
   joining codes are refused: not built yet.
 - **`POST /groupInfo/{roomId}`**: the request's `SignWithLabel` must verify, its BasicCredential must name a user of
   the provider the request's proof authenticates, and the user must be one who may join. The answer is the room's last
@@ -396,7 +396,7 @@ Enforced: `external_commit_allowed` (DIV-1). `external_proposal_allowed` can onl
 accepts no external proposal from a peer (INV-MLS-001b); it is kept and not otherwise acted on. Every other field is
 kept and not enforced. A change to the component needs the proposer's role to hold `canChangeMlsOperationalPolicies`
 (`0x0600`), which -04 lists as reserved: this hub reads it as the draft's own capability for the change, pending the
-draft's answer, and a room with no roles has no role checks (room-policy PR #52).
+draft's answer, and a room with no roles has no role checks (room-policy PR #52: "A room that has no `roles_list` has no role-based restrictions.").
 
 ## DIV-12 - a `Partial` `GroupInfoOption` payload carries a length prefix
 
@@ -461,7 +461,11 @@ room-policy-04, with values `0x0024` to `0x0030` suggested and not yet registere
 They are read the way the participant-list update is, as the private types `0xF7A3` and `0xF7A4`
 while the message is being read. The private JSON carrier `0xF7A1` that earlier versions read is
 gone. A base policy applies to roles, so a base update for a room that has no roles is refused until a
-role list has been sent; room-policy-04 has no such rule. This hub keeps base and roles as one policy and, once a room
+role list has been sent; room-policy-04 has no such rule. Room-policy PR
+[#52](https://github.com/ietf-wg-mimi/mimi-room-policy/pull/52), still open, makes it the opposite rule: "An update to
+the `base_room_policy` component is valid in a room that has no `roles_list`", and such a room "has no role-based
+restrictions". If it merges, this hub takes a base policy before any role list and applies no role rule until a role
+list arrives; the reason that follows would no longer hold. This hub keeps base and roles as one policy and, once a room
 has a policy, enforces `canSendMessage` by role, so a base policy with no roles would leave nobody able to send. A role
 list sent first sets the roles and leaves the base policy at the draft's defaults. A role list whose index 1 is not
 named `banned` is refused: room-policy-04 says the banned role "always has role_index = 1 and role_name = banned" and
@@ -479,7 +483,7 @@ role 1 is refused while the list does not define role 1. A room with no policy i
 `canChangeRoleDefinitions` (`0x0503`), to the `base_room_policy` `canChangeRoomMembershipStyle` (`0x0502`), and to the
 operational policy `canChangeMlsOperationalPolicies` (`0x0600`, DIV-18) (room-policy-04 §8.6). These changes arrive by
 value, so the proposer is the committer. A room with no roles has no role checks, and its first `roles_list` by Commit
-is refused (room-policy PR #52, below). On an untracked room the proposer is not known, so none of this is checked.
+is refused (room-policy PR #52: "A Commit that adds a `roles_list` to a group that has none is invalid.", below). On an untracked room the proposer is not known, so none of this is checked.
 
 **Who made a change is checked for a tracked room only** (one whose ratchet tree the hub keeps, DIV-10). There the
 sender's leaf maps to a member, and room-policy-04 §8.1 authorizes each change for its proposer: the committer for a
@@ -498,7 +502,8 @@ A tracked room's policy and list are its group's. When the room is seeded, the G
 `base_room_policy` and `participant_list` replace what the hub stored (a GroupContext with no `roles_list` leaves the
 room with no policy), and every participant it lists must be in the tree. Room-policy PR
 [#52](https://github.com/ietf-wg-mimi/mimi-room-policy/pull/52), still open, sets a `roles_list` when the MLS group is
-created: a Commit that adds a `roles_list` to a group that has none is invalid, and a room with no `roles_list` has no
+created, in its change "Set the roles_list at group creation" (its title and description name only its other change,
+the `base_room_policy` one in DIV-15): a Commit that adds a `roles_list` to a group that has none is invalid, and a room with no `roles_list` has no
 role-based restrictions. Room-policy-04 as written does not say whether a first `roles_list` may arrive by Commit;
 this reading is the PR's, not -04's. The hub follows it for tracked rooms and refuses such a Commit; an untracked room
 still takes its first role list by Commit, as below. The operator's `roomPolicy`, `memberRole` and `addParticipant` answer 409 for
