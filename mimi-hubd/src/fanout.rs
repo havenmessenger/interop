@@ -23,7 +23,7 @@ use std::sync::Arc;
 use mimi_core::protocol_wire::FanoutMessage;
 use tokio::sync::Notify;
 
-use crate::store::ParticipantRow;
+use crate::store::{ParticipantRow, QueueRefused};
 use crate::Provider;
 
 /// What one fan-out queued: the providers it went to, the local members it was queued for, and the local members whose
@@ -36,30 +36,29 @@ pub struct FanoutReport {
 }
 
 impl Provider {
-    /// Queue `messages`, in order, for each of `members`. A member whose queue refuses one of them is skipped and logged,
-    /// and the others are still queued: one full queue never stops delivery to the rest. Returns how many members got
-    /// every message, and the members skipped.
+    /// Queue `messages`, in order, for each of `members`, each member's set all or none. A member whose queue refuses
+    /// it (full, or out of bounds: [`QueueRefused`]) is skipped and logged, and the others are still queued: one full
+    /// queue never stops delivery to the rest. Any other store error fails the fan-out. Returns how many members got
+    /// the messages, and the members skipped.
     pub(crate) fn queue_for_members<'a>(
         &self,
         members: impl IntoIterator<Item = &'a String>,
         messages: &[&[u8]],
         now_unix: u64,
-    ) -> (usize, Vec<String>) {
+    ) -> anyhow::Result<(usize, Vec<String>)> {
         let mut queued = 0;
         let mut skipped = Vec::new();
         for member in members {
-            match messages
-                .iter()
-                .try_for_each(|message| self.store.enqueue_message(member, message, now_unix))
-            {
+            match self.store.enqueue_messages(member, messages, now_unix) {
                 Ok(()) => queued += 1,
-                Err(error) => {
+                Err(error) if error.downcast_ref::<QueueRefused>().is_some() => {
                     eprintln!("[mimi-hubd] fan-out: skipped a local member, its queue refused the item: {error}");
                     skipped.push(member.clone());
                 }
+                Err(error) => return Err(error),
             }
         }
-        (queued, skipped)
+        Ok((queued, skipped))
     }
 
     /// Wake `wake` after queueing fan-out, so the outbox worker does not wait for its next tick.
@@ -123,7 +122,7 @@ impl Provider {
             &providers,
             &FanoutMessage::commit(timestamp, commit),
         )?;
-        let (queued, skipped) = self.queue_for_members(&local, &[commit], now_unix);
+        let (queued, skipped) = self.queue_for_members(&local, &[commit], now_unix)?;
         let mut report = FanoutReport {
             providers: providers.into_iter().collect(),
             local: queued,
@@ -166,10 +165,11 @@ impl Provider {
                 // A local member whose Welcome queue refuses it is skipped; the others still get theirs.
                 match self.relay_welcome(&user, &welcome, now_unix) {
                     Ok(()) => report.local += 1,
-                    Err(error) => {
+                    Err(error) if error.downcast_ref::<QueueRefused>().is_some() => {
                         eprintln!("[mimi-hubd] fan-out: skipped a local member, its queue refused the Welcome: {error}");
                         report.skipped.push(user.clone());
                     }
+                    Err(error) => return Err(error),
                 }
             } else if let Some(provider) = self.store.provider_for_kpref(kpref)? {
                 providers.insert(provider.to_ascii_lowercase());
@@ -214,7 +214,7 @@ impl Provider {
         let messages: Vec<&[u8]> = std::iter::once(proposal)
             .chain(more_proposals.iter().map(Vec::as_slice))
             .collect();
-        let (queued, skipped) = self.queue_for_members(&local, &messages, now_unix);
+        let (queued, skipped) = self.queue_for_members(&local, &messages, now_unix)?;
         Ok(FanoutReport {
             providers: providers.into_iter().collect(),
             local: queued,
@@ -241,7 +241,7 @@ impl Provider {
         let (providers, local) = self.split_rows(&rows);
         let fanout = FanoutMessage::application(crate::outbox::now_ms(), message);
         self.enqueue_fanout(room_uri, &providers, &fanout)?;
-        let (queued, skipped) = self.queue_for_members(&local, &[message], now_unix);
+        let (queued, skipped) = self.queue_for_members(&local, &[message], now_unix)?;
         Ok(FanoutReport {
             providers: providers.into_iter().collect(),
             local: queued,

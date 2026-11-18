@@ -551,9 +551,10 @@ impl Provider {
                 // A user whose Welcome queue refuses it is skipped; the Welcome still reaches the others it names.
                 match self.relay_welcome(&user, &welcome, now_unix) {
                     Ok(()) => users.push(user),
-                    Err(error) => eprintln!(
+                    Err(error) if error.downcast_ref::<store::QueueRefused>().is_some() => eprintln!(
                         "[mimi-hubd] welcome: skipped a local user, its queue refused the Welcome: {error}"
                     ),
+                    Err(error) => return Err(error),
                 }
             }
         }

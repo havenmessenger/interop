@@ -190,3 +190,83 @@ fn a_full_local_queue_does_not_stop_the_others() {
     }
     assert_eq!(i64::from(daves), crate::store::MAX_QUEUE_MESSAGES);
 }
+
+/// A member's bundle is queued whole or not at all: Dave, one slot short of a proposal and the one held beside it,
+/// keeps exactly what he had, and Erin gets both. Revert check: queue the bundle item by item, and Dave's queue reaches
+/// the cap holding half of it.
+#[test]
+fn a_member_gets_a_whole_bundle_or_none_of_it() {
+    let erin = "mimi://hub.example/u/erin";
+    let p = hub_with(&[ALICE, DAVE, erin]);
+    for n in 0..crate::store::MAX_QUEUE_MESSAGES - 1 {
+        p.store
+            .enqueue_message(DAVE, format!("old-{n}").as_bytes(), 1)
+            .unwrap();
+    }
+    let report = p
+        .fan_out_proposals(ROOM, b"proposal", &[b"more".to_vec()], 2)
+        .unwrap();
+    assert_eq!(report.skipped, vec![DAVE.to_string()]);
+    let mut daves = Vec::new();
+    while let Some(item) = p.fetch_message(DAVE).unwrap() {
+        daves.push(item);
+    }
+    assert_eq!(
+        i64::try_from(daves.len()).unwrap(),
+        crate::store::MAX_QUEUE_MESSAGES - 1,
+        "PLANT-FANOUT-BUNDLE: Dave holds part of the bundle"
+    );
+    assert!(daves.iter().all(|item| item.starts_with(b"old-")));
+    assert_eq!(p.fetch_message(erin).unwrap(), Some(b"proposal".to_vec()));
+    assert_eq!(p.fetch_message(erin).unwrap(), Some(b"more".to_vec()));
+}
+
+/// A Welcome naming two local users' KeyPackages reaches the one whose Welcome queue has room, although the other's is
+/// full; the full queue is left as it was. Revert check: let the refusal end delivery, and Erin gets no Welcome.
+#[test]
+fn a_full_welcome_queue_does_not_stop_the_other_welcomed_user() {
+    let p = Provider::in_memory("hub.example").unwrap();
+    let (dave, erin) = (Member::new(DAVE), Member::new("mimi://hub.example/u/erin"));
+    let (daves, erins) = (dave.key_package(), erin.key_package());
+    p.publish_key_package("dave", &daves.tls_serialize_detached().unwrap(), 1)
+        .unwrap();
+    p.publish_key_package("erin", &erins.tls_serialize_detached().unwrap(), 1)
+        .unwrap();
+    for n in 0..crate::store::MAX_QUEUE_WELCOMES {
+        p.store
+            .enqueue_welcome("dave", format!("old-{n}").as_bytes(), 1)
+            .unwrap();
+    }
+    let alice = Member::new("mimi://other.example/u/alice");
+    let mut group = alice.create_group(b"room");
+    let (_commit, welcome, _info) = group
+        .add_members(&alice.provider, &alice.signer, &[daves, erins])
+        .unwrap();
+    let users = p
+        .deliver_notified_welcome_to(&welcome.tls_serialize_detached().unwrap(), 2)
+        .unwrap();
+    assert_eq!(
+        users,
+        vec!["erin".to_string()],
+        "PLANT-FANOUT-WELCOME: the full queue stopped Erin's Welcome"
+    );
+    assert!(p.fetch_welcome("erin").unwrap().is_some());
+    let mut daves_queue = 0;
+    while p.fetch_welcome("dave").unwrap().is_some() {
+        daves_queue += 1;
+    }
+    assert_eq!(i64::from(daves_queue), crate::store::MAX_QUEUE_WELCOMES);
+}
+
+/// A store error that is not a queue's refusal (here, the message table is gone) fails the fan-out instead of being
+/// skipped member by member, so a broken store is loud. Revert check: skip every error, and this fan-out "succeeds".
+#[test]
+fn a_store_error_fails_the_fan_out() {
+    let erin = "mimi://hub.example/u/erin";
+    let p = hub_with(&[ALICE, DAVE, erin]);
+    p.store.break_message_queue_for_test();
+    assert!(
+        p.fan_out_application(ROOM, ALICE, b"hello", 2).is_err(),
+        "PLANT-FANOUT-STORE-ERROR: a store error was skipped as a refusal"
+    );
+}

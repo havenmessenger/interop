@@ -266,6 +266,12 @@ fn expired_before(now_unix: u64) -> i64 {
 // Store-and-forward bounds (anti-DoS; ephemeral relay state). A recipient cannot queue more than
 // these, and items expire - the provider is a delivery service, not durable storage.
 pub const MAX_ITEM_BYTES: usize = 64 * 1024; // per welcome/message
+/// The store refused to queue an item for a recipient: the queue is full, or the item or recipient is out of bounds.
+/// A fan-out skips that recipient and goes on; any other store error is not this.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct QueueRefused(pub String);
+
 pub const MAX_QUEUE_WELCOMES: i64 = 32; // pending welcomes per recipient
 pub const MAX_QUEUE_MESSAGES: i64 = 256; // pending messages per recipient
 pub const RECIPIENT_MAX_LEN: usize = 256; // routing-key length bound
@@ -896,26 +902,49 @@ impl SqliteStore {
         cap: i64,
         now_unix: u64,
     ) -> anyhow::Result<()> {
+        self.enqueue_all(table, recipient, &[bytes], cap, now_unix)
+    }
+
+    /// Queue `items` for `recipient`, all or none: when the queue has no room for every one of them, or one is out of
+    /// bounds, nothing is queued and the refusal is a [`QueueRefused`]. Any other error is the store's own.
+    fn enqueue_all(
+        &self,
+        table: &str,
+        recipient: &str,
+        items: &[&[u8]],
+        cap: i64,
+        now_unix: u64,
+    ) -> anyhow::Result<()> {
         let recipient = mimi_core::uri::canonical(recipient);
         let recipient = recipient.as_str();
         if recipient.is_empty() || recipient.len() > RECIPIENT_MAX_LEN {
-            anyhow::bail!("recipient must be 1..={RECIPIENT_MAX_LEN} bytes");
+            return Err(
+                QueueRefused(format!("recipient must be 1..={RECIPIENT_MAX_LEN} bytes")).into(),
+            );
         }
-        if bytes.is_empty() || bytes.len() > MAX_ITEM_BYTES {
-            anyhow::bail!("item must be 1..={MAX_ITEM_BYTES} bytes");
+        if items
+            .iter()
+            .any(|bytes| bytes.is_empty() || bytes.len() > MAX_ITEM_BYTES)
+        {
+            return Err(QueueRefused(format!("item must be 1..={MAX_ITEM_BYTES} bytes")).into());
         }
-        let depth: i64 = self.conn.query_row(
+        let tx = self.conn.unchecked_transaction()?;
+        let depth: i64 = tx.query_row(
             &format!("SELECT COUNT(*) FROM {table} WHERE recipient = ?1"),
             params![recipient],
             |r| r.get(0),
         )?;
-        if depth >= cap {
-            anyhow::bail!("queue full for recipient (cap {cap})");
+        let wanted = i64::try_from(items.len()).unwrap_or(i64::MAX);
+        if depth.saturating_add(wanted) > cap {
+            return Err(QueueRefused(format!("queue full for recipient (cap {cap})")).into());
         }
-        self.conn.execute(
-            &format!("INSERT INTO {table} (recipient, bytes, ts) VALUES (?1, ?2, ?3)"),
-            params![recipient, bytes, now_unix as i64],
-        )?;
+        for bytes in items {
+            tx.execute(
+                &format!("INSERT INTO {table} (recipient, bytes, ts) VALUES (?1, ?2, ?3)"),
+                params![recipient, bytes, now_unix as i64],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -953,6 +982,28 @@ impl SqliteStore {
         let recipient = recipient.as_str();
         self.dequeue("welcomes", recipient)
     }
+    /// Make every later message enqueue fail as a store error (not a refusal), for tests of what a fan-out does then.
+    #[cfg(test)]
+    pub(crate) fn break_message_queue_for_test(&self) {
+        self.conn.execute_batch("DROP TABLE messages").unwrap();
+    }
+
+    /// Queue several messages for `recipient` in order, all or none (see [`Self::enqueue_all`]).
+    pub fn enqueue_messages(
+        &self,
+        recipient: &str,
+        messages: &[&[u8]],
+        now_unix: u64,
+    ) -> anyhow::Result<()> {
+        self.enqueue_all(
+            "messages",
+            recipient,
+            messages,
+            MAX_QUEUE_MESSAGES,
+            now_unix,
+        )
+    }
+
     pub fn enqueue_message(
         &self,
         recipient: &str,
