@@ -163,3 +163,30 @@ fn an_unrecorded_welcome_goes_to_the_added_users_providers() {
         .collect();
     assert_eq!(welcome_domains, ["b.example"]);
 }
+
+/// One local member whose queue is full does not stop the message reaching the members after it: they get it, the
+/// full member is reported as skipped and its queue is left as it was. Revert check: let a refused enqueue end the
+/// loop, and Erin gets nothing.
+#[test]
+fn a_full_local_queue_does_not_stop_the_others() {
+    let erin = "mimi://hub.example/u/erin";
+    let p = hub_with(&[ALICE, DAVE, erin]);
+    for n in 0..crate::store::MAX_QUEUE_MESSAGES {
+        p.store
+            .enqueue_message(DAVE, format!("old-{n}").as_bytes(), 1)
+            .unwrap();
+    }
+    let report = p.fan_out_application(ROOM, ALICE, b"hello", 2).unwrap();
+    assert_eq!(report.local, 1, "only Erin was queued");
+    assert_eq!(report.skipped, vec![DAVE.to_string()]);
+    assert_eq!(
+        p.fetch_message(erin).unwrap(),
+        Some(b"hello".to_vec()),
+        "PLANT-FANOUT-FULL: a full queue before Erin's stopped her delivery"
+    );
+    let mut daves = 0;
+    while p.fetch_message(DAVE).unwrap().is_some() {
+        daves += 1;
+    }
+    assert_eq!(i64::from(daves), crate::store::MAX_QUEUE_MESSAGES);
+}

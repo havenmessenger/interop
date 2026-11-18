@@ -88,9 +88,8 @@ impl Provider {
             return Ok(FollowedDelivery::Delivered(users.len()));
         }
         let message = message_of(&fanout.message_and_tail).unwrap_or(&fanout.message_and_tail);
-        for member in &members {
-            self.store.enqueue_message(member, message, now_unix)?;
-        }
-        Ok(FollowedDelivery::Delivered(members.len()))
+        // A member whose queue refuses the message is skipped (and logged); the others still get it.
+        let (queued, _skipped) = self.queue_for_members(&members, &[message], now_unix);
+        Ok(FollowedDelivery::Delivered(queued))
     }
 }

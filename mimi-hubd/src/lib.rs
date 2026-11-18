@@ -227,10 +227,11 @@ const POLICY_CHANGE_CAPABILITIES: [(u16, mimi_core::room_policy::Capability, &st
 pub(crate) fn log_fanout(what: &str, room_uri: &str, report: anyhow::Result<fanout::FanoutReport>) {
     match report {
         Ok(report) => eprintln!(
-            "[mimi-hubd] fan-out: {what} for {room_uri} queued for {} provider(s) {:?} and {} local member(s)",
+            "[mimi-hubd] fan-out: {what} for {room_uri} queued for {} provider(s) {:?} and {} local member(s), {} skipped (queue refused)",
             report.providers.len(),
             report.providers,
-            report.local
+            report.local,
+            report.skipped.len()
         ),
         Err(error) => eprintln!("[mimi-hubd] fan-out: {what} for {room_uri} could not be queued: {error}"),
     }
@@ -547,8 +548,13 @@ impl Provider {
         let mut users = Vec::new();
         for kpref in members {
             if let Some(user) = self.store.client_for_kpref(&kpref)? {
-                self.relay_welcome(&user, &welcome, now_unix)?;
-                users.push(user);
+                // A user whose Welcome queue refuses it is skipped; the Welcome still reaches the others it names.
+                match self.relay_welcome(&user, &welcome, now_unix) {
+                    Ok(()) => users.push(user),
+                    Err(error) => eprintln!(
+                        "[mimi-hubd] welcome: skipped a local user, its queue refused the Welcome: {error}"
+                    ),
+                }
             }
         }
         Ok(users)

@@ -6,6 +6,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- One local member whose queue refuses an item (full: 256 messages or 32 Welcomes, or the item out of bounds) no
+  longer stops fan-out to the others: that member is skipped and logged, and every other local member still gets
+  the Commit, Welcome, held proposal, application message or followed room's message. The fan-out log line counts the
+  members skipped.
 - `submitMessage` (`/mimi/pl/submitMessage/{roomId}`) takes a message only from a peer submitting as a user of a
   domain its proof authenticates: never as a user of this provider, and not as a third provider's user. A refused
   message is answered `notAllowed` and is neither stored nor fanned out.
