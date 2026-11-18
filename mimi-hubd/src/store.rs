@@ -263,15 +263,15 @@ fn expired_before(now_unix: u64) -> i64 {
     i64::try_from(now_unix.saturating_sub(PROPOSAL_TTL_SECS)).unwrap_or(i64::MAX)
 }
 
-// Store-and-forward bounds (anti-DoS; ephemeral relay state). A recipient cannot queue more than
-// these, and items expire - the provider is a delivery service, not durable storage.
-pub const MAX_ITEM_BYTES: usize = 64 * 1024; // per welcome/message
 /// The store refused to queue an item for a recipient: the queue is full, or the item or recipient is out of bounds.
 /// A fan-out skips that recipient and goes on; any other store error is not this.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct QueueRefused(pub String);
 
+// Store-and-forward bounds (anti-DoS; ephemeral relay state). A recipient cannot queue more than
+// these, and items expire - the provider is a delivery service, not durable storage.
+pub const MAX_ITEM_BYTES: usize = 64 * 1024; // per welcome/message
 pub const MAX_QUEUE_WELCOMES: i64 = 32; // pending welcomes per recipient
 pub const MAX_QUEUE_MESSAGES: i64 = 256; // pending messages per recipient
 pub const RECIPIENT_MAX_LEN: usize = 256; // routing-key length bound
