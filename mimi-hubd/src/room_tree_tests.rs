@@ -300,3 +300,32 @@ fn a_tracked_rooms_proposal_is_queued_so_the_commit_naming_it_stages() {
         .unwrap();
     assert_eq!(group.members().count(), 1);
 }
+
+/// On the client lane a GroupInfo seeds the room only when the lane user signed it: Bob's request with Alice's GroupInfo
+/// leaves the room untracked, and Alice's own seeds it. Revert check: let a lane user speak for any user, and Bob's
+/// request seeds the room.
+#[test]
+fn on_the_client_lane_only_the_group_info_signer_seeds_the_room() {
+    use crate::requester::Requester;
+    let p = hub();
+    let room = room(&p);
+    p.seed_room_tree(
+        ROOM,
+        0,
+        Requester::LaneUser("mimi://example.com/u/bob"),
+        &full(&room.group_info),
+        &tree_option(&room.tree),
+    );
+    assert!(
+        p.room_tracking(ROOM).unwrap().is_none(),
+        "PLANT-LANE-SEED: a lane user seeded the room with another user's GroupInfo"
+    );
+    p.seed_room_tree(
+        ROOM,
+        0,
+        Requester::LaneUser("mimi://example.com/u/alice"),
+        &full(&room.group_info),
+        &tree_option(&room.tree),
+    );
+    assert!(p.room_tracking(ROOM).unwrap().is_some());
+}

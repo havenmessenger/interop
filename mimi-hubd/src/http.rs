@@ -544,23 +544,14 @@ async fn submit_message_wire(
         eprintln!("[mimi-hubd] submitMessage: notAllowed (the sender is not a user of the requesting provider)");
         return (StatusCode::OK, SubmitMessageResponse::NotAllowed.encode()).into_response();
     }
-    if g.authorize_sender(&room_id, sending_uri).is_err() {
-        eprintln!("[mimi-hubd] submitMessage: notAllowed (the sender is not an active participant, or lacks canSendMessage)");
-        return (StatusCode::OK, SubmitMessageResponse::NotAllowed.encode()).into_response();
-    }
-    let outcome = match g.submit_message(&room_id, &req.app_message, now_unix()) {
-        Ok(()) => {
-            crate::log_fanout(
-                "application message",
-                &room_id,
-                g.fan_out_application(&room_id, sending_uri, &req.app_message, now_unix()),
-            );
+    let outcome =
+        if g.accept_application_message(&room_id, sending_uri, &req.app_message, now_unix()) {
             SubmitMessageResponse::Accepted {
                 accepted_timestamp: now_unix_millis(),
             }
-        }
-        Err(_) => SubmitMessageResponse::NotAllowed,
-    };
+        } else {
+            SubmitMessageResponse::NotAllowed
+        };
     (StatusCode::OK, outcome.encode()).into_response()
 }
 
@@ -817,13 +808,32 @@ async fn update_wire(
     peer: Option<Extension<PeerCert>>,
     body: Bytes,
 ) -> Response {
-    use mimi_core::protocol_wire::UpdateRoomResponse;
-
     let accepted_at = now_unix_millis();
     let peer = peer
         .as_ref()
         .and_then(|Extension(PeerCert(identity))| identity.as_ref());
-    let answer = match lock(&p).apply_update_request(&room_id, &body, peer, now_unix()) {
+    let result = lock(&p).apply_update_request(&room_id, &body, peer, now_unix());
+    let Some(answer) = update_room_response(result, accepted_at) else {
+        return crate::problem::INTERNAL_ERROR.response();
+    };
+    log_update_answer(&answer, || {
+        lock(&p).store.room_epoch(&room_id).ok().flatten()
+    });
+    match answer.encode() {
+        Ok(bytes) => (StatusCode::OK, bytes).into_response(),
+        Err(_) => crate::problem::INTERNAL_ERROR.response(),
+    }
+}
+
+/// The `update` answer for what the hub did with a request; `None` for a store error, which is a 500 rather than an
+/// answer. Both paths answer from this: the wire lane encoded, the client lane as JSON.
+pub(crate) fn update_room_response(
+    result: Result<(), crate::UpdateRefusal>,
+    accepted_at: u64,
+) -> Option<mimi_core::protocol_wire::UpdateRoomResponse> {
+    use mimi_core::protocol_wire::UpdateRoomResponse;
+
+    Some(match result {
         Ok(()) => UpdateRoomResponse::Success {
             error_description: String::new(),
             accepted_timestamp: accepted_at,
@@ -850,22 +860,13 @@ async fn update_wire(
                 invalid_proposals: references,
             }
         }
-        Err(crate::UpdateRefusal::Store) => {
-            return crate::problem::INTERNAL_ERROR.response();
-        }
-    };
-    log_update_answer(&answer, || {
-        lock(&p).store.room_epoch(&room_id).ok().flatten()
-    });
-    match answer.encode() {
-        Ok(bytes) => (StatusCode::OK, bytes).into_response(),
-        Err(_) => crate::problem::INTERNAL_ERROR.response(),
-    }
+        Err(crate::UpdateRefusal::Store) => return None,
+    })
 }
 
 /// One line per update answer, since the HTTP status is 200 whatever the answer is. It holds the answer, this hub's own
 /// description of a refusal and epoch numbers; never the room, a reference or anything else a peer chose.
-fn log_update_answer(
+pub(crate) fn log_update_answer(
     answer: &mimi_core::protocol_wire::UpdateRoomResponse,
     room_epoch: impl FnOnce() -> Option<u64>,
 ) {
@@ -1160,6 +1161,9 @@ mod consent_cancel_tests;
 #[path = "http_wire_tests.rs"]
 mod wire_tests;
 
+#[cfg(test)]
+#[path = "http_client_lane_rooms_tests.rs"]
+mod client_lane_rooms_tests;
 #[cfg(test)]
 #[path = "http_client_lane_tests.rs"]
 mod client_lane_tests;

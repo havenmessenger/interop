@@ -72,6 +72,9 @@ pub fn build_client_router(provider: SharedProvider, auth: Arc<ClientLaneAuth>) 
         .route("/mimi/client/v1/withdrawKeyPackages", post(withdraw))
         .route("/mimi/client/v1/inboxFetch", post(inbox_fetch))
         .route("/mimi/client/v1/inboxAck", post(inbox_ack))
+        .route("/mimi/client/v1/createRoom", post(create_room))
+        .route("/mimi/client/v1/submitMessage", post(submit_message))
+        .route("/mimi/client/v1/update", post(update))
         .layer(middleware::from_fn_with_state(state.clone(), gate))
         .with_state(state)
 }
@@ -312,4 +315,142 @@ async fn inbox_ack(
         Ok((welcomes, messages)) => Json(AckAnswer { welcomes, messages }).into_response(),
         Err(error) => internal("inboxAck", error),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateRoomRequest {
+    policy: String,
+}
+
+#[derive(Serialize)]
+struct CreatedRoom {
+    room: String,
+}
+
+/// The one room policy a lane request may name.
+const DEFAULT_POLICY: &str = "haven-default";
+
+/// Create a room hosted here with the user as its first participant and admin, under the lane's one policy.
+async fn create_room(
+    State(state): State<LaneState>,
+    Extension(user): Extension<LaneUser>,
+    body: Bytes,
+) -> Response {
+    let Some(request) = parse::<CreateRoomRequest>(&body) else {
+        return crate::problem::MALFORMED_REQUEST.response();
+    };
+    if request.policy != DEFAULT_POLICY {
+        return crate::problem::MALFORMED_REQUEST.response();
+    }
+    match crate::http::lock(&state.provider).lane_create_room(&user.user, now_unix()) {
+        Ok(room) => (axum::http::StatusCode::CREATED, Json(CreatedRoom { room })).into_response(),
+        Err(error) => internal("createRoom", error),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SubmitRequest {
+    room: String,
+    message: String,
+}
+
+#[derive(Serialize)]
+struct Empty {}
+
+/// Send an application message into a room hosted here, as the user: the user must be an active participant whose
+/// role may send.
+async fn submit_message(
+    State(state): State<LaneState>,
+    Extension(user): Extension<LaneUser>,
+    body: Bytes,
+) -> Response {
+    let Some(request) = parse::<SubmitRequest>(&body) else {
+        return crate::problem::MALFORMED_REQUEST.response();
+    };
+    let Ok(message) = STANDARD.decode(&request.message) else {
+        return crate::problem::MALFORMED_REQUEST.response();
+    };
+    if crate::http::lock(&state.provider).accept_application_message(
+        &request.room,
+        &user.user,
+        &message,
+        now_unix(),
+    ) {
+        Json(Empty {}).into_response()
+    } else {
+        crate::problem::NOT_PERMITTED.response()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateRequest {
+    room: String,
+    /// The `UpdateRequest` as the wire lane carries it: a Commit bundle, or a leave's proposals.
+    update: String,
+}
+
+/// The `update` answer as JSON, one of the wire's four answers.
+#[derive(Serialize)]
+#[serde(tag = "answer", rename_all = "camelCase")]
+enum UpdateAnswer {
+    /// `epoch`: the room's epoch as this hub holds it after the update, when it holds one.
+    Success {
+        epoch: Option<u64>,
+    },
+    WrongEpoch {
+        current_epoch: u64,
+    },
+    NotAllowed {
+        description: String,
+    },
+    InvalidProposal {
+        description: String,
+    },
+}
+
+/// Apply a room update as the user, for a room hosted here: the same checks as the wire lane's `update`, with the
+/// user as the requester (see `requester.rs`).
+async fn update(
+    State(state): State<LaneState>,
+    Extension(user): Extension<LaneUser>,
+    body: Bytes,
+) -> Response {
+    use mimi_core::protocol_wire::UpdateRoomResponse;
+
+    let Some(request) = parse::<UpdateRequest>(&body) else {
+        return crate::problem::MALFORMED_REQUEST.response();
+    };
+    let Ok(update) = STANDARD.decode(&request.update) else {
+        return crate::problem::MALFORMED_REQUEST.response();
+    };
+    let provider = crate::http::lock(&state.provider);
+    let result = provider.apply_update_request(
+        &request.room,
+        &update,
+        crate::requester::Requester::LaneUser(&user.user),
+        now_unix(),
+    );
+    let Some(answer) = crate::http::update_room_response(result, 0) else {
+        return crate::problem::INTERNAL_ERROR.response();
+    };
+    let epoch = || provider.store.room_epoch(&request.room).ok().flatten();
+    crate::http::log_update_answer(&answer, epoch);
+    Json(match answer {
+        UpdateRoomResponse::Success { .. } => UpdateAnswer::Success { epoch: epoch() },
+        UpdateRoomResponse::WrongEpoch { current_epoch, .. } => {
+            UpdateAnswer::WrongEpoch { current_epoch }
+        }
+        UpdateRoomResponse::NotAllowed { error_description } => UpdateAnswer::NotAllowed {
+            description: error_description,
+        },
+        UpdateRoomResponse::InvalidProposal {
+            error_description, ..
+        } => UpdateAnswer::InvalidProposal {
+            description: error_description,
+        },
+    })
+    .into_response()
 }

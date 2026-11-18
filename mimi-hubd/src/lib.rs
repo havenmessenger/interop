@@ -27,6 +27,7 @@ pub mod admin;
 pub mod client_http;
 pub mod client_lane;
 pub mod client_lane_ops;
+pub mod client_lane_rooms;
 pub mod enroll;
 pub mod external_join;
 pub mod fanout;
@@ -49,11 +50,13 @@ pub mod policy;
 pub mod problem;
 pub mod provider_auth;
 pub mod request_signing;
+pub mod requester;
 pub mod role_checks;
 pub mod room_tree;
 pub mod signature;
 pub mod store;
 mod store_canonical;
+pub mod submit;
 pub mod telemetry;
 pub mod tls;
 
@@ -1056,14 +1059,15 @@ impl Provider {
     /// before anything changes, and merged once the hub's tables are written; one the tree refuses changes nothing. For
     /// a room it does not keep yet, an accepted Commit whose bundle carries a Full GroupInfo and a full tree seeds it
     /// (`room_tree`).
-    fn apply_commit_bundle(
+    fn apply_commit_bundle<'r>(
         &self,
         room_uri: &str,
         commit_bytes: &[u8],
         bundle: Option<(&GroupInfoOption, &Vec<u8>)>,
-        peer: Option<&crate::peer::PeerIdentity>,
+        requester: impl Into<crate::requester::Requester<'r>>,
         now_unix: u64,
     ) -> Result<(), UpdateRefusal> {
+        let requester = requester.into();
         // A Commit refused for the changes it carries together says which rule refused it; any other is unreadable.
         let mut commit = decode_commit_proposals(commit_bytes).map_err(|error| {
             changes_refusal(&error).map_or(
@@ -1109,16 +1113,17 @@ impl Provider {
             ));
         }
         // An external Commit's leaf is signed by the joiner's own key, so nothing in it ties the user it names to a provider:
-        // that user must belong to the provider whose proof came with the request, as on `groupInfo`.
+        // the requester must speak for that user (a peer: the user's provider, as on `groupInfo`; a lane user: itself).
         if commit.external {
-            let joiner_provider = tracked
+            let joiner = tracked
                 .as_ref()
                 .and_then(|staged| staged.joiner.as_deref())
-                .and_then(|joiner| mimi_core::uri::MimiUri::parse(joiner).ok())
-                .map(|uri| uri.authority);
-            if !joiner_provider
-                .is_some_and(|domain| peer.is_some_and(|peer| peer.authenticates(&domain)))
-            {
+                .and_then(|joiner| {
+                    mimi_core::uri::MimiUri::parse(joiner)
+                        .ok()
+                        .map(|uri| (joiner, uri.authority))
+                });
+            if !joiner.is_some_and(|(joiner, domain)| requester.may_speak_for(joiner, &domain)) {
                 return Err(UpdateRefusal::Policy(
                     "an external Commit's joiner is not a user of the provider that sent it",
                 ));
@@ -1143,7 +1148,7 @@ impl Provider {
                 Ok(())
             }
             (None, Some((group_info, ratchet_tree))) => {
-                self.seed_room_tree(room_uri, epoch, peer, group_info, ratchet_tree);
+                self.seed_room_tree(room_uri, epoch, requester, group_info, ratchet_tree);
                 Ok(())
             }
             (None, None) => Ok(()),
@@ -1597,13 +1602,14 @@ impl Provider {
     /// and goes through [`Self::hold_leave_proposals`]. The Welcome, `GroupInfoOption` and `RatchetTreeOption` of a Commit
     /// bundle are read and suite-gated by the codec and are neither stored nor relayed. Nothing changes unless the whole
     /// request is accepted.
-    pub fn apply_update_request(
+    pub fn apply_update_request<'r>(
         &self,
         room_uri: &str,
         body: &[u8],
-        peer: Option<&crate::peer::PeerIdentity>,
+        requester: impl Into<crate::requester::Requester<'r>>,
         now_unix: u64,
     ) -> Result<(), UpdateRefusal> {
+        let requester = requester.into();
         let bundle =
             HandshakeBundle::decode(body, self.accepted_suites()).map_err(|error| match error {
                 WireError::CiphersuiteGate(_) => UpdateRefusal::NotAllowed,
@@ -1624,7 +1630,7 @@ impl Provider {
                     room_uri,
                     &proposal_or_commit,
                     Some((&group_info_option, &ratchet_tree_option)),
-                    peer,
+                    requester,
                     now_unix,
                 )?;
                 let welcome = welcome
@@ -1643,7 +1649,7 @@ impl Provider {
             } => {
                 self.hold_leave_proposals(
                     room_uri,
-                    peer,
+                    requester,
                     std::iter::once(&proposal_or_commit).chain(&more_proposals),
                     now_unix,
                 )?;
@@ -1667,7 +1673,8 @@ impl Provider {
     /// `ProposalRef`, and the next Commit at that epoch must include every one by reference.
     ///
     /// The hub verifies no proposal's signature (it holds no group state), so what it requires a Commit to include is
-    /// bounded by who asked: every user the change removes is one whose provider the peer's certificate authenticates. A
+    /// bounded by who asked: every user the change removes is one the requester speaks for (a peer: a user of a provider
+    /// its proof authenticates; a lane user: itself, see `requester.rs`). A
     /// `Remove` is a leaf index the hub cannot map to a user (it holds no ratchet tree), so it is not bound to a provider;
     /// the room's bounds on what it holds (`store::MAX_PENDING_PROPOSALS_PER_ROOM`, the byte bounds) and their expiry
     /// (`store::PROPOSAL_TTL_SECS`) bound what a leave can make the next Commit carry. Members verify each proposal before
@@ -1678,24 +1685,25 @@ impl Provider {
     ///
     /// Refused, in this order: what is not a leave, read from the messages alone (`invalidProposal`: a change that adds
     /// or changes a role, a room-policy change, two changes, proposals of more than one epoch, or `Remove`s with no
-    /// change, since a Commit of `Remove`s alone is not one this hub reads and holding them would hold the room); no peer
-    /// certificate (`notAllowed`); another epoch than the room's (`wrongEpoch` naming it, so a leave replayed after its
+    /// change, since a Commit of `Remove`s alone is not one this hub reads and holding them would hold the room); a peer with
+    /// no certificate (`notAllowed`); another epoch than the room's (`wrongEpoch` naming it, so a leave replayed after its
     /// Commit says so whatever its indices name now); a removed index past the room's list (`invalidProposal`) or a
-    /// removed user of another provider (`notAllowed`, as a room this hub does not host); a message or a room's held
+    /// removed user the requester does not speak for (`notAllowed`, as a room this hub does not host); a message or a room's held
     /// proposals past their bounds (`notAllowed` saying so).
-    pub fn hold_leave_proposals<'a>(
+    pub fn hold_leave_proposals<'a, 'r>(
         &self,
         room_uri: &str,
-        peer: Option<&crate::peer::PeerIdentity>,
+        requester: impl Into<crate::requester::Requester<'r>>,
         messages: impl Iterator<Item = &'a Vec<u8>>,
         now_unix: u64,
     ) -> Result<(), UpdateRefusal> {
+        let requester = requester.into();
         const NOT_A_LEAVE: UpdateRefusal = UpdateRefusal::Invalid(
             "proposals are taken only as a leave: Removes and one participant-list change that only removes",
         );
         self.assert_hub_of_record(room_uri)
             .map_err(|_| UpdateRefusal::NotAllowed)?;
-        // What the messages are is read first, from their bytes alone; then that the peer presented a certificate, the
+        // What the messages are is read first, from their bytes alone; then that the request named its sender, the
         // room's epoch, whose provider the removed users are, and the bounds. Only the provider of a participant a leave
         // removes learns what the room holds.
         let mut epoch = None;
@@ -1740,7 +1748,9 @@ impl Provider {
         let (Some(epoch), Some(change)) = (epoch, change) else {
             return Err(NOT_A_LEAVE);
         };
-        let peer = peer.ok_or(UpdateRefusal::NotAllowed)?;
+        if !requester.is_named() {
+            return Err(UpdateRefusal::NotAllowed);
+        }
         // A room the hub has not seen a Commit for has no epoch here to hold the leave to: it is held at its own epoch,
         // and binds only a Commit at that epoch. The epoch is read before the indices, so a leave replayed after its
         // Commit is answered as of a past epoch, whatever its indices name in the room now.
@@ -1761,7 +1771,7 @@ impl Provider {
             let row = rows.get(*index as usize).ok_or(UpdateRefusal::Invalid(
                 "the participant list update does not fit the room",
             ))?;
-            if !peer.authenticates(&row.authority) {
+            if !requester.may_speak_for(&row.member_uri, &row.authority) {
                 return Err(UpdateRefusal::NotAllowed);
             }
         }

@@ -86,7 +86,7 @@ fn listed(p: &SharedProvider) -> Vec<String> {
         .collect()
 }
 
-fn list_change(added: &[&str], removed: &[u32]) -> Vec<u8> {
+pub(super) fn list_change(added: &[&str], removed: &[u32]) -> Vec<u8> {
     encode_participant_list_update(&ParticipantListUpdate {
         added_participants: added
             .iter()
@@ -152,7 +152,7 @@ fn reference_of(message: &[u8]) -> Vec<u8> {
     decode_proposal_message(message).unwrap().reference
 }
 
-fn bundle(messages: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn bundle(messages: &[Vec<u8>]) -> Vec<u8> {
     HandshakeBundle::Proposal {
         proposal_or_commit: messages[0].clone(),
         more_proposals: messages[1..].to_vec(),
@@ -166,7 +166,7 @@ fn by_reference(reference: &[u8]) -> Vec<u8> {
 }
 
 /// A change sent by value in a Commit.
-fn by_value_change(update: &[u8]) -> Vec<u8> {
+pub(super) fn by_value_change(update: &[u8]) -> Vec<u8> {
     [
         vec![0x01, 0x00, 0x08],
         0x0022u16.to_be_bytes().to_vec(),
@@ -178,7 +178,7 @@ fn by_value_change(update: &[u8]) -> Vec<u8> {
 
 /// A real Commit at `epoch` whose proposals window is `entries`. The epoch is written into a real openmls Commit; the
 /// hub verifies no signature, so the Commit is read as sent.
-fn commit_of(epoch: u64, entries: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn commit_of(epoch: u64, entries: &[Vec<u8>]) -> Vec<u8> {
     let payload = list_change(&[], &[]);
     let real =
         real_single_custom_proposal_commit(MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE, payload.clone());
@@ -226,7 +226,7 @@ async fn room() -> (Router, SharedProvider) {
 }
 
 /// Bob's leave at epoch 1: his device's Remove of itself and the change removing him.
-fn bobs_leave() -> (Vec<Vec<u8>>, Vec<u8>, Vec<u8>) {
+pub(super) fn bobs_leave() -> (Vec<Vec<u8>>, Vec<u8>, Vec<u8>) {
     let own_remove = remove(1, BOB_AT, BOB_AT);
     let own_change = change(1, BOB_AT, &list_change(&[], &[BOB_AT]));
     let refs = (reference_of(&own_remove), reference_of(&own_change));
@@ -616,4 +616,37 @@ async fn a_held_proposal_expires() {
         .apply_update_request(ROOM, &bundle_of(leaves_it_out), None, later)
         .unwrap();
     assert_eq!(listed(&p), vec![ALICE, BOB, CAROL]);
+}
+
+/// On the client lane a user sends only their own leave: Bob's leave is refused when Alice's lane request carries it,
+/// and held when Bob's does. Revert check: let a lane user speak for any user of this hub, and Alice's request holds
+/// Bob's leave.
+#[tokio::test]
+async fn on_the_client_lane_a_user_sends_only_their_own_leave() {
+    use crate::requester::Requester;
+    let (_router, p) = room().await;
+    let (messages, _, _) = bobs_leave();
+    let now = super::now_unix();
+    let as_alice = p.lock().unwrap().apply_update_request(
+        ROOM,
+        &bundle(&messages),
+        Requester::LaneUser(ALICE),
+        now,
+    );
+    assert!(
+        matches!(as_alice, Err(UpdateRefusal::NotAllowed)),
+        "PLANT-LANE-LEAVE: a lane user sent another user's leave: {as_alice:?}"
+    );
+    let as_bob = p.lock().unwrap().apply_update_request(
+        ROOM,
+        &bundle(&messages),
+        Requester::LaneUser(BOB),
+        now,
+    );
+    assert!(as_bob.is_ok(), "{as_bob:?}");
+    assert_eq!(
+        listed(&p),
+        vec![ALICE, BOB, CAROL],
+        "a leave is held, not applied"
+    );
 }

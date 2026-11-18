@@ -38,10 +38,10 @@ fn seconds() -> u64 {
 }
 
 /// The client-facing service's key, and a lane whose key file holds its public half.
-struct Lane {
-    key: Ed25519KeyPair,
-    router: Router,
-    provider: SharedProvider,
+pub(super) struct Lane {
+    pub(super) key: Ed25519KeyPair,
+    pub(super) router: Router,
+    pub(super) provider: SharedProvider,
     dir: std::path::PathBuf,
 }
 
@@ -51,7 +51,7 @@ impl Drop for Lane {
     }
 }
 
-fn lane(test: &str) -> Lane {
+pub(super) fn lane(test: &str) -> Lane {
     let key = Ed25519KeyPair::from_seed_unchecked(&[7u8; 32]).expect("seed");
     let dir = std::env::temp_dir().join(format!("mimi-lane-http-{}-{test}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("dir");
@@ -81,7 +81,7 @@ fn lane(test: &str) -> Lane {
 }
 
 /// A request to `route` for `user`, signed with `key` as the client-facing service signs it.
-fn signed(key: &Ed25519KeyPair, route: &str, user: &str, body: &str) -> Request<Body> {
+pub(super) fn signed(key: &Ed25519KeyPair, route: &str, user: &str, body: &str) -> Request<Body> {
     let path = format!("/mimi/client/v1/{route}");
     let digest = format!(
         "sha-256=:{}:",
@@ -114,7 +114,10 @@ fn signed(key: &Ed25519KeyPair, route: &str, user: &str, body: &str) -> Request<
         .expect("request")
 }
 
-async fn call(router: &Router, request: Request<Body>) -> (StatusCode, serde_json::Value) {
+pub(super) async fn call(
+    router: &Router,
+    request: Request<Body>,
+) -> (StatusCode, serde_json::Value) {
     let response = router.clone().oneshot(request).await.expect("answer");
     let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)

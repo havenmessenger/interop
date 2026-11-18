@@ -651,3 +651,12 @@ Divergences are revisited as the drafts move and as the accept-path work (DIV-6,
 lands. DIV-1 through DIV-4 do not block interoperating with another provider on the supported
 surface. DIV-5, DIV-7, and DIV-11 are closed or mostly closed (see above); DIV-6, DIV-8, DIV-9,
 DIV-10, DIV-12, DIV-13, DIV-15, and DIV-16 still do, for the endpoints they touch, until closed.
+
+## DIV-19 - the client lane is a local extension
+
+MIMI specifies provider-to-provider traffic and leaves how a provider's own clients reach it to the provider. This hub
+serves one such path, the client lane (`mimi-hubd/README.md`, "The client lane"), on its own listener, for a provider
+whose client-facing service authenticates its users and signs each request for one of them. Nothing on it is a MIMI
+route or changes one: rooms, Commits, proposals and application messages it carries go through the same checks as on
+the provider path, with the user as the requester. A peer cannot reach it, and the operator's routes stay on their own
+loopback listener.

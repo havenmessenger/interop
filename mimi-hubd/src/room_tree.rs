@@ -409,18 +409,18 @@ impl Provider {
     /// Seed an untracked room's tree from an accepted Commit's bundle, when it carries a Full GroupInfo and a full tree
     /// and they pass every check in the module doc. `commit_epoch` is the epoch the Commit was sent in. Anything short of
     /// that leaves the room untracked; the Commit itself is already accepted either way.
-    pub(crate) fn seed_room_tree(
+    pub(crate) fn seed_room_tree<'r>(
         &self,
         room_uri: &str,
         commit_epoch: u64,
-        peer: Option<&crate::peer::PeerIdentity>,
+        requester: impl Into<crate::requester::Requester<'r>>,
         group_info: &GroupInfoOption,
         ratchet_tree_option: &[u8],
     ) {
         if let Err(Some(why)) = self.try_seed_room_tree(
             room_uri,
             commit_epoch,
-            peer,
+            requester.into(),
             group_info,
             ratchet_tree_option,
         ) {
@@ -434,7 +434,7 @@ impl Provider {
         &self,
         room_uri: &str,
         commit_epoch: u64,
-        peer: Option<&crate::peer::PeerIdentity>,
+        requester: crate::requester::Requester<'_>,
         group_info: &GroupInfoOption,
         ratchet_tree_option: &[u8],
     ) -> Result<(), Option<&'static str>> {
@@ -461,7 +461,7 @@ impl Provider {
             .ok_or(Some("its GroupInfo's signer names no user"))?;
         let provider =
             provider_of(&signer).ok_or(Some("its GroupInfo's signer names no provider"))?;
-        if !peer.is_some_and(|peer| peer.authenticates(&provider)) {
+        if !requester.may_speak_for(&signer, &provider) {
             return Err(Some(
                 "its GroupInfo's signer is not of the provider that sent it",
             ));

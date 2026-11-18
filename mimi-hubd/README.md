@@ -293,6 +293,10 @@ the file - see [`debian/mimi-hubd.toml.example`](debian/mimi-hubd.toml.example) 
 | `MIMI_PUBLIC_BASE_URL` | `public_base_url` | no | `https://{MIMI_PROVIDER_DOMAIN}` | The `https://` URL the directory's endpoint URLs start at, for a hub behind a reverse proxy, on a port other than 443, or on a dedicated host. Identifiers keep using `MIMI_PROVIDER_DOMAIN`. One trailing `/` is dropped; a query, fragment or non-`https` URL is a hard error at startup. |
 | `MIMI_DIRECTORY_BIND_ADDR` | `directory_bind_addr` | no | none | A second listener, plain HTTP and with no client certificate, that answers `GET /.well-known/mimi-protocol-directory` and nothing else. It is meant to sit behind whatever terminates TLS for the public name. Unset means there is no such listener. |
 | `MIMI_ADMIN_BIND_ADDR` | `admin_bind_addr` | no | none | The operator's listener: plain HTTP with no client certificate, serving `roomPolicy`, `memberRole`, `addParticipant`, `untrackRoom`, `outbox`, `dropOutbox` and the three `operator/` routes for local users, and nothing else. It must be a loopback `ip:port` (127.0.0.0/8 or `::1`); any other address stops the hub at start. Unset means there is no such listener, and no request can change a room's policy, roles or participants except a peer's `update`. |
+| `MIMI_LANE_BIND_ADDR` | `lane_bind_addr` | no | none | The client lane's listener (below), off when unset. When set, the three below are required and a missing or unreadable one stops the start. |
+| `MIMI_LANE_CERT` | `lane_cert` | with the lane | none | PEM path, the lane listener's TLS certificate (+ chain). |
+| `MIMI_LANE_KEY` | `lane_key` | with the lane | none | PEM path, the lane listener's TLS private key. |
+| `MIMI_LANE_KEYS` | `lane_keys` | with the lane | none | Path of a JSON file of the client-facing service's signing keys, `{"<keyid>._mimi.client-lane": "<base64 Ed25519 public key>"}`, an empty value for a revoked key. |
 | `MIMI_POLICY` | `policy` | no | none | A TOML file of the deployment's choices, below. Unset means the drafts' defaults. A named file the hub cannot read, or one that is not a valid policy, stops the start. |
 | `MIMI_PEER_KEYS` | `peer_keys` | no | none | Path of a JSON file of peers' DNS-published signing keys, `{"<keyid>._mimi.<domain>": "<base64 Ed25519 public key>"}`, an empty value for a revoked key. Re-read when it changes. Without it, no signature verifies and only a client certificate admits a peer. |
 | `MIMI_ACTIVITY_LOG` | `activity_log` | no | off | `1` prints one line per request on the peer-facing listener to stderr: `[mimi-activity] method=POST route=/mimi/pl/update/:room_id status=200`. The route is the template the request matched (`route=unmatched` when none did), so no path, query string, header, certificate or body appears in it. Any other value, or none, leaves it off. The directory-only listener is not logged. |
@@ -395,6 +399,30 @@ returns is recorded so the Welcome that uses it goes there; any other such reque
 | POST | `/mimi/v1/requestConsent` | Consent request or cancel (§5.7 C1), always 201. A cancel withdraws only a pending request, and only from the requester's provider. The wire route answers 202, and 422 for an operation it does not take. |
 | POST | `/mimi/v1/updateConsent` | Consent grant/revoke (§5.7 C2), always 201. |
 | POST | `/mimi/v1/authorizeSender?room=&sender=` | Check whether a sender may send in a room. |
+
+### The client lane
+
+MIMI defines how providers talk to each other, not how a provider's own clients reach their hub. The client lane is
+this hub's answer for a provider whose client-facing service authenticates its users itself: that service signs each
+request for one of this hub's users, and the hub acts for that user and no other. It is a local extension, not a MIMI
+route (DIVERGENCES, DIV-19), served only on the listener `MIMI_LANE_BIND_ADDR` names, under `/mimi/client/v1/`.
+
+Every request is an RFC 9421 signature with tag `haven-client-lane`, covering `@method`, `@target-uri`,
+`content-digest`, `mimi-client-user` and `mimi-client-device`, with `created`, `nonce` and `keyid`; it verifies with a
+key in `MIMI_LANE_KEYS`, its nonce is new, it is at most 30 s old, and it was signed after this process started.
+`mimi-client-user` must be a user URI on this hub's domain; the routes act for that user and take no user from a body.
+A refused request is a 401 `client-not-authenticated`; past 600 requests a minute for one user, a 429
+`client-rate-limited` (`docs/problems.md`). Bodies are JSON with MLS objects in base64, at most 4 MiB.
+
+| Path | Body → answer | What it does |
+|---|---|---|
+| `publishKeyPackages` | `{key_packages}` → `{count}` | Replaces the user's KeyPackages (at most 32). Each passes the suite gate and names the user, exactly, in its basic credential. |
+| `withdrawKeyPackages` | `{}` → `{count}` | Removes them; no one can claim the user's KeyPackages after. |
+| `inboxFetch` | `{after_welcome, after_message, limit}` → `{welcomes, messages, more}` | Reads the user's queued Welcomes and messages after the cursors, oldest first (at most 256 of each), without removing them. |
+| `inboxAck` | `{welcomes_up_to, messages_up_to}` → `{welcomes, messages}` | Removes the user's items up to the cursors. |
+| `createRoom` | `{policy: "haven-default"}` → 201 `{room}` | A room hosted here under a fresh URI, with the user as its only participant and its admin; admins add, remove, ban and change roles, members send and may leave, and the room refuses external Commits. Once the creator's group is tracked, its own components are the room's state. |
+| `submitMessage` | `{room, message}` → `{}` | An application message into a room hosted here, from the user; 403 `not-permitted` unless the user is an active participant whose role may send. Fanned out as from a peer. |
+| `update` | `{room, update}` → `{answer, ...}` | `update` is the UpdateRequest as the wire carries it (a Commit bundle, or a leave's proposals). The same checks as the provider path's `update`, with the user as the requester: a leave removes only the user, an external Commit joins only the user, a GroupInfo seeding the room's tree is signed by the user. The answer is the wire's: `success` (with the room's `epoch`), `wrongEpoch` (with `current_epoch`), `notAllowed` or `invalidProposal` (with a `description`). |
 
 The operator's routes are served only on the loopback listener `MIMI_ADMIN_BIND_ADDR` names, never to a peer. They are
 not MIMI routes; a peer changes a room's roster or policy through `update`.

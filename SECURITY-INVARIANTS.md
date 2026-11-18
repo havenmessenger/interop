@@ -64,7 +64,7 @@ Which provider a certificate names, and what any CA in the bundle can name, is i
 
 A client can join a room by external Commit only where the hub keeps the room's ratchet tree, so the Commit is verified
 against it like any other; only when the user its new leaf names belongs to the provider whose proof came with the
-request; only where the room's operational policy allows it (or, with no such policy, the hub's
+request (on the client lane: is the requesting user); only where the room's operational policy allows it (or, with no such policy, the hub's
 `external_commit_when_unset`); only for a joiner the room's roles admit (`canAddOwnClient` for a listed user's new
 client, `canOpenJoin` on role 0 for an unlisted one, `mimi-hubd/src/external_join.rs`); never while proposals are held
 for the epoch; and changing nothing but the joiner's own entry in the list. A GroupInfo is kept and served
@@ -72,6 +72,17 @@ for the epoch; and changing nothing but the joiner's own entry in the list. A Gr
 (`MIMI_HUB_MLS_KEY`), which signs nothing else. A change to the room's operational policy needs
 `canChangeMlsOperationalPolicies`, to its roles `canChangeRoleDefinitions`, and to its base policy
 `canChangeRoomMembershipStyle`, in the proposer's role (DIV-15).
+
+## A client-lane request acts for one user of this hub, and only for them
+
+The client lane (`MIMI_LANE_BIND_ADDR`, off when unset) is a listener of its own; a peer request is not served there,
+nor a lane request on the peer listener. A lane request verifies only with a key in `MIMI_LANE_KEYS`, under the tag
+`haven-client-lane` and nothing else, with a new nonce, at most 30 s old, signed after the process started
+(`mimi-hubd/src/client_lane.rs`); its `mimi-client-user` must be a user URI on this hub's domain. Every route acts for
+that user and takes no user from the body (`client_http.rs`). In a room change the user speaks only for themself
+(`requester.rs`): a leave removes only them, an external Commit joins only them, a GroupInfo that seeds a room's tree
+is signed by them. A KeyPackage the user publishes names them, exactly, in its basic credential. Each user has a
+bounded number of requests a minute.
 
 ## The operator's routes listen on loopback only
 
