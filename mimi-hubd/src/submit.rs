@@ -5,7 +5,11 @@ use crate::Provider;
 
 impl Provider {
     /// Accept `message` from `sender` into `room_uri` and fan it out. Refused (false, nothing queued) when the sender is
-    /// not an active participant whose role may send, or the room does not take the message.
+    /// not an active participant whose role may send, or the message is empty or larger than one queued item.
+    ///
+    /// Nothing is kept under the room itself: fan-out queues the message for each other local member and for each other
+    /// provider with a participant, and those queues alone bound delivery. A room-keyed copy would have no reader, and
+    /// a room's own queue, filled to its cap within the delivery lifetime, would refuse every sender.
     pub fn accept_application_message(
         &self,
         room_uri: &str,
@@ -17,7 +21,8 @@ impl Provider {
             eprintln!("[mimi-hubd] submitMessage: notAllowed (the sender is not an active participant, or lacks canSendMessage)");
             return false;
         }
-        if self.submit_message(room_uri, message, now_unix).is_err() {
+        if message.is_empty() || message.len() > crate::store::MAX_ITEM_BYTES {
+            eprintln!("[mimi-hubd] submitMessage: notAllowed (the message is empty or larger than a queued item)");
             return false;
         }
         crate::log_fanout(
@@ -28,3 +33,7 @@ impl Provider {
         true
     }
 }
+
+#[cfg(test)]
+#[path = "submit_tests.rs"]
+mod tests;

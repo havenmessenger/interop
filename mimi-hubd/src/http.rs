@@ -521,10 +521,9 @@ async fn submit_message(
 /// client lane), and `authorize_sender` (active participation, not removed, room-policy canSendMessage) must pass
 /// before anything is stored, and `NotAllowed` is
 /// returned otherwise (a `room_id` that doesn't even parse as a room this hub hosts also lands
-/// here, via `authorize_sender`'s own `assert_hub_of_record`). On success, the message is queued
-/// under the literal path segment, as before (callers rely on that key), and fanned out
+/// here, via `authorize_sender`'s own `assert_hub_of_record`). On success, the message is fanned out
 /// (`Provider::fan_out_application`): to every other local participant's queue, and to the outbox for
-/// every other provider with a participant (DIVERGENCES.md, DIV-5).
+/// every other provider with a participant (DIVERGENCES.md, DIV-5). Nothing is queued under the room itself.
 async fn submit_message_wire(
     State(p): State<SharedProvider>,
     Path(room_id): Path<String>,
