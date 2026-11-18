@@ -29,6 +29,8 @@
 //!   MIMI_LANE_CERT         PEM path, the lane's TLS certificate (the one the client-facing service pins)
 //!   MIMI_LANE_KEY          PEM path, its private key
 //!   MIMI_LANE_KEYS         JSON file of the service's keys ("<keyid>._mimi.client-lane": base64 Ed25519 public key)
+//!   MIMI_LANE_ROOM_POLICY  optional; TOML file of what a room the lane creates starts with (see `client_lane_rooms`);
+//!                          unset means the neutral profile. A file that is not a valid profile stops the start
 //!   MIMI_PEER_KEYS         optional; JSON file of DNS-published peer keys ("<keyid>._mimi.<domain>": base64), kept
 //!                          current by a job on the host; without it only a client certificate admits a peer
 //!   MIMI_OUTBOUND_ALLOW    optional; comma-separated addr/len ranges an outbound request may reach although they are
@@ -154,6 +156,12 @@ async fn main() -> anyhow::Result<()> {
     // The client lane's settings, checked before any state is opened: a lane named without its certificate, key and key
     // file does not start.
     let lane = lane_settings(&resolved)?;
+    let lane_rooms = match resolved["MIMI_LANE_ROOM_POLICY"].as_deref() {
+        Some(path) => {
+            mimi_hubd::client_lane_rooms::LaneRoomProfile::load(std::path::Path::new(path))?
+        }
+        None => mimi_hubd::client_lane_rooms::LaneRoomProfile::neutral(),
+    };
     // The operator's address is checked before any state is opened, like the certificates: a hub asked to serve its
     // operator's routes beyond loopback does not start.
     let admin_addr = resolved["MIMI_ADMIN_BIND_ADDR"]
@@ -278,7 +286,15 @@ async fn main() -> anyhow::Result<()> {
             started_unix,
             domain: domain.clone(),
         });
-        let lane_router = mimi_hubd::client_http::build_client_router(shared.clone(), auth);
+        eprintln!(
+            "[mimi-hubd] client lane rooms ({}): {}",
+            resolved["MIMI_LANE_ROOM_POLICY"]
+                .as_deref()
+                .unwrap_or("neutral profile"),
+            lane_rooms.describe()
+        );
+        let lane_router =
+            mimi_hubd::client_http::build_client_router(shared.clone(), auth, lane_rooms);
         let tls = axum_server::tls_rustls::RustlsConfig::from_config(lane_tls);
         eprintln!("[mimi-hubd] client lane (TLS, signed per request) listening on {addr}");
         tokio::spawn(async move {

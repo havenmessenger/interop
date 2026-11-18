@@ -4,16 +4,16 @@ use axum::http::StatusCode;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 
-use super::client_lane_tests::{call, lane, signed};
+use super::client_lane_tests::{call, lane, lane_with, signed};
 use super::tests::bundle_of;
 use super::update_leave_tests::{bobs_leave, bundle, by_value_change, commit_of, list_change};
-use crate::client_lane_rooms::{ROLE_ADMIN, ROLE_MEMBER};
+use crate::client_lane_rooms::{LaneRoomProfile, ROLE_ADMIN, ROLE_MEMBER};
 
 const ALICE: &str = "mimi://havenmessenger.com/u/alice";
 const BOB: &str = "mimi://havenmessenger.com/u/bob";
 const DAVE: &str = "mimi://havenmessenger.com/u/dave";
 
-const CREATE: &str = r#"{"policy":"haven-default"}"#;
+const CREATE: &str = "{}";
 
 /// Alice's new room, through the lane.
 async fn alices_room(l: &super::client_lane_tests::Lane) -> String {
@@ -22,8 +22,9 @@ async fn alices_room(l: &super::client_lane_tests::Lane) -> String {
     body["room"].as_str().expect("room").to_string()
 }
 
-/// A room made through the lane is hosted here, under a fresh URI, with its creator as the only participant and its
-/// admin, and refuses external Commits. Revert check: leave external Commits allowed, and the room takes them.
+/// A room made through the lane with the neutral profile is hosted here, under a fresh URI, with its creator as the only
+/// participant and its admin, and refuses external Commits. Revert check: leave external Commits allowed, and the room
+/// takes them.
 #[tokio::test]
 async fn create_room_makes_the_user_its_admin_with_external_commits_refused() {
     let l = lane("create-room");
@@ -49,14 +50,39 @@ async fn create_room_makes_the_user_its_admin_with_external_commits_refused() {
     assert_ne!(alices_room(&l).await, room, "each room is new");
 }
 
-/// createRoom names one policy; anything else is refused and makes no room.
+/// createRoom takes nothing from the client: a request naming a policy is refused.
 #[tokio::test]
-async fn create_room_takes_only_the_one_policy() {
+async fn create_room_takes_no_policy_from_the_client() {
     let l = lane("create-room-policy");
-    for body in [r#"{"policy":"open"}"#, r#"{}"#] {
+    for body in [
+        r#"{"policy":"haven-default"}"#,
+        r#"{"policy":"open"}"#,
+        "not json",
+    ] {
         let (status, _) = call(&l.router, signed(&l.key, "createRoom", ALICE, body)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     }
+}
+
+/// The deployment's profile decides what a lane room starts with: under a profile whose creator is a member and whose
+/// rooms allow external Commits, the room is so. Revert check: create every room from the neutral profile, and this
+/// room refuses external Commits.
+#[tokio::test]
+async fn the_deployments_profile_decides_the_room() {
+    let mut profile = LaneRoomProfile::neutral();
+    profile.creator_role = ROLE_MEMBER;
+    profile.external_commit_allowed = true;
+    let l = lane_with("create-room-profile", profile);
+    let room = alices_room(&l).await;
+    let p = l.provider.lock().unwrap();
+    assert_eq!(
+        p.store.member_role(&room, ALICE).unwrap(),
+        Some(ROLE_MEMBER)
+    );
+    assert!(
+        p.external_commits_allowed(&room).unwrap(),
+        "PLANT-LANE-PROFILE: the room ignored the deployment's profile"
+    );
 }
 
 /// A participant's message reaches the room's other local member, and not its sender; a user who is not a participant

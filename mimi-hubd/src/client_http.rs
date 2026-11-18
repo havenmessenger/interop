@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::client_lane::{ClientLaneAuth, LaneUser};
 use crate::client_lane_ops::PublishRefusal;
+use crate::client_lane_rooms::LaneRoomProfile;
 use crate::http::SharedProvider;
 use crate::signature::SignedRequest;
 
@@ -58,14 +59,20 @@ struct LaneState {
     provider: SharedProvider,
     auth: Arc<ClientLaneAuth>,
     cap: Arc<UserCap>,
+    rooms: Arc<LaneRoomProfile>,
 }
 
-/// The lane's router, with its gate in front of every route.
-pub fn build_client_router(provider: SharedProvider, auth: Arc<ClientLaneAuth>) -> Router {
+/// The lane's router, with its gate in front of every route. `rooms` is what a room the lane creates starts with.
+pub fn build_client_router(
+    provider: SharedProvider,
+    auth: Arc<ClientLaneAuth>,
+    rooms: LaneRoomProfile,
+) -> Router {
     let state = LaneState {
         provider: provider.clone(),
         auth,
         cap: Arc::new(UserCap::default()),
+        rooms: Arc::new(rooms),
     };
     Router::new()
         .route("/mimi/client/v1/publishKeyPackages", post(publish))
@@ -317,33 +324,27 @@ async fn inbox_ack(
     }
 }
 
+/// createRoom takes nothing from the client: what the room starts with is the deployment's profile.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CreateRoomRequest {
-    policy: String,
-}
+struct CreateRoomRequest {}
 
 #[derive(Serialize)]
 struct CreatedRoom {
     room: String,
 }
 
-/// The one room policy a lane request may name.
-const DEFAULT_POLICY: &str = "haven-default";
-
-/// Create a room hosted here with the user as its first participant and admin, under the lane's one policy.
+/// Create a room hosted here with the user as its first participant, as the deployment's lane room profile says.
 async fn create_room(
     State(state): State<LaneState>,
     Extension(user): Extension<LaneUser>,
     body: Bytes,
 ) -> Response {
-    let Some(request) = parse::<CreateRoomRequest>(&body) else {
-        return crate::problem::MALFORMED_REQUEST.response();
-    };
-    if request.policy != DEFAULT_POLICY {
+    if parse::<CreateRoomRequest>(&body).is_none() {
         return crate::problem::MALFORMED_REQUEST.response();
     }
-    match crate::http::lock(&state.provider).lane_create_room(&user.user, now_unix()) {
+    match crate::http::lock(&state.provider).lane_create_room(&user.user, &state.rooms, now_unix())
+    {
         Ok(room) => (axum::http::StatusCode::CREATED, Json(CreatedRoom { room })).into_response(),
         Err(error) => internal("createRoom", error),
     }

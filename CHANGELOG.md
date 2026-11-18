@@ -9,7 +9,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 - A client lane (`MIMI_LANE_BIND_ADDR`, off by default): a separate TLS listener on which a provider's client-facing
   service acts for one of this hub's users at a time, by an RFC 9421 signature tagged `haven-client-lane`. The user
   publishes and withdraws their KeyPackages, reads and acknowledges their queued Welcomes and messages, creates rooms
-  hosted here, sends messages and sends updates to them. On the lane a user speaks only for themself: a leave removes
+  hosted here, sends messages and sends updates to them. What a created room starts with (its room policy, the
+  creator's role, whether it allows external Commits) is the deployment's, from `MIMI_LANE_ROOM_POLICY`, by default a
+  neutral profile that refuses external Commits; the client names none of it. On the lane a user speaks only for themself: a leave removes
   only them, an external Commit joins only them, and a GroupInfo that seeds a room's tree is signed by them. The
   provider path's checks are unchanged. A local extension, not a MIMI route (DIV-19).
 - One local member whose queue refuses an item (full: 256 messages or 32 Welcomes, or the item out of bounds) no

@@ -26,6 +26,7 @@ const KNOWN_KEYS: &[&str] = &[
     "lane_cert",
     "lane_key",
     "lane_keys",
+    "lane_room_policy",
     "policy",
     "public_base_url",
     "activity_log",
@@ -63,6 +64,8 @@ pub struct ConfigFile {
     pub lane_key: Option<String>,
     /// The client lane's key file: `"<keyid>._mimi.client-lane": "<base64 Ed25519 public key>"`.
     pub lane_keys: Option<String>,
+    /// The lane room profile (see `client_lane_rooms.rs`). Unset means the neutral profile.
+    pub lane_room_policy: Option<String>,
     /// The policy file (see `policy.rs`). Unset means the drafts' defaults.
     pub policy: Option<String>,
     pub public_base_url: Option<String>,
@@ -129,6 +132,7 @@ impl ConfigFile {
             "lane_cert" => self.lane_cert.as_ref(),
             "lane_key" => self.lane_key.as_ref(),
             "lane_keys" => self.lane_keys.as_ref(),
+            "lane_room_policy" => self.lane_room_policy.as_ref(),
             "policy" => self.policy.as_ref(),
             "public_base_url" => self.public_base_url.as_ref(),
             "activity_log" => self.activity_log.as_ref(),
@@ -294,6 +298,11 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
     ] {
         m.insert(env, resolve(env, key, file, None));
     }
+    // No default: without a profile file a lane room starts with the neutral profile.
+    m.insert(
+        "MIMI_LANE_ROOM_POLICY",
+        resolve("MIMI_LANE_ROOM_POLICY", "lane_room_policy", file, None),
+    );
     // No default: without a policy file the hub follows the drafts' defaults.
     m.insert("MIMI_POLICY", resolve("MIMI_POLICY", "policy", file, None));
     m.insert(
