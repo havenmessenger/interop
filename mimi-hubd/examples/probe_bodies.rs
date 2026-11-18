@@ -32,10 +32,6 @@ use tls_codec::{Deserialize as _, Serialize as _};
 
 const SUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 
-/// A KeyPackage lifetime: from an hour ago, so a clock a little behind the hub's still accepts it, for 84 days.
-const NOT_BEFORE_SLACK_SECS: u64 = 60 * 60;
-const LIFETIME_SECS: u64 = 60 * 60 * 24 * 84;
-
 struct MemorySigner(Vec<u8>);
 
 impl Signer for MemorySigner {
@@ -93,18 +89,12 @@ fn submit(sender: &str) -> Vec<u8> {
     body
 }
 
-/// A ciphersuite 0x0001 KeyPackage whose credential names `user`.
+/// A ciphersuite 0x0001 KeyPackage whose credential names `user`, with openmls's default lifetime (from an hour ago,
+/// for a clock a little behind the hub's, to 84 days ahead).
 fn keypackage(user: &str) -> Vec<u8> {
     let (provider, signer, credential) = client(user.as_bytes());
-    let now = now_unix();
-    let lifetime: Lifetime = serde_json::from_value(serde_json::json!({
-        "not_before": now.saturating_sub(NOT_BEFORE_SLACK_SECS),
-        "not_after": now + LIFETIME_SECS,
-    }))
-    .unwrap();
     let bundle = KeyPackage::builder()
         .key_package_extensions(Extensions::empty())
-        .key_package_lifetime(lifetime)
         .build(SUITE, &provider, &signer, credential)
         .unwrap();
     let bytes = bundle.key_package().tls_serialize_detached().unwrap();
