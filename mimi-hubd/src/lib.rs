@@ -264,11 +264,20 @@ pub(crate) fn adds_first_roles_list(
 impl Provider {
     /// Open a provider backed by a SQLite file (production).
     pub fn open(domain: impl Into<String>, db_path: &str) -> anyhow::Result<Self> {
+        let domain = domain.into();
+        let store = SqliteStore::open(db_path)?;
+        // KeyPackages a user of this provider published under its URI join those published under its name.
+        let folded = store.fold_local_user_keys(&domain)?;
+        if folded > 0 {
+            eprintln!(
+                "[mimi-hubd] {folded} stored KeyPackage row(s) of this provider's users moved from their URI to their name"
+            );
+        }
         Ok(Self {
-            domain: domain.into(),
+            domain,
             public_base_url: None,
             policy: policy::HubPolicy::default(),
-            store: SqliteStore::open(db_path)?,
+            store,
             outbox_waker: None,
             peer_access: None,
             hub_signer: None,
@@ -419,7 +428,14 @@ impl Provider {
         username: &str,
         now_unix: u64,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        self.store.claim_key_package(username, now_unix)
+        self.store
+            .claim_key_package(&self.key_package_user(username), now_unix)
+    }
+
+    /// The key a user's KeyPackages are kept under: the name, for a user of this provider named by name or by URI;
+    /// anything else as given (another provider's user, whom only that provider publishes for). One user, one pool.
+    pub fn key_package_user(&self, user: &str) -> String {
+        self.local_name(user).unwrap_or_else(|| user.to_string())
     }
 
     // ---- K5: gate every foreign object BEFORE openmls ----
@@ -486,8 +502,9 @@ impl Provider {
         // Welcome carrying that ref can be delivered to the right user. Computed over the SAME bytes we
         // gated/store, so it is byte-identical to the ref a Welcome's secrets carry.
         let kpref = keypackage_ref(kp_bytes, self.accepted_suites())?;
+        let username = self.key_package_user(username);
         self.store
-            .associate_kpref_client(&kpref, username, not_after)?;
+            .associate_kpref_client(&kpref, &username, not_after)?;
         let last_resort = {
             use openmls::prelude::tls_codec::Deserialize as _;
             let crypto = openmls_rust_crypto::OpenMlsRustCrypto::default();
@@ -499,7 +516,7 @@ impl Provider {
                 .last_resort()
         };
         self.store
-            .add_key_package_marked(username, kp_bytes, not_after, last_resort)
+            .add_key_package_marked(&username, kp_bytes, not_after, last_resort)
     }
 
     // ---- K3/K4: KeyPackageRef routing associations ----
@@ -942,7 +959,7 @@ impl Provider {
     ) -> anyhow::Result<Result<crate::store::KeyClaim, KeyPackageAccess>> {
         match self.keypackage_access(requester_uri, target_uri, room_uri)? {
             KeyPackageAccess::Allowed => Ok(Ok(self.store.claim_key_package_meeting(
-                target_username,
+                &self.key_package_user(target_username),
                 now_unix,
                 meets,
             )?)),
@@ -1959,6 +1976,10 @@ mod participant_order_tests;
 #[cfg(test)]
 #[path = "identifier_discovery_tests.rs"]
 mod identifier_discovery_tests;
+
+#[cfg(test)]
+#[path = "key_package_user_tests.rs"]
+mod key_package_user_tests;
 
 #[cfg(test)]
 mod tests {

@@ -6,6 +6,8 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimi-hubd`: a user of this provider has one KeyPackage pool, whether published for or claimed by name or by URI;
+  a store that kept some under the URI joins them to the name when it opens.
 - `mimi-hubd`: `updateConsent` is recorded only from the provider of its target user and for a requester of this
   provider, and `requestConsent` only from the provider of its requester and for a target of this provider, as
   protocol-07 §5.7 has them. Before, any peer could send a grant naming one of this hub's users as the target, which
