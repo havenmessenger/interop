@@ -89,10 +89,11 @@ impl SqliteStore {
 
 const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS keypackages (
-    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    username  TEXT NOT NULL,
-    kp_bytes  BLOB NOT NULL,
-    not_after INTEGER NOT NULL
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    username    TEXT NOT NULL,
+    kp_bytes    BLOB NOT NULL,
+    not_after   INTEGER NOT NULL,
+    last_resort INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_kp_user ON keypackages(username, not_after);
 
@@ -379,6 +380,16 @@ impl SqliteStore {
             }
         }
         conn.execute("UPDATE room_participants SET seq = rowid WHERE seq = 0", [])?;
+        // Migration: keypackages gained `last_resort`. Rows written before it are one-time KeyPackages, as every
+        // KeyPackage was then.
+        if let Err(e) = conn.execute(
+            "ALTER TABLE keypackages ADD COLUMN last_resort INTEGER NOT NULL DEFAULT 0",
+            [],
+        ) {
+            if !e.to_string().contains("duplicate column name") {
+                return Err(e.into());
+            }
+        }
         let report = crate::store_canonical::canonicalize_stored_uris(&conn)?;
         if report.rewritten > 0 || !report.left.is_empty() {
             eprintln!(
@@ -399,23 +410,57 @@ impl SqliteStore {
         kp_bytes: &[u8],
         not_after: u64,
     ) -> anyhow::Result<()> {
+        self.add_key_package_marked(username, kp_bytes, not_after, false)
+    }
+
+    /// Store a KeyPackage for `username`, `last_resort` when it may be handed out more than once. A user has one
+    /// last-resort KeyPackage at most: a new one replaces the one before.
+    pub fn add_key_package_marked(
+        &self,
+        username: &str,
+        kp_bytes: &[u8],
+        not_after: u64,
+        last_resort: bool,
+    ) -> anyhow::Result<()> {
         let username = mimi_core::uri::canonical(username);
         let username = username.as_str();
-        self.conn.execute(
-            "INSERT INTO keypackages (username, kp_bytes, not_after) VALUES (?1, ?2, ?3)",
-            params![username, kp_bytes, not_after as i64],
+        let tx = self.conn.unchecked_transaction()?;
+        if last_resort {
+            tx.execute(
+                "DELETE FROM keypackages WHERE username = ?1 AND last_resort = 1",
+                params![username],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO keypackages (username, kp_bytes, not_after, last_resort) VALUES (?1, ?2, ?3, ?4)",
+            params![username, kp_bytes, not_after as i64, i64::from(last_resort)],
         )?;
         // L1: cap the per-user backlog - a user who publishes KeyPackages that are never claimed
         // (or a hostile caller flooding one username) must not grow this table without bound. Evict
-        // the oldest rows past MAX_KEYPACKAGES_PER_USER, keeping the newest (claim order is oldest-
-        // first via claim_key_package's own ORDER BY id, so this doesn't starve live claims).
-        self.conn.execute(
-            "DELETE FROM keypackages WHERE username = ?1 AND id NOT IN (
-                 SELECT id FROM keypackages WHERE username = ?1 ORDER BY id DESC LIMIT ?2
+        // the oldest one-time rows past MAX_KEYPACKAGES_PER_USER, counting the last-resort one, which is never
+        // evicted (claim order is oldest-first via claim_key_package's own ORDER BY id, so this doesn't starve
+        // live claims).
+        tx.execute(
+            "DELETE FROM keypackages WHERE username = ?1 AND last_resort = 0 AND id NOT IN (
+                 SELECT id FROM keypackages WHERE username = ?1 AND last_resort = 0 ORDER BY id DESC
+                 LIMIT ?2 - (SELECT COUNT(*) FROM keypackages WHERE username = ?1 AND last_resort = 1)
              )",
             params![username, MAX_KEYPACKAGES_PER_USER],
         )?;
+        tx.commit()?;
         Ok(())
+    }
+
+    /// How many unexpired one-time KeyPackages `username` has, and whether it has a last-resort one.
+    pub fn key_package_count(&self, username: &str, now_unix: u64) -> anyhow::Result<(u64, bool)> {
+        let username = mimi_core::uri::canonical(username);
+        let (one_time, last_resort): (i64, i64) = self.conn.query_row(
+            "SELECT COALESCE(SUM(last_resort = 0), 0), COALESCE(SUM(last_resort = 1), 0)
+             FROM keypackages WHERE username = ?1 AND not_after > ?2",
+            params![username.as_str(), now_unix as i64],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok((u64::try_from(one_time).unwrap_or(0), last_resort > 0))
     }
 
     /// Drop KeyPackages whose `not_after` has passed without ever being claimed (K2 cleanup, L1).
@@ -430,32 +475,23 @@ impl SqliteStore {
         Ok(n)
     }
 
-    /// Atomically claim ONE unserved, unexpired KeyPackage for `username` (K1 once-only + K2 expiry).
-    /// Single DELETE..RETURNING = atomic: two concurrent callers cannot get the same row.
+    /// Claim ONE unexpired KeyPackage for `username` (K1 once-only + K2 expiry): the oldest one-time KeyPackage,
+    /// which is deleted, or when none is left the last-resort one, which stays to be handed out again. One
+    /// transaction, so two concurrent callers cannot get the same one-time row.
     pub fn claim_key_package(
         &self,
         username: &str,
         now_unix: u64,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        let username = mimi_core::uri::canonical(username);
-        let username = username.as_str();
-        let row = self
-            .conn
-            .query_row(
-                "DELETE FROM keypackages \
-                 WHERE id = (SELECT id FROM keypackages \
-                             WHERE username = ?1 AND not_after > ?2 \
-                             ORDER BY id LIMIT 1) \
-                 RETURNING kp_bytes",
-                params![username, now_unix as i64],
-                |r| r.get::<_, Vec<u8>>(0),
-            )
-            .optional()?;
-        Ok(row)
+        match self.claim_key_package_meeting(username, now_unix, |_| true)? {
+            KeyClaim::Claimed(bytes) => Ok(Some(bytes)),
+            KeyClaim::NoneStored | KeyClaim::NoneCompatible => Ok(None),
+        }
     }
 
-    /// Claim the oldest unexpired KeyPackage of `username` that `meets` accepts, and delete it; the others stay. Says
-    /// whether the user had none at all, or only ones `meets` refused.
+    /// Claim the oldest unexpired one-time KeyPackage of `username` that `meets` accepts, and delete it, or when none
+    /// does the last-resort one, which stays; the others stay. Says whether the user had none at all, or only ones
+    /// `meets` refused.
     pub fn claim_key_package_meeting(
         &self,
         username: &str,
@@ -464,14 +500,25 @@ impl SqliteStore {
     ) -> anyhow::Result<KeyClaim> {
         let username = mimi_core::uri::canonical(username);
         let username = username.as_str();
-        let tx = self.conn.unchecked_transaction()?;
-        let rows: Vec<(i64, Vec<u8>)> = {
+        // IMMEDIATE: the claim reads, then deletes, so it takes the write lock first, or two concurrent claims on separate
+        // connections would both read and then deadlock upgrading to write.
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        // One-time KeyPackages first, oldest first; the last-resort one only when no one-time one meets.
+        let rows: Vec<(i64, Vec<u8>, bool)> = {
             let mut stmt = tx.prepare(
-                "SELECT id, kp_bytes FROM keypackages WHERE username = ?1 AND not_after > ?2 ORDER BY id",
+                "SELECT id, kp_bytes, last_resort FROM keypackages WHERE username = ?1 AND not_after > ?2 \
+                 ORDER BY last_resort, id",
             )?;
             let rows = stmt
                 .query_map(params![username, now_unix as i64], |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, Vec<u8>>(1)?,
+                        r.get::<_, i64>(2)? != 0,
+                    ))
                 })?
                 .collect::<Result<_, _>>()?;
             rows
@@ -479,10 +526,13 @@ impl SqliteStore {
         if rows.is_empty() {
             return Ok(KeyClaim::NoneStored);
         }
-        let Some((id, bytes)) = rows.into_iter().find(|(_, bytes)| meets(bytes)) else {
+        let Some((id, bytes, last_resort)) = rows.into_iter().find(|(_, bytes, _)| meets(bytes))
+        else {
             return Ok(KeyClaim::NoneCompatible);
         };
-        tx.execute("DELETE FROM keypackages WHERE id = ?1", params![id])?;
+        if !last_resort {
+            tx.execute("DELETE FROM keypackages WHERE id = ?1", params![id])?;
+        }
         tx.commit()?;
         Ok(KeyClaim::Claimed(bytes))
     }
@@ -1479,6 +1529,10 @@ impl SqliteStore {
         Ok(c + p)
     }
 }
+
+#[cfg(test)]
+#[path = "store_key_package_tests.rs"]
+mod key_package_tests;
 
 #[cfg(test)]
 mod tests {

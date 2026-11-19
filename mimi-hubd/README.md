@@ -390,7 +390,7 @@ returns is recorded so the Welcome that uses it goes there; any other such reque
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/.well-known/mimi-protocol-directory` | Advertises supported ciphersuite, draft revisions, and endpoint URLs. |
-| GET | `/mimi/v1/keyMaterial?user=` | Serve one local user's one-time KeyPackage. |
+| GET | `/mimi/v1/keyMaterial?user=` | Serve one local user's KeyPackage: a one-time one, or the last-resort one when none is left. |
 | POST | `/mimi/v1/keyMaterial/ingest` | Gate + optionally publish a KeyPackage, for a user of the provider the peer's proof names (403 otherwise; never for a user of this provider, whose operator publishes on its own listener). |
 | POST | `/mimi/v1/notify?room=` | Idempotent fanout receipt; the peer must be the hub of `room` (403 otherwise). |
 | POST | `/mimi/v1/welcome/ingest` | Gate a Welcome; with `?recipient=`, relay it for a user of the peer's own provider (403 for a user of this provider). |
@@ -418,7 +418,8 @@ A refused request is a 401 `client-not-authenticated`; past 600 requests a minut
 
 | Path | Body → answer | What it does |
 |---|---|---|
-| `publishKeyPackages` | `{key_packages}` → `{count}` | Replaces the user's KeyPackages (at most 32). Each passes the suite gate and names the user, exactly, in its basic credential. |
+| `publishKeyPackages` | `{key_packages}` → `{count}` | Adds KeyPackages for the user (at most 32 a request; the hub keeps 64 a user, dropping the oldest one-time ones). Each passes the suite gate and names the user, exactly, in its basic credential. One-time KeyPackages are handed out first, once each; a last-resort one (draft-ietf-mls-extensions) only when none is left, and it stays, the newest replacing the one before. |
+| `keyPackageCount` | `{}` → `{one_time, last_resort}` | How many unexpired one-time KeyPackages the user has here, and whether a last-resort one is: what the client reads to know when to publish more. |
 | `withdrawKeyPackages` | `{}` → `{count}` | Removes them; no one can claim the user's KeyPackages after. |
 | `inboxFetch` | `{after_welcome, after_message, limit}` → `{welcomes, messages, more}` | Reads the user's queued Welcomes and messages after the cursors, oldest first (at most 256 of each), without removing them. |
 | `inboxAck` | `{welcomes_up_to, messages_up_to}` → `{welcomes, messages}` | Removes the user's items up to the cursors. |

@@ -77,6 +77,7 @@ pub fn build_client_router(
     Router::new()
         .route("/mimi/client/v1/publishKeyPackages", post(publish))
         .route("/mimi/client/v1/withdrawKeyPackages", post(withdraw))
+        .route("/mimi/client/v1/keyPackageCount", post(key_package_count))
         .route("/mimi/client/v1/inboxFetch", post(inbox_fetch))
         .route("/mimi/client/v1/inboxAck", post(inbox_ack))
         .route("/mimi/client/v1/createRoom", post(create_room))
@@ -210,6 +211,27 @@ async fn publish(
             crate::problem::MATERIAL_NOT_ACCEPTED.response()
         }
         Err(error) => internal("publish", error),
+    }
+}
+
+/// The user's published KeyPackages: how many one-time ones are left unexpired, and whether a last-resort one is.
+#[derive(Serialize)]
+struct KeyPackageCount {
+    one_time: u64,
+    last_resort: bool,
+}
+
+async fn key_package_count(
+    State(state): State<LaneState>,
+    Extension(user): Extension<LaneUser>,
+) -> Response {
+    match crate::http::lock(&state.provider).lane_key_package_count(&user.user, now_unix()) {
+        Ok((one_time, last_resort)) => Json(KeyPackageCount {
+            one_time,
+            last_resort,
+        })
+        .into_response(),
+        Err(error) => internal("keyPackageCount", error),
     }
 }
 

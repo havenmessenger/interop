@@ -74,6 +74,15 @@ impl Provider {
         Ok(Ok(key_packages.len()))
     }
 
+    /// How many unexpired one-time KeyPackages `user` has published, and whether it has a last-resort one: what its
+    /// client reads to know when to publish more.
+    pub fn lane_key_package_count(&self, user: &str, now_unix: u64) -> anyhow::Result<(u64, bool)> {
+        let Some(name) = self.local_name(user) else {
+            anyhow::bail!("not a user of this provider");
+        };
+        self.store.key_package_count(&name, now_unix)
+    }
+
     /// Withdraw every KeyPackage published for `user`, so no one can add them from now on.
     pub fn lane_withdraw(&self, user: &str) -> anyhow::Result<usize> {
         let Some(name) = self.local_name(user) else {

@@ -360,3 +360,71 @@ fn the_per_user_cap_is_per_user_and_per_minute() {
     assert!(cap.admit(ALICE, 600), "another user is counted apart");
     assert!(cap.admit(BOB, 660), "a new minute starts again");
 }
+
+/// Bob publishes a one-time KeyPackage and a last-resort one: the one-time one is handed out first, then the last-resort
+/// one, and again, and the count Bob's client reads says what is left. Revert check: store every published KeyPackage
+/// as one-time, and the last-resort one is gone after its first claim.
+#[tokio::test]
+async fn a_published_last_resort_key_package_is_handed_out_last_and_kept() {
+    use openmls::prelude::tls_codec::Serialize as _;
+    use openmls::prelude::KeyPackage;
+    let lane = lane("last-resort");
+    let bob = crate::mls_fixtures::Member::new(BOB);
+    let last = KeyPackage::builder()
+        .leaf_node_capabilities(crate::mls_fixtures::capabilities())
+        .mark_as_last_resort()
+        .build(
+            crate::mls_fixtures::SUITE,
+            &bob.provider,
+            &bob.signer,
+            bob.credential.clone(),
+        )
+        .unwrap()
+        .key_package()
+        .tls_serialize_detached()
+        .unwrap();
+    let one = real_keypackage_for(BOB.as_bytes());
+    let body = format!(
+        r#"{{"key_packages":["{}","{}"]}}"#,
+        STANDARD.encode(&last),
+        STANDARD.encode(&one)
+    );
+    let (status, _) = call(
+        &lane.router,
+        signed(&lane.key, "publishKeyPackages", BOB, &body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let count =
+        |answer: &serde_json::Value| (answer["one_time"].as_u64(), answer["last_resort"].as_bool());
+    let (status, answer) = call(
+        &lane.router,
+        signed(&lane.key, "keyPackageCount", BOB, "{}"),
+    )
+    .await;
+    assert_eq!(
+        (status, count(&answer)),
+        (StatusCode::OK, (Some(1), Some(true))),
+        "PLANT-HUB-KP-MARKED: the published last-resort KeyPackage is stored as one"
+    );
+    let serve = || {
+        lane.provider
+            .lock()
+            .expect("lock")
+            .serve_key_material("bob", now_unix())
+            .expect("claim")
+    };
+    assert_eq!(serve(), Some(one), "the one-time KeyPackage first");
+    assert_eq!(serve().as_deref(), Some(last.as_slice()));
+    assert_eq!(
+        serve().as_deref(),
+        Some(last.as_slice()),
+        "the last-resort KeyPackage is handed out again"
+    );
+    let (_, answer) = call(
+        &lane.router,
+        signed(&lane.key, "keyPackageCount", BOB, "{}"),
+    )
+    .await;
+    assert_eq!(count(&answer), (Some(0), Some(true)));
+}

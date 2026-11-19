@@ -470,8 +470,10 @@ impl Provider {
             .is_ok_and(|uri| uri.kind == Some(MimiKind::User) && uri.is_local_to(&self.domain))
     }
 
-    /// Publish a local user's one-time KeyPackage so cross-provider peers can claim it. Suite-gated,
-    /// THEN stored with a TTL. (Distinct from `ingest_foreign_keypackage`, which only validates.)
+    /// Publish a local user's KeyPackage so cross-provider peers can claim it. Suite-gated, THEN stored with a TTL,
+    /// marked last-resort when it carries that marker (draft-ietf-mls-extensions): one-time KeyPackages are handed out
+    /// first and once each, a last-resort one only when none is left, and it stays to be handed out again. (Distinct
+    /// from `ingest_foreign_keypackage`, which only validates.)
     pub fn publish_key_package(
         &self,
         username: &str,
@@ -486,7 +488,18 @@ impl Provider {
         let kpref = keypackage_ref(kp_bytes, self.accepted_suites())?;
         self.store
             .associate_kpref_client(&kpref, username, not_after)?;
-        self.store.add_key_package(username, kp_bytes, not_after)
+        let last_resort = {
+            use openmls::prelude::tls_codec::Deserialize as _;
+            let crypto = openmls_rust_crypto::OpenMlsRustCrypto::default();
+            openmls::prelude::KeyPackageIn::tls_deserialize_exact(kp_bytes)?
+                .validate(
+                    openmls_traits::OpenMlsProvider::crypto(&crypto),
+                    openmls::prelude::ProtocolVersion::Mls10,
+                )?
+                .last_resort()
+        };
+        self.store
+            .add_key_package_marked(username, kp_bytes, not_after, last_resort)
     }
 
     // ---- K3/K4: KeyPackageRef routing associations ----
