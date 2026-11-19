@@ -652,10 +652,22 @@ async fn key_material(
             let Some(access) = state.peer_access() else {
                 return crate::problem::UPSTREAM_FAILED.response();
             };
+            let accepted = crate::http::lock(&state.provider)
+                .accepted_suites()
+                .to_vec();
             match crate::key_material_proxy::forward_key_material(&access, &hub, &target, bytes)
                 .await
             {
-                Ok(bytes) => Ok(bytes),
+                // An answer that does not decode as a KeyMaterialResponse, its KeyPackages suite-gated, is not passed on.
+                Ok(bytes) => {
+                    match mimi_core::protocol_wire::KeyMaterialResponse::decode(&bytes, &accepted) {
+                        Ok(_) => Ok(bytes),
+                        Err(error) => {
+                            eprintln!("[mimi-hubd] client lane keyMaterial: the room's hub answered something that does not decode ({error})");
+                            Err(crate::problem::UPSTREAM_FAILED.response())
+                        }
+                    }
+                }
                 Err(why) => {
                     eprintln!("[mimi-hubd] client lane keyMaterial: the room's hub was not reached ({why})");
                     Err(crate::problem::UPSTREAM_FAILED.response())

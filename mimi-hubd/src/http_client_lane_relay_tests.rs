@@ -41,7 +41,7 @@ async fn key_material_for_a_room_here_is_answered_and_must_be_the_users_own() {
     l.provider
         .lock()
         .unwrap()
-        .process_update_consent(
+        .record_consent_decision(
             &ConsentEntry {
                 operation: ConsentOperation::Grant,
                 requester_uri: ALICE.into(),

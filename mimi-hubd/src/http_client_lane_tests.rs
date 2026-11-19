@@ -66,6 +66,16 @@ pub(super) fn lane_at(
     domain: &str,
     rooms: crate::client_lane_rooms::LaneRoomProfile,
 ) -> Lane {
+    lane_reaching(test, domain, rooms, None)
+}
+
+/// [`lane_at`], for a hub whose outbound requests go through `access` when it is given.
+pub(super) fn lane_reaching(
+    test: &str,
+    domain: &str,
+    rooms: crate::client_lane_rooms::LaneRoomProfile,
+    access: Option<Arc<crate::peer_directory::PeerAccess>>,
+) -> Lane {
     let key = Ed25519KeyPair::from_seed_unchecked(&[7u8; 32]).expect("seed");
     let dir = std::env::temp_dir().join(format!("mimi-lane-http-{}-{test}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("dir");
@@ -78,8 +88,11 @@ pub(super) fn lane_at(
         ),
     )
     .expect("key file");
-    let provider: SharedProvider =
-        Arc::new(Mutex::new(Provider::in_memory(domain).expect("provider")));
+    let mut hub = Provider::in_memory(domain).expect("provider");
+    if let Some(access) = access {
+        hub = hub.with_peer_access(access);
+    }
+    let provider: SharedProvider = Arc::new(Mutex::new(hub));
     let auth = Arc::new(ClientLaneAuth {
         keys: PeerKeys::from_file(Some(path)),
         nonces: NonceLedger::default(),
