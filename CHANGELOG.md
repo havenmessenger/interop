@@ -6,6 +6,12 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- openmls moves to its main branch as of 2026-11-18, the commit `Cargo.toml` pins. With `extensions-draft` (`mimi-hubd`), commit staging
+  now enforces every AppDataUpdate list rule of draft-ietf-mls-extensions-10 §4.7: one Remove per component, no Remove
+  together with an Update, and no Remove of a component with no data; Update, Remove and SelfRemove proposals are
+  listed in ascending leaf order; and the component operation label is "MLS Component" (§4.1), which only
+  SafeEncrypt/SafeDecrypt use and nothing here calls. The VC-01 cross-check reruns at the new commit with the same
+  values.
 - A script, `scripts/render_status_page.py`, renders a deployment's status page when the hub is deployed: the
   revision it runs and the one before, the changelog entries and commits between them, the drafts and per-section
   status from `docs/mimi/CONFORMANCE.md`, the divergences, the problem types, the deployment's own settings files, and

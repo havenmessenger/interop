@@ -353,7 +353,7 @@ fn main() {
     let out = VectorFile {
         format_version: 1,
         ciphersuite: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-        openmls_main_pinned_sha: "28369d5b48608bef4ddf8371d91503b0f3852bb3",
+        openmls_main_pinned_sha: "ba267737b9511e538a77a41f4480fbed28ff4e83",
         epoch_secrets,
         small_space_prp,
         reuse_guard,

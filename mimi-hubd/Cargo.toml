@@ -52,9 +52,9 @@ httpdate = "1"                                          # Retry-After as an HTTP
 rusqlite = { version = "0.41", features = ["bundled"] }
 # Each room's public group state (the ratchet tree and GroupContext a delivery service keeps, no secrets). The hub reads
 # participant-list and room-policy changes as AppDataUpdates, which openmls applies only with `extensions-draft`.
-openmls = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3", features = ["extensions-draft"] }
-openmls_rust_crypto = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3", features = ["extensions-draft"] }
-openmls_traits = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3" }
+openmls = { git = "https://github.com/openmls/openmls", rev = "ba267737b9511e538a77a41f4480fbed28ff4e83", features = ["extensions-draft"] }
+openmls_rust_crypto = { git = "https://github.com/openmls/openmls", rev = "ba267737b9511e538a77a41f4480fbed28ff4e83", features = ["extensions-draft"] }
+openmls_traits = { git = "https://github.com/openmls/openmls", rev = "ba267737b9511e538a77a41f4480fbed28ff4e83" }
 # OTLP export (feature `otlp`, off by default): traces and metrics over OTLP/HTTP with protobuf bodies, sent with
 # hyper and the ring rustls provider this crate already uses.
 opentelemetry = { version = "=0.33.1", optional = true, default-features = false, features = ["trace", "metrics"] }

@@ -35,9 +35,9 @@ default-members = [".", "mimi-hubd"]
 exclude = ["tools/vc-vectors-xcheck"]
 
 [dependencies]
-openmls = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3" }
-openmls_rust_crypto = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3" }
-openmls_traits = { git = "https://github.com/openmls/openmls", rev = "28369d5b48608bef4ddf8371d91503b0f3852bb3" }
+openmls = { git = "https://github.com/openmls/openmls", rev = "ba267737b9511e538a77a41f4480fbed28ff4e83" }
+openmls_rust_crypto = { git = "https://github.com/openmls/openmls", rev = "ba267737b9511e538a77a41f4480fbed28ff4e83" }
+openmls_traits = { git = "https://github.com/openmls/openmls", rev = "ba267737b9511e538a77a41f4480fbed28ff4e83" }
 serde = { version = "1", features = ["derive"] }
 tls_codec = "0.5"
 ciborium = "0.2.2"

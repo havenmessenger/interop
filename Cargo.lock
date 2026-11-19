@@ -1939,7 +1939,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "openmls"
 version = "0.9.0"
-source = "git+https://github.com/openmls/openmls?rev=28369d5b48608bef4ddf8371d91503b0f3852bb3#28369d5b48608bef4ddf8371d91503b0f3852bb3"
+source = "git+https://github.com/openmls/openmls?rev=ba267737b9511e538a77a41f4480fbed28ff4e83#ba267737b9511e538a77a41f4480fbed28ff4e83"
 dependencies = [
  "getrandom 0.4.3",
  "log",
@@ -1957,7 +1957,7 @@ dependencies = [
 [[package]]
 name = "openmls_memory_storage"
 version = "0.6.0"
-source = "git+https://github.com/openmls/openmls?rev=28369d5b48608bef4ddf8371d91503b0f3852bb3#28369d5b48608bef4ddf8371d91503b0f3852bb3"
+source = "git+https://github.com/openmls/openmls?rev=ba267737b9511e538a77a41f4480fbed28ff4e83#ba267737b9511e538a77a41f4480fbed28ff4e83"
 dependencies = [
  "log",
  "openmls_traits",
@@ -1969,7 +1969,7 @@ dependencies = [
 [[package]]
 name = "openmls_rust_crypto"
 version = "0.6.0"
-source = "git+https://github.com/openmls/openmls?rev=28369d5b48608bef4ddf8371d91503b0f3852bb3#28369d5b48608bef4ddf8371d91503b0f3852bb3"
+source = "git+https://github.com/openmls/openmls?rev=ba267737b9511e538a77a41f4480fbed28ff4e83#ba267737b9511e538a77a41f4480fbed28ff4e83"
 dependencies = [
  "aes-gcm",
  "chacha20poly1305",
@@ -1994,7 +1994,7 @@ dependencies = [
 [[package]]
 name = "openmls_serialization_helpers"
 version = "0.1.0"
-source = "git+https://github.com/openmls/openmls?rev=28369d5b48608bef4ddf8371d91503b0f3852bb3#28369d5b48608bef4ddf8371d91503b0f3852bb3"
+source = "git+https://github.com/openmls/openmls?rev=ba267737b9511e538a77a41f4480fbed28ff4e83#ba267737b9511e538a77a41f4480fbed28ff4e83"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2005,7 +2005,7 @@ dependencies = [
 [[package]]
 name = "openmls_traits"
 version = "0.6.0"
-source = "git+https://github.com/openmls/openmls?rev=28369d5b48608bef4ddf8371d91503b0f3852bb3#28369d5b48608bef4ddf8371d91503b0f3852bb3"
+source = "git+https://github.com/openmls/openmls?rev=ba267737b9511e538a77a41f4480fbed28ff4e83#ba267737b9511e538a77a41f4480fbed28ff4e83"
 dependencies = [
  "maybe-async",
  "serde",
