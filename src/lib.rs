@@ -34,6 +34,7 @@ pub mod group_info_wire;
 pub mod key_material_signature;
 pub mod message_id;
 pub mod operational_parameters;
+pub mod partial_group_info;
 pub mod participant_list;
 pub mod protocol_wire;
 pub mod room_metadata;

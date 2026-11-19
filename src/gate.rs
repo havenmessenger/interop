@@ -384,10 +384,11 @@ pub fn mimi_gate_welcome_bare(welcome_bytes: &[u8], accepted: &[u16]) -> Result<
 /// Mechanism: `openmls::messages::group_info::VerifiableGroupInfo` derives `TlsDeserialize`
 /// unconditionally (not behind a feature flag) and exposes `ciphersuite()` as the unverified
 /// value read straight off the wire, the same "read before verify" order `mimi_gate_welcome`
-/// uses for a Welcome. Only the `Full` representation is decodable this way; `Partial`
-/// (`PartialGroupInfo`, the sibling delta-encoding draft) has no decoder in this crate or in
-/// openmls's public surface, so it cannot be gated here - callers must not treat an ungated
-/// `Partial` payload as trusted join material.
+/// uses for a Welcome. Only the `Full` representation is decodable this way; a `Partial` one
+/// (`PartialGroupInfo`, ratchet-tree-options §4) carries no ciphersuite, so it cannot be gated
+/// here: it becomes a GroupInfo only when its receiver rebuilds it from the group it tracks
+/// (`crate::partial_group_info`), and callers must not treat an ungated `Partial` payload as
+/// trusted join material.
 pub fn mimi_gate_group_info(group_info_bytes: &[u8], accepted: &[u16]) -> Result<(), GateError> {
     use openmls::messages::group_info::VerifiableGroupInfo;
 

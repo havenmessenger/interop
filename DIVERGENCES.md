@@ -35,7 +35,7 @@ A client can join a room by external Commit (protocol-07 §5.6), as the drafts d
   request `notAuthorized`. Mark's proposed `externalJoinNotAllowed` code is not used until a draft defines it.
 - **The GroupInfo kept** is the Full one the room's last accepted Commit (or the bundle that seeded it) carried, and
   only while the room allows external Commits. After a Commit with a Partial GroupInfo or none, none is kept until the
-  next Full one: a Partial one is not completed from the tree (DIV-12).
+  next Full one: a Partial one is rebuilt to check the Commit (DIV-12), not kept.
 - **An external Commit on `update`** is verified against the room's tree like any other (openmls `PublicGroup`), and is
   refused (`notAllowed`, with the reason) when the user its new leaf names is not of the provider whose proof came with
   the request (the leaf is signed by the joiner's own key, so nothing else ties that user to a provider), when the
@@ -404,15 +404,21 @@ for `partial`, each ending where its own structure ends, with `ratchetTreeOption
 A `Full` payload is written and read that way here: its end is found by decoding it as an
 openmls `VerifiableGroupInfo`, and it is suite-gated at decode.
 
-A `Partial` payload has no decoder in this crate or in openmls, because `PartialGroupInfo`
-belongs to a sibling draft this code does not implement, so there is nothing that could find
-where one ends. It is written with a `<V>` length prefix, the only way to keep
-`ratchetTreeOption` (the trailing field) findable, and it is not suite-gated. A peer that
-sends a raw `Partial` payload will not decode against this codec until `PartialGroupInfo` is
-implemented. The codec is not wired to any route, so no live exchange depends on it. A Commit to a tracked room whose
-GroupInfo is `Partial` is therefore not checked against the hub's group: were that group to drift from the members',
-the drift is refused one epoch late, when the next member `PublicMessage`, whose signature covers the GroupContext,
-fails to verify against it.
+A `Partial` payload is written with a `<V>` length prefix, and it is not suite-gated (it carries no ciphersuite). The
+prefix was the only way to keep `ratchetTreeOption` (the trailing field) findable while nothing here read a
+`PartialGroupInfo`; `mimi_core::partial_group_info` now reads one, which is self-delimiting, so the prefix could go, at
+the cost of changing the `hb-03-partial-group-info` vector. A peer that sends a raw `Partial` payload does not decode
+against this codec meanwhile.
+
+A tracked room's Commit with a `Partial` GroupInfo is checked as one with a `Full` GroupInfo is: the hub rebuilds the
+GroupInfo from its group after the Commit (ratchet-tree-options §4) and checks its signature, signer and GroupContext.
+Two departures from the draft's letter:
+
+- The draft has a GroupInfo sent as a Partial put its `ratchet_tree` extension last. openmls writes it first, before
+  the `external_pub` every GroupInfo it exports carries, so a Partial split from an openmls GroupInfo was signed with
+  the tree first. The hub tries the tree last, then first; the signature decides which, if either, was signed.
+- `ratchet_tree_presence` says whether the GroupInfo before the Commit carried the tree, too (`removed`, `added`). The
+  hub does not keep whether the last GroupInfo did, so it reads only whether this one does.
 
 The protocol-07 wire vectors (`tests/vectors/protocol07-vectors.json`) are written so another implementation can decode
 them: every `HandshakeBundle` carries a one-byte `RatchetTreeOption` naming `distributionService`

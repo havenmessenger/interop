@@ -1494,10 +1494,9 @@ impl GroupInfoRepresentation {
 /// §5.3 `GroupInfoOption`. The draft carries `payload` raw, self-delimited by its own TLS structure, not
 /// `<V>`-length-prefixed. A `Full` payload (`GroupInfo`) is written and read that way: its end is found by decoding it as an
 /// `openmls::messages::group_info::VerifiableGroupInfo` (absent from `openmls::prelude` but public), and it is suite-gated at
-/// decode via `crate::gate::mimi_gate_group_info`. A `Partial` payload (`PartialGroupInfo`) belongs to the unimplemented
-/// sibling draft, so there is no decoder that could find where it ends; it keeps a length-prefix wrap as the only way to keep
-/// `ratchetTreeOption` (which follows it) findable, and is not suite-gated. That is a disclosed departure for the `Partial`
-/// representation alone (DIVERGENCES.md).
+/// decode via `crate::gate::mimi_gate_group_info`. A `Partial` payload (`PartialGroupInfo`, read by
+/// `crate::partial_group_info`) keeps a length-prefix wrap here, and is not suite-gated. That is a disclosed departure for the
+/// `Partial` representation alone (DIVERGENCES.md DIV-12).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupInfoOption {
     pub representation: GroupInfoRepresentation,

@@ -6,6 +6,13 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimi-core`: `partial_group_info`, the `PartialGroupInfo` of draft-ietf-mls-ratchet-tree-options §4: read, written,
+  split from a GroupInfo by its committer, and rebuilt into the GroupInfo it stands for from the GroupContext,
+  confirmation tag, signer leaf and tree its receiver holds.
+- `mimi-hubd`: a tracked room's Commit with a Partial GroupInfo is checked as one with a Full GroupInfo is. The hub
+  rebuilds the GroupInfo from its group after the Commit (with the tree after it, when the Partial says the GroupInfo
+  carries one) and refuses the Commit (`invalidProposal`) unless the committer signed it. Before, a Partial GroupInfo
+  was taken unchecked. DIV-12 has where the rebuild departs from the draft's letter.
 - `mimi-hubd`: the client lane serves `keyMaterial` (a client's signed `KeyMaterialRequest`, checked to be the user's
   own) and acts on rooms on another hub: `submitMessage`, `update` and `keyMaterial` for such a room are sent to the
   room's hub as this provider, as protocol-07 §3.4 and §5.2 have a member provider do. keyMaterial on the lane is

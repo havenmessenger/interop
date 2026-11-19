@@ -12,11 +12,13 @@
 //! comes with, that member's provider must be the peer that sent the bundle, and every participant the hub lists for the
 //! room must be a member of the tree. The hub records the group's id and which provider seeded the room.
 //!
-//! A tracked room's Commit with a Full GroupInfo is checked against the group after it: the GroupInfo must be signed by
-//! the committer with the key it holds after the Commit, and its GroupContext must be the hub's. A Commit with a Partial
-//! GroupInfo is not checked so, since the hub does not rebuild one (DIVERGENCES DIV-12), and a drift of the hub's group
-//! from the members' is refused one epoch late, when the next member PublicMessage's signature over the GroupContext
-//! fails to verify.
+//! A tracked room's Commit with a GroupInfo is checked against the group after it: the GroupInfo must be signed by the
+//! committer with the key it holds after the Commit, name the committer's leaf, and carry the hub's GroupContext. A
+//! Partial GroupInfo (ratchet-tree-options §4) is first rebuilt from the group after the Commit: its GroupContext, the
+//! Commit's confirmation tag, the committer's leaf, and the tree when the Partial says the GroupInfo carries one, tried
+//! last (as the draft has it) and first (as openmls writes it). A Commit with no GroupInfo is not checked so, and a
+//! drift of the hub's group from the members' is refused one epoch late, when the next member PublicMessage's signature
+//! over the GroupContext fails to verify.
 
 use openmls::framing::{MlsMessageIn, ProcessedMessageContent, ProtocolMessage, Sender};
 use openmls::group::{PublicGroup, StagedCommit};
@@ -30,6 +32,7 @@ use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::OpenMlsProvider;
 
 use mimi_core::app_data::{resolve_component, AppDataError, ComponentChange};
+use mimi_core::partial_group_info::{PartialGroupInfo, TreeAt};
 use mimi_core::participant_list::decode_participant_list_data;
 use mimi_core::protocol_wire::{GroupInfoOption, GroupInfoRepresentation};
 
@@ -120,6 +123,78 @@ fn committer_key(
         key,
         group.ciphersuite().signature_algorithm(),
     ))
+}
+
+/// Why a Commit could not be staged on a room's group.
+enum StageError {
+    /// It does not verify or does not apply to the group.
+    DoesNotApply,
+    /// The shared resolver refuses its AppDataUpdates.
+    AppData(AppDataError),
+    /// Its AppDataUpdates, resolved, do not apply.
+    AppDataDoesNotApply(Sender),
+    /// It is not a Commit.
+    NotACommit(Sender),
+}
+
+/// Verify `message` against `group` and stage it, without changing the group: its sender and the staged Commit. Each
+/// component's AppDataUpdates go to the one resolver this hub and its clients share, together and in the Commit's order
+/// (draft-ietf-mls-extensions §4.7); the participant list's all index the list before the Commit (protocol-07 §7.5).
+fn stage_commit(
+    group: &PublicGroup,
+    crypto: &impl openmls_traits::crypto::OpenMlsCrypto,
+    message: ProtocolMessage,
+) -> Result<(Sender, StagedCommit), StageError> {
+    let processed = group
+        .process_message(crypto, message)
+        .map_err(|_| StageError::DoesNotApply)?;
+    let sender = processed.sender().clone();
+    let staged = match processed.into_content() {
+        ProcessedMessageContent::StagedCommitMessage(staged) => *staged,
+        ProcessedMessageContent::UnresolvedAppDataCommit(unresolved) => {
+            let mut by_component: Vec<(u16, Vec<ComponentChange<'_>>)> = Vec::new();
+            for proposal in unresolved.app_data_update_proposals() {
+                let component = proposal.component_id();
+                let change = match proposal.operation() {
+                    AppDataUpdateOperation::Remove => ComponentChange::Remove,
+                    AppDataUpdateOperation::Update(data) => {
+                        ComponentChange::Update(data.as_slice())
+                    }
+                };
+                match by_component.last_mut() {
+                    Some((last, changes)) if *last == component => changes.push(change),
+                    _ => by_component.push((component, vec![change])),
+                }
+            }
+            let mut updater = group.app_data_dictionary_updater();
+            for (component, changes) in &by_component {
+                let before = updater.old_value(*component);
+                let value =
+                    resolve_component(*component, before, changes).map_err(StageError::AppData)?;
+                match value {
+                    Some(value) => updater.set(openmls::component::ComponentData::from_parts(
+                        *component,
+                        value.into(),
+                    )),
+                    None => updater.remove(component),
+                }
+            }
+            let changes = updater.changes();
+            group
+                .stage_app_data_commit(crypto, *unresolved, changes)
+                .map_err(|_| StageError::AppDataDoesNotApply(sender.clone()))?
+        }
+        _ => return Err(StageError::NotACommit(sender)),
+    };
+    Ok((sender, staged))
+}
+
+/// The user a Commit's sender is, when it is a member named by its credential.
+fn sender_uri(group: &PublicGroup, sender: &Sender) -> Option<String> {
+    match sender {
+        Sender::Member(leaf) => member_uri(group, *leaf),
+        _ => None,
+    }
 }
 
 /// The refusal for a Commit whose AppDataUpdates the shared resolver refuses.
@@ -276,20 +351,37 @@ impl Provider {
                 ));
             }
         }
-        let processed = group
-            .process_message(crypto.crypto(), message)
-            .map_err(|_| {
-                refused(
+        // The Commit's confirmation tag, which a Partial GroupInfo leaves for the hub to fill in.
+        let confirmation_tag = match &message {
+            ProtocolMessage::PublicMessage(public) => public
+                .confirmation_tag()
+                .and_then(|tag| tag.tls_serialize_detached().ok()),
+            _ => None,
+        };
+        let (processed_sender, staged) =
+            stage_commit(&group, crypto.crypto(), message).map_err(|error| match error {
+                StageError::DoesNotApply => refused(
                     "it does not verify or apply to the room's tree",
                     None,
                     UpdateRefusal::NotAllowed,
-                )
+                ),
+                StageError::AppData(error) => app_data_refusal(error),
+                StageError::AppDataDoesNotApply(sender) => refused(
+                    "its AppDataUpdates do not apply",
+                    sender_uri(&group, &sender).as_deref().and_then(provider_of),
+                    UpdateRefusal::NotAllowed,
+                ),
+                StageError::NotACommit(sender) => refused(
+                    "not a Commit",
+                    sender_uri(&group, &sender).as_deref().and_then(provider_of),
+                    UpdateRefusal::Invalid("the commit is not one this hub can read"),
+                ),
             })?;
-        let committer_leaf = match processed.sender() {
+        let committer_leaf = match &processed_sender {
             Sender::Member(leaf) => Some(*leaf),
             _ => None,
         };
-        let (sender, external) = match processed.sender() {
+        let (sender, external) = match &processed_sender {
             Sender::Member(leaf) => (member_uri(&group, *leaf), false),
             // An external Commit: its joiner is named by the leaf its update path adds, once staged.
             Sender::NewMemberCommit => (None, true),
@@ -302,84 +394,54 @@ impl Provider {
             }
         };
         let sender_provider = sender.as_deref().and_then(provider_of);
-        let staged = match processed.into_content() {
-            ProcessedMessageContent::StagedCommitMessage(staged) => *staged,
-            ProcessedMessageContent::UnresolvedAppDataCommit(unresolved) => {
-                // Each component's updates go to the one resolver this hub and its clients share, together and in the
-                // Commit's order (draft-ietf-mls-extensions §4.7); the participant list's all index the list before the
-                // Commit (protocol-07 §7.5).
-                let mut by_component: Vec<(u16, Vec<ComponentChange<'_>>)> = Vec::new();
-                for proposal in unresolved.app_data_update_proposals() {
-                    let component = proposal.component_id();
-                    let change = match proposal.operation() {
-                        AppDataUpdateOperation::Remove => ComponentChange::Remove,
-                        AppDataUpdateOperation::Update(data) => {
-                            ComponentChange::Update(data.as_slice())
-                        }
-                    };
-                    match by_component.last_mut() {
-                        Some((last, changes)) if *last == component => changes.push(change),
-                        _ => by_component.push((component, vec![change])),
-                    }
-                }
-                let mut updater = group.app_data_dictionary_updater();
-                for (component, changes) in &by_component {
-                    let before = updater.old_value(*component);
-                    let value =
-                        resolve_component(*component, before, changes).map_err(app_data_refusal)?;
-                    match value {
-                        Some(value) => updater.set(openmls::component::ComponentData::from_parts(
-                            *component,
-                            value.into(),
-                        )),
-                        None => updater.remove(component),
-                    }
-                }
-                let changes = updater.changes();
-                group
-                    .stage_app_data_commit(crypto.crypto(), *unresolved, changes)
-                    .map_err(|_| {
+        if let Some(group_info) = group_info {
+            let signer = committer_leaf_after(&group, &staged, committer_leaf);
+            // A Full GroupInfo as sent; a Partial one rebuilt from the group after the Commit, in each place its tree
+            // may stand (ratchet-tree-options §4), and taken if one of them is signed.
+            let candidates = match group_info.representation {
+                GroupInfoRepresentation::Full => vec![group_info.payload.clone()],
+                GroupInfoRepresentation::Partial => self
+                    .rebuilt_group_infos(
+                        tracking,
+                        commit,
+                        &group_info.payload,
+                        &staged,
+                        confirmation_tag.as_deref(),
+                        signer,
+                    )
+                    .ok_or_else(|| {
                         refused(
-                            "its AppDataUpdates do not apply",
+                            "its Partial GroupInfo does not decode",
                             sender_provider.clone(),
-                            UpdateRefusal::NotAllowed,
+                            UpdateRefusal::Invalid("the Partial GroupInfo does not decode"),
                         )
-                    })?
-            }
-            _ => {
-                return Err(refused(
-                    "not a Commit",
-                    sender_provider,
-                    UpdateRefusal::Invalid("the commit is not one this hub can read"),
-                ))
-            }
-        };
-        if let Some(group_info) =
-            group_info.filter(|info| info.representation == GroupInfoRepresentation::Full)
-        {
+                    })?,
+            };
             // Signed by the committer, with the key it holds after the Commit, before its GroupContext is compared: a
-            // GroupInfo rewritten on its way here cannot make a hub whose group has drifted match it.
-            let info =
-                VerifiableGroupInfo::tls_deserialize_exact(group_info.payload.as_slice()).ok();
-            // It must also name the committer's leaf as its signer, or every joiner, which verifies it under the key of
-            // the leaf it names, would fail to.
-            let signed = info.as_ref().is_some_and(|info| {
-                info.signer() == committer_leaf_after(&group, &staged, committer_leaf)
-                    && committer_key(&group, &staged, committer_leaf)
-                        .is_some_and(|key| info.verify_no_out(crypto.crypto(), &key).is_ok())
+            // GroupInfo rewritten on its way here cannot make a hub whose group has drifted match it. It must also name
+            // the committer's leaf as its signer, or every joiner, which verifies it under the key of the leaf it names,
+            // would fail to.
+            let key = committer_key(&group, &staged, committer_leaf);
+            let info = candidates.iter().find_map(|bytes| {
+                VerifiableGroupInfo::tls_deserialize_exact(bytes.as_slice())
+                    .ok()
+                    .filter(|info| {
+                        info.signer() == signer
+                            && key
+                                .as_ref()
+                                .is_some_and(|key| info.verify_no_out(crypto.crypto(), key).is_ok())
+                    })
             });
-            if !signed {
+            let Some(info) = info else {
                 return Err(refused(
                     "its GroupInfo is not signed by the committer",
                     sender_provider,
                     UpdateRefusal::Invalid("the GroupInfo is not signed by the Commit's sender"),
                 ));
-            }
-            let matches = info.is_some_and(|info| {
-                info.group_context().tls_serialize_detached().ok()
-                    == staged.group_context().tls_serialize_detached().ok()
-            });
-            if !matches {
+            };
+            if info.group_context().tls_serialize_detached().ok()
+                != staged.group_context().tls_serialize_detached().ok()
+            {
                 return Err(refused(
                     "its GroupInfo does not describe the group after it",
                     sender_provider,
@@ -408,6 +470,53 @@ impl Provider {
             had_roles_list,
             joiner,
         })
+    }
+
+    /// The GroupInfos a Partial GroupInfo (ratchet-tree-options §4) stands for after `staged`: the GroupContext after the
+    /// Commit, its extensions, the Commit's `confirmation_tag`, `signer` and its signature, with the tree after the
+    /// Commit last (as the draft has it) and first (as openmls writes it) when its presence says the GroupInfo carries
+    /// one. None when it does not decode, carries a ratchet_tree itself, or the Commit has no confirmation tag.
+    fn rebuilt_group_infos(
+        &self,
+        tracking: &RoomTracking,
+        commit: &[u8],
+        partial: &[u8],
+        staged: &StagedCommit,
+        confirmation_tag: Option<&[u8]>,
+        signer: LeafNodeIndex,
+    ) -> Option<Vec<Vec<u8>>> {
+        let partial = PartialGroupInfo::decode(partial).ok()?;
+        let confirmation_tag = confirmation_tag?;
+        let group_context = staged.group_context().tls_serialize_detached().ok()?;
+        let rebuild = |tree| {
+            partial
+                .group_info(&group_context, tree, confirmation_tag, signer.u32())
+                .ok()
+        };
+        if !partial.ratchet_tree_presence.in_current_epoch() {
+            return Some(vec![rebuild(None)?]);
+        }
+        let tree = self.tree_after(tracking, commit)?;
+        Some(vec![
+            rebuild(Some((&tree, TreeAt::Last)))?,
+            rebuild(Some((&tree, TreeAt::First)))?,
+        ])
+    }
+
+    /// The room's ratchet tree after `commit`, encoded. A PublicGroup's staged Commit exports no tree, so the Commit is
+    /// staged again on a second copy of the group, which is merged in memory; the room's stored group is not touched.
+    fn tree_after(&self, tracking: &RoomTracking, commit: &[u8]) -> Option<Vec<u8>> {
+        let scratch = OpenMlsRustCrypto::default();
+        let groups = self.store.groups();
+        let mut group =
+            PublicGroup::load(&groups, &GroupId::from_slice(&tracking.group_id)).ok()??;
+        let message = MlsMessageIn::tls_deserialize_exact(commit)
+            .ok()?
+            .try_into_protocol_message()
+            .ok()?;
+        let (_, staged) = stage_commit(&group, scratch.crypto(), message).ok()?;
+        group.merge_commit(scratch.storage(), staged).ok()?;
+        group.export_ratchet_tree().tls_serialize_detached().ok()
     }
 
     /// Verify a tracked room's proposals against its tree and queue them in its group for the Commit that will name them.
@@ -660,6 +769,10 @@ impl Provider {
 #[cfg(test)]
 #[path = "room_tree_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "room_tree_partial_tests.rs"]
+mod partial_tests;
 
 #[cfg(test)]
 #[path = "room_tree_list_merge_tests.rs"]
