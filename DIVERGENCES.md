@@ -392,7 +392,7 @@ has it (`uint16`), `MediaType` as its §6.2.2 struct, and `unit64` as `uint64`. 
 names no enum value, so only `unspecified`, `immediate_commit` and `random_delay` are read.
 
 Enforced: `external_commit_allowed` (DIV-1). `external_proposal_allowed` can only narrow what the hub takes, since it
-accepts no external proposal from a peer (INV-MLS-001b); it is kept and not otherwise acted on. Every other field is
+accepts no external proposal from a peer; it is kept and not otherwise acted on. Every other field is
 kept and not enforced. A change to the component needs the proposer's role to hold `canChangeMlsOperationalPolicies`
 (`0x0600`), which -04 lists as reserved: this hub reads it as the draft's own capability for the change, pending the
 draft's answer, and a room with no roles has no role checks (room-policy PR #52: "A room that has no `roles_list` has no role-based restrictions.").
