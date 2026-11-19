@@ -90,7 +90,7 @@ mechanism and a client calls it.
 |---|---|---|---|---|
 | A1 | 5.10.2 | Hub checks a `downloadUrl` host belongs to a peer provider | Not built yet | DIV-3 |
 | A2 | 5.10.3 | OHTTP gateway for asset download | Not built yet | DIV-3 |
-| — | 5.9 | `reportAbuse` with an attached AbusiveMessage | Not built yet | Metadata-only reports are accepted (DIV-8, DIV-9) |
+| A3 | 5.9 | `reportAbuse` with an attached AbusiveMessage | Not built yet | Metadata-only reports are accepted (DIV-8, DIV-9) |
 
 ## Wire framing (protocol-07 §5, TLS presentation language)
 

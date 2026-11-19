@@ -52,7 +52,7 @@ A client can join a room by external Commit (protocol-07 §5.6), as the drafts d
 The accept-gates refuse a KeyPackage, Welcome or GroupInfo in a ciphersuite outside the accepted
 list before the bytes reach openmls. The list is the deployment's (`mls_ciphersuites` in the
 policy file, `mimi-hubd/README.md`); by default it is every suite the crypto provider implements,
-and the directory advertises exactly it.
+and the directory lists the same suites.
 
 ## DIV-3 - Assets and OHTTP transport
 
@@ -153,7 +153,7 @@ string, with no room semantics) and does not fan out.
 
 ## DIV-6 - client-asserted identity is not bound to an authenticated channel
 
-This reference hub authenticates the TRANSPORT PEER via mTLS (an allowlisted certificate), never
+This reference hub authenticates the transport peer via mTLS (an allowlisted certificate), never
 the individual end-user identity inside a request body. The three wire routes that carry a claimed
 identity have different answers, not one shared gap:
 
@@ -187,7 +187,7 @@ identity have different answers, not one shared gap:
 
 §5.1 defines a directory whose top-level keys are the endpoint URLs. This hub's `directory()`
 now publishes those flat, draft-shaped keys (absolute HTTPS URLs) for the six endpoints it
-actually wire-routes, alongside the pre-existing `endpoints` (JSON compat lane) and
+wire-routes, alongside the pre-existing `endpoints` (JSON compat lane) and
 `wireEndpoints` (TLS-PL lane, relative paths) nesting, kept as additive non-standard keys for
 existing consumers. A client that looks for a root-level `keyMaterial` key per the draft now
 finds one.
@@ -215,13 +215,12 @@ design), plus the receiver-side verification the draft describes. The implementa
 compute or verify `server_frank`; `SubmitMessageResponse` therefore omits `frank`, and `reportAbuse`
 rejects attached `AbusiveMessage` values rather than accepting them unverified.
 
-## DIV-10 - CLOSED for a Commit carrying one change, with or without `Add` and `Remove`, and for a member leaving through proposals the next Commit includes by reference; `roomPolicy`/`memberRole`/`addParticipant`/`authorizeSender` still have no wire route of their own
+## DIV-10 - CLOSED for room updates by Commit; four operations have no wire route of their own
 
-**This entry has been rewritten twice already this session as the real picture came into focus -
-each rewrite is kept below rather than silently replaced, per this file's own discipline of
-recording what changed and why.** The short version: the wire-parsing step some earlier language
-here called blocked on group-state machinery was not blocked on that at all; it is done, and it is
-now wired end to end for both custom proposal types.
+`update` (§5.3) applies a Commit carrying one participant-list change, one room-policy change, or one of each, with or
+without `Add` and `Remove` proposals, and a member's leave through proposals the next Commit includes by reference.
+`roomPolicy`, `memberRole`, `addParticipant` and `authorizeSender` have no wire route of their own: on the wire they
+are what an `update` does.
 
 `POST /mimi/pl/update/{roomId}` (§5.3) takes an `UpdateRequest`, a `HandshakeBundle` whose
 `PublicMessage`-wrapped MLS Commit carries a participant-list change, a room-policy change, or one of each (and, since
@@ -358,7 +357,7 @@ on the wire.
   applied, not that the Commit was distributed (§5.3's "will be distributed"). A body that is only
   the Commit, without the bundle around it, is refused.
 - The four room-admin RPCs (`roomPolicy`/`memberRole`/`addParticipant`/`authorizeSender`) remain
-  JSON-compat-lane only - `update` is the wire-lane mechanism for the two operations it actually
+  JSON-compat-lane only - `update` is the wire-lane mechanism for the two operations it
   carries (roster and policy changes); it is not a wire-framing of those four RPCs themselves.
 
 Verified against a captured real `openmls` Commit, freshly re-encoded ones each test run, an
