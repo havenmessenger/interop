@@ -926,9 +926,13 @@ async fn request_consent(
 /// a malformed entry or a non-0x0001 grant KP is dropped without revealing anything.
 async fn update_consent(
     State(p): State<SharedProvider>,
+    peer: Option<Extension<PeerCert>>,
     Json(entry): Json<ConsentEntry>,
 ) -> StatusCode {
-    match lock(&p).process_update_consent(&entry, now_unix()) {
+    let peer = peer
+        .as_ref()
+        .and_then(|Extension(PeerCert(identity))| identity.as_ref());
+    match lock(&p).process_update_consent(&entry, peer, now_unix()) {
         Ok(()) => StatusCode::CREATED,
         Err(_) => StatusCode::CREATED, // drop malformed silently, privacy over diagnostics
     }
@@ -979,16 +983,20 @@ async fn request_consent_wire(
 async fn update_consent_wire(
     State(p): State<SharedProvider>,
     Path(_requester_domain): Path<String>,
+    peer: Option<Extension<PeerCert>>,
     body: Bytes,
 ) -> Response {
     if !operation_is_one_of(&body, &[ConsentOperation::Grant, ConsentOperation::Revoke]) {
         return crate::problem::WRONG_OPERATION.response();
     }
+    let peer = peer
+        .as_ref()
+        .and_then(|Extension(PeerCert(identity))| identity.as_ref());
     let provider = lock(&p);
     if let Ok(entry) =
         mimi_core::protocol_wire::decode_consent_entry(&body, provider.accepted_suites())
     {
-        let _ = provider.process_update_consent(&entry, now_unix());
+        let _ = provider.process_update_consent(&entry, peer, now_unix());
     }
     StatusCode::ACCEPTED.into_response()
 }
@@ -1327,13 +1335,19 @@ mod tests {
                 .body(Body::from(body))
                 .unwrap()
         };
+        // From mimi-b, the provider of its target: mimi-b's Bob granted our Alice, which this hub keeps.
         let grant = serde_json::json!({
             "operation": 2,
-            "requester_uri": "mimi://mimi-b.havenmessenger.com/u/bob",
-            "target_uri": "mimi://mimi.havenmessenger.com/u/alice"
+            "requester_uri": "mimi://mimi.havenmessenger.com/u/alice",
+            "target_uri": "mimi://mimi-b.havenmessenger.com/u/bob"
         })
         .to_string();
-        let r = router
+        let from_b = router
+            .clone()
+            .layer(axum::Extension(crate::peer::PeerCert(Some(
+                crate::peer::PeerIdentity::signed("mimi-b.havenmessenger.com"),
+            ))));
+        let r = from_b
             .clone()
             .oneshot(post("/mimi/v1/updateConsent", grant))
             .await
@@ -1343,7 +1357,31 @@ mod tests {
             StatusCode::CREATED,
             "updateConsent reachable + 201"
         );
-        // it actually persisted: the gate now allows that requester.
+        // it actually persisted.
+        assert_eq!(
+            p.lock()
+                .unwrap()
+                .keypackage_access(
+                    "mimi://mimi.havenmessenger.com/u/alice",
+                    "mimi://mimi-b.havenmessenger.com/u/bob",
+                    None
+                )
+                .unwrap(),
+            mimi_core::consent::KeyPackageAccess::Allowed
+        );
+        // The other way round, mimi-b granting in our Alice's name, is answered the same and records nothing.
+        let forged = serde_json::json!({
+            "operation": 2,
+            "requester_uri": "mimi://mimi-b.havenmessenger.com/u/bob",
+            "target_uri": "mimi://mimi.havenmessenger.com/u/alice"
+        })
+        .to_string();
+        let r = from_b
+            .clone()
+            .oneshot(post("/mimi/v1/updateConsent", forged))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::CREATED);
         assert_eq!(
             p.lock()
                 .unwrap()
@@ -1353,7 +1391,7 @@ mod tests {
                     None
                 )
                 .unwrap(),
-            mimi_core::consent::KeyPackageAccess::Allowed
+            mimi_core::consent::KeyPackageAccess::NoConsent
         );
         // a garbage body still returns 201 (privacy: no oracle), changes nothing.
         let bad = router
@@ -1884,55 +1922,80 @@ mod tests {
         );
     }
 
+    /// A wire updateConsent is the target's provider telling this one, the requester's, of its user's decision
+    /// (protocol-07 §5.7), so it is recorded only from the provider of its target and for a requester here. A peer
+    /// granting consent in the name of a user of this provider records nothing: its KeyPackages stay gated. Every
+    /// answer is 202. Revert check: drop the binding in `process_update_consent` and the forged grant opens the gate.
     #[tokio::test]
-    async fn update_consent_wire_grant_reaches_the_same_gate_as_json() {
+    async fn update_consent_wire_records_only_the_targets_providers_decision() {
+        use crate::peer::{PeerCert, PeerIdentity};
         use mimi_core::consent::{ConsentEntry, ConsentOperation, KeyPackageAccess};
         use mimi_core::protocol_wire::encode_consent_entry;
 
-        let (router, p) = app();
-        let requester = "mimi://mimi-b.havenmessenger.com/u/bob";
-        let target = "mimi://havenmessenger.com/u/alice";
-        assert_eq!(
-            p.lock()
-                .unwrap()
-                .keypackage_access(requester, target, None)
-                .unwrap(),
-            KeyPackageAccess::NoConsent,
-            "default-deny before any grant"
-        );
-
-        let entry = ConsentEntry {
-            operation: ConsentOperation::Grant,
-            requester_uri: requester.to_string(),
-            target_uri: target.to_string(),
-            room_uri: None,
-            client_key_packages: Vec::new(),
-            consent_extensions: Vec::new(),
+        let ours = "mimi://havenmessenger.com/u/alice";
+        let theirs = "mimi://mimi-b.havenmessenger.com/u/bob";
+        let grant = |requester: &str, target: &str| {
+            encode_consent_entry(&ConsentEntry {
+                operation: ConsentOperation::Grant,
+                requester_uri: requester.to_string(),
+                target_uri: target.to_string(),
+                room_uri: None,
+                client_key_packages: Vec::new(),
+                consent_extensions: Vec::new(),
+            })
+            .unwrap()
         };
-        let wire_body = encode_consent_entry(&entry).unwrap();
-
-        let resp = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/mimi/pl/updateConsent/mimi-b.havenmessenger.com")
-                    .body(Body::from(wire_body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::ACCEPTED, "always 202 (privacy)");
-
-        // The same gate state a JSON updateConsent grant would have produced: proves the wire
-        // handler drove the identical Provider code path, not a shadow implementation.
-        assert_eq!(
+        let post = |router: axum::Router, body: Vec<u8>, peer: Option<String>| async move {
+            let router = router.layer(Extension(PeerCert(
+                peer.as_deref().map(PeerIdentity::signed),
+            )));
+            router
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/mimi/pl/updateConsent/havenmessenger.com")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        };
+        let (router, p) = app();
+        let access = |requester: &str, target: &str| {
             p.lock()
                 .unwrap()
                 .keypackage_access(requester, target, None)
-                .unwrap(),
-            KeyPackageAccess::Allowed,
-            "the decoded grant must reach the same gate the JSON lane writes to"
+                .unwrap()
+        };
+
+        // mimi-b says our Alice let its Bob have her KeyPackages: it does not speak for Alice.
+        let forged = post(
+            router.clone(),
+            grant(theirs, ours),
+            Some("mimi-b.havenmessenger.com".to_string()),
+        )
+        .await;
+        assert_eq!(forged, StatusCode::ACCEPTED, "always 202 (privacy)");
+        assert_eq!(
+            access(theirs, ours),
+            KeyPackageAccess::NoConsent,
+            "PLANT-CONSENT-PEER-BINDING: a peer cannot grant consent for a user of this provider"
         );
+        // The same with no proof at all.
+        let anonymous = post(router.clone(), grant(theirs, ours), None).await;
+        assert_eq!(anonymous, StatusCode::ACCEPTED);
+        assert_eq!(access(theirs, ours), KeyPackageAccess::NoConsent);
+
+        // mimi-b says its own Bob granted our Alice: recorded, as the requester's provider keeps it.
+        let reported = post(
+            router.clone(),
+            grant(ours, theirs),
+            Some("mimi-b.havenmessenger.com".to_string()),
+        )
+        .await;
+        assert_eq!(reported, StatusCode::ACCEPTED);
+        assert_eq!(access(ours, theirs), KeyPackageAccess::Allowed);
     }
 
     #[tokio::test]
@@ -2304,7 +2367,7 @@ mod tests {
         // flow would need before this request could ever succeed.
         p.lock()
             .unwrap()
-            .process_update_consent(
+            .record_consent_decision(
                 &ConsentEntry {
                     operation: ConsentOperation::Grant,
                     requester_uri: requester.to_string(),

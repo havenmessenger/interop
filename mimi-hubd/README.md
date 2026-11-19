@@ -399,7 +399,7 @@ returns is recorded so the Welcome that uses it goes there; any other such reque
 | GET | `/mimi/v1/message?user=` | Deliver-once pull of a message queued for a user of the peer's own provider (403 for a user of this provider). |
 | POST | `/mimi/v1/identifierQuery` | Opt-in-only identifier lookup. |
 | POST | `/mimi/v1/requestConsent` | Consent request or cancel (§5.7 C1), always 201. A cancel withdraws only a pending request, and only from the requester's provider. The wire route answers 202, and 422 for an operation it does not take. |
-| POST | `/mimi/v1/updateConsent` | Consent grant/revoke (§5.7 C2), always 201. |
+| POST | `/mimi/v1/updateConsent` | Consent grant/revoke (§5.7 C2), always 201. Recorded only from the provider of its target user, for a requester of this provider (§5.7); a peer cannot record a decision for this hub's own users. |
 | POST | `/mimi/v1/authorizeSender?room=&sender=` | Check whether a sender may send in a room. |
 
 ### The client lane

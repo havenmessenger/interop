@@ -6,6 +6,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimi-hubd`: `updateConsent` is recorded only from the provider of its target user and for a requester of this
+  provider, and `requestConsent` only from the provider of its requester and for a target of this provider, as
+  protocol-07 §5.7 has them. Before, any peer could send a grant naming one of this hub's users as the target, which
+  the KeyPackage consent gate then honoured. Every answer is unchanged (201 / 202), so none says what was recorded.
 - `mimi-hubd`: a Commit that would seed a room's tree may not change what the hub holds for the room. Its GroupInfo's
   GroupContext must carry the room's policy (roles_list and base room policy), its operational policy, and its
   participant list as the hub's list after the Commit; otherwise it is refused and nothing changes. Before, a seed took

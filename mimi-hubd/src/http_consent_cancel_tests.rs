@@ -69,7 +69,11 @@ fn state(p: &SharedProvider) -> Option<String> {
 fn requested(p: &SharedProvider) {
     p.lock()
         .unwrap()
-        .process_request_consent(&entry(ConsentOperation::Request), None, 1)
+        .process_request_consent(
+            &entry(ConsentOperation::Request),
+            Some(&identity_for(REQUESTER_DOMAIN)),
+            1,
+        )
         .unwrap();
 }
 
@@ -113,7 +117,7 @@ async fn a_cancel_leaves_the_targets_decision_in_place() {
         requested(&p);
         p.lock()
             .unwrap()
-            .process_update_consent(&entry(decision), 2)
+            .record_consent_decision(&entry(decision), 2)
             .unwrap();
         let before = state(&p);
         assert!(before.is_some());
@@ -144,7 +148,7 @@ fn an_update_consent_cancel_changes_nothing() {
     assert!(p
         .lock()
         .unwrap()
-        .process_update_consent(&entry(ConsentOperation::Cancel), 2)
+        .record_consent_decision(&entry(ConsentOperation::Cancel), 2)
         .is_err());
     assert_eq!(state(&p).as_deref(), Some("requested"));
 }

@@ -85,6 +85,11 @@ use mimi_core::uri::{MimiKind, MimiUri};
 
 /// The provider domain of a user URI: its authority, lowercased, with a port taken off. `None` for a URI that is not a
 /// user URI.
+/// Whether `peer`'s proof authenticates the provider domain of `user_uri`.
+fn peer_speaks_for(peer: Option<&crate::peer::PeerIdentity>, user_uri: &str) -> bool {
+    user_domain(user_uri).is_some_and(|domain| peer.is_some_and(|peer| peer.authenticates(&domain)))
+}
+
 fn user_domain(user_uri: &str) -> Option<String> {
     let uri = MimiUri::parse(user_uri).ok()?;
     if uri.kind != Some(MimiKind::User) {
@@ -754,6 +759,15 @@ impl Provider {
         let rk = Self::room_key(&entry.room_uri);
         match entry.operation {
             ConsentOperation::Request => {
+                // §5.7: "the targetUri needs to be in one of the domains of the receiving provider, and the
+                // requesterUri needs to be in one of the domains of the sending provider".
+                if !self.is_local_user(&entry.target_uri)
+                    || !peer_speaks_for(peer, &entry.requester_uri)
+                {
+                    anyhow::bail!(
+                        "a requestConsent is taken only from the requester's provider, for a user of this provider"
+                    );
+                }
                 if self
                     .store
                     .consent_state(&entry.requester_uri, &entry.target_uri, rk)?
@@ -784,11 +798,34 @@ impl Provider {
         Ok(())
     }
 
-    /// C2: accept + process an `updateConsent` (grant / revoke). `grant`→granted, `revoke`→revoked (valid
-    /// PREEMPTIVELY, no prior request needed). A cancel is the requester's and goes through `requestConsent`
-    /// ([`Self::process_request_consent`]). Any grant-carried client_key_packages are suite-gated against the policy's suites before
-    /// they could be stored/used.
+    /// C2: accept + process an `updateConsent` (grant / revoke) from another provider: the target's provider telling this
+    /// one, the requester's, of its user's decision (§5.7: "For updateConsent the requesterUri needs to be in one of the
+    /// domains of the receiving provider, and the targetUri needs to be in one of the domains of the sending
+    /// provider"). It is recorded only when `peer`, the proof the request came with, authenticates the target's domain
+    /// and the requester is a user of this provider; anything else changes nothing, and the caller answers it as any
+    /// other. So no peer can record a decision for this provider's own users, whose KeyPackages the decisions gate
+    /// ([`Self::keypackage_access`]); those are their own ([`Self::record_consent_decision`]).
     pub fn process_update_consent(
+        &self,
+        entry: &ConsentEntry,
+        peer: Option<&crate::peer::PeerIdentity>,
+        now_unix: u64,
+    ) -> anyhow::Result<()> {
+        validate_consent_entry(entry)?;
+        if !self.is_local_user(&entry.requester_uri) || !peer_speaks_for(peer, &entry.target_uri) {
+            anyhow::bail!(
+                "an updateConsent is taken only from the target's provider, for a requester of this provider"
+            );
+        }
+        self.record_consent_decision(entry, now_unix)
+    }
+
+    /// Record a grant or revoke as made by the entry's target: `grant`→granted, `revoke`→revoked (valid preemptively,
+    /// no prior request needed). For a target of this provider this is the decision that gates its KeyPackages, so it
+    /// is called only for a decision the target made itself, never for one a peer reports. A cancel is the
+    /// requester's and goes through `requestConsent` ([`Self::process_request_consent`]). Any grant-carried
+    /// client_key_packages are suite-gated against the policy's suites before they could be stored/used.
+    pub fn record_consent_decision(
         &self,
         entry: &ConsentEntry,
         now_unix: u64,
@@ -2049,6 +2086,33 @@ mod tests {
         }
     }
 
+    /// requestConsent is taken only from the requester's provider and for a user here (§5.7). Revert check: drop the
+    /// binding and a third provider's request is recorded.
+    #[test]
+    fn a_consent_request_is_taken_only_from_the_requesters_provider() {
+        let p = Provider::in_memory("mimi.havenmessenger.com").unwrap();
+        let entry = consent_entry(ConsentOperation::Request, None);
+        let third = crate::peer::PeerIdentity::signed("c.example");
+        assert!(p.process_request_consent(&entry, Some(&third), 1).is_err());
+        assert!(p.process_request_consent(&entry, None, 1).is_err());
+        assert_eq!(
+            p.store
+                .consent_state(&entry.requester_uri, &entry.target_uri, "")
+                .unwrap(),
+            None,
+            "PLANT-CONSENT-REQUEST-BINDING: a request from another provider records nothing"
+        );
+        let own = crate::peer::PeerIdentity::signed("mimi-b.havenmessenger.com");
+        p.process_request_consent(&entry, Some(&own), 1).unwrap();
+        assert_eq!(
+            p.store
+                .consent_state(&entry.requester_uri, &entry.target_uri, "")
+                .unwrap()
+                .as_deref(),
+            Some("requested")
+        );
+    }
+
     #[test]
     fn consent_request_then_grant_then_gate_allows() {
         let p = Provider::in_memory("mimi.havenmessenger.com").unwrap();
@@ -2060,14 +2124,20 @@ mod tests {
             KeyPackageAccess::NoConsent
         );
         // a request is recorded but does NOT grant access
-        p.process_request_consent(&consent_entry(ConsentOperation::Request, None), None, 1)
-            .unwrap();
+        p.process_request_consent(
+            &consent_entry(ConsentOperation::Request, None),
+            Some(&crate::peer::PeerIdentity::signed(
+                "mimi-b.havenmessenger.com",
+            )),
+            1,
+        )
+        .unwrap();
         assert_eq!(
             p.keypackage_access(req, tgt, None).unwrap(),
             KeyPackageAccess::NoConsent
         );
         // a grant opens it
-        p.process_update_consent(&consent_entry(ConsentOperation::Grant, None), 2)
+        p.record_consent_decision(&consent_entry(ConsentOperation::Grant, None), 2)
             .unwrap();
         assert_eq!(
             p.keypackage_access(req, tgt, None).unwrap(),
@@ -2082,16 +2152,16 @@ mod tests {
         let tgt = "mimi://mimi.havenmessenger.com/u/alice";
         let room = "mimi://mimi.havenmessenger.com/r/x";
         // preemptive revoke (no prior request) → NoConsent
-        p.process_update_consent(&consent_entry(ConsentOperation::Revoke, None), 1)
+        p.record_consent_decision(&consent_entry(ConsentOperation::Revoke, None), 1)
             .unwrap();
         assert_eq!(
             p.keypackage_access(req, tgt, None).unwrap(),
             KeyPackageAccess::NoConsent
         );
         // global grant, but a room-specific revoke overrides for that room
-        p.process_update_consent(&consent_entry(ConsentOperation::Grant, None), 2)
+        p.record_consent_decision(&consent_entry(ConsentOperation::Grant, None), 2)
             .unwrap();
-        p.process_update_consent(&consent_entry(ConsentOperation::Revoke, Some(room)), 3)
+        p.record_consent_decision(&consent_entry(ConsentOperation::Revoke, Some(room)), 3)
             .unwrap();
         assert_eq!(
             p.keypackage_access(req, tgt, Some(room)).unwrap(),
@@ -2121,7 +2191,7 @@ mod tests {
             other => panic!("expected NoConsent deny, got {other:?}"),
         }
         // grant → KP served
-        p.process_update_consent(&consent_entry(ConsentOperation::Grant, None), 1)
+        p.record_consent_decision(&consent_entry(ConsentOperation::Grant, None), 1)
             .unwrap();
         let served = p
             .serve_key_material_gated(req, "alice", tgt, None, 1000)
@@ -2141,7 +2211,7 @@ mod tests {
         let mut bad = consent_entry(ConsentOperation::Grant, None);
         bad.client_key_packages = vec![b"not a keypackage".to_vec()];
         assert!(
-            p.process_update_consent(&bad, 1).is_err(),
+            p.record_consent_decision(&bad, 1).is_err(),
             "grant KP suite-gated"
         );
     }

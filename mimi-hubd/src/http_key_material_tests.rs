@@ -22,7 +22,7 @@ const TARGET: &str = "mimi://havenmessenger.com/u/bob";
 fn granted(p: &SharedProvider) {
     p.lock()
         .unwrap()
-        .process_update_consent(
+        .record_consent_decision(
             &ConsentEntry {
                 operation: ConsentOperation::Grant,
                 requester_uri: REQUESTER.into(),
