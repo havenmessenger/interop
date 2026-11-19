@@ -83,13 +83,13 @@ use mimi_core::room_policy::{
 use mimi_core::room_policy_wire::{decode_base_room_policy, decode_role_data};
 use mimi_core::uri::{MimiKind, MimiUri};
 
-/// The provider domain of a user URI: its authority, lowercased, with a port taken off. `None` for a URI that is not a
-/// user URI.
 /// Whether `peer`'s proof authenticates the provider domain of `user_uri`.
 fn peer_speaks_for(peer: Option<&crate::peer::PeerIdentity>, user_uri: &str) -> bool {
     user_domain(user_uri).is_some_and(|domain| peer.is_some_and(|peer| peer.authenticates(&domain)))
 }
 
+/// The provider domain of a user URI: its authority, lowercased, with a port taken off. `None` for a URI that is not a
+/// user URI.
 fn user_domain(user_uri: &str) -> Option<String> {
     let uri = MimiUri::parse(user_uri).ok()?;
     if uri.kind != Some(MimiKind::User) {
