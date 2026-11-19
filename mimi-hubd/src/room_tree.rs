@@ -80,17 +80,13 @@ pub struct StagedRoomCommit {
 }
 
 /// The key the committer of `staged` signs a GroupInfo with after it: its leaf in the Commit's update path when there is
-/// one, else its leaf in the tree. A member's Commit is signed for at its own leaf, so `signer` must be that leaf; an
-/// external Commit's joiner signs with the leaf its update path adds.
+/// one (an external Commit's joiner always has one), else its leaf in the tree. A GroupInfo is verified under this key
+/// whatever leaf it names as its signer, so one another member signed does not verify.
 fn committer_key(
     group: &PublicGroup,
     staged: &StagedCommit,
     committer: Option<LeafNodeIndex>,
-    signer: LeafNodeIndex,
 ) -> Option<OpenMlsSignaturePublicKey> {
-    if committer.is_some_and(|leaf| leaf != signer) {
-        return None;
-    }
     let key = match staged.update_path_leaf_node() {
         Some(leaf) => leaf.signature_key().clone(),
         None => group.leaf(committer?)?.signature_key().clone(),
@@ -341,7 +337,7 @@ impl Provider {
             let info =
                 VerifiableGroupInfo::tls_deserialize_exact(group_info.payload.as_slice()).ok();
             let signed = info.as_ref().is_some_and(|info| {
-                committer_key(&group, &staged, committer_leaf, info.signer())
+                committer_key(&group, &staged, committer_leaf)
                     .is_some_and(|key| info.verify_no_out(crypto.crypto(), &key).is_ok())
             });
             if !signed {

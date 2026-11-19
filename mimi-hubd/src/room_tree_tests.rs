@@ -1,7 +1,7 @@
 //! Seeding a room's tree from a bundle, verifying a tracked room's Commits against it, and what is refused.
 
 use mimi_core::protocol_wire::{GroupInfoOption, GroupInfoRepresentation};
-use openmls::prelude::tls_codec::Serialize as _;
+use openmls::prelude::tls_codec::{Deserialize as _, Serialize as _};
 use openmls::prelude::*;
 
 use super::*;
@@ -261,6 +261,62 @@ fn a_group_info_not_signed_by_the_committer_is_refused() {
         ),
         "PLANT-GROUP-INFO-SIGNED: a GroupInfo with a broken signature passed"
     );
+}
+
+/// A GroupInfo for the group after Alice's Commit, correctly signed by Bob, another member, is refused with her Commit:
+/// it is verified under the committer's key, not the signer it names, so a relayer cannot pass off another member's
+/// GroupInfo as the committer's. Alice's own is taken. Revert check: verify under the key of the leaf the GroupInfo
+/// names, and Bob's passes.
+#[test]
+fn a_group_info_another_member_signed_is_refused() {
+    let p = hub();
+    let alice = Member::new("mimi://example.com/u/alice");
+    let bob = Member::new("mimi://example.com/u/bob");
+    let mut group = alice.create_group(GROUP);
+    let mut bob_group = crate::mls_fixtures::add_and_join(&mut group, &alice, &bob);
+    p.add_participant(ROOM, "mimi://example.com/u/alice", 1)
+        .unwrap();
+    p.add_participant(ROOM, "mimi://example.com/u/bob", 1)
+        .unwrap();
+    let tree = group
+        .export_ratchet_tree()
+        .tls_serialize_detached()
+        .unwrap();
+    p.seed_room_tree(
+        ROOM,
+        0,
+        Some(&example_peer()),
+        &full(&group_info_after(&group, &alice)),
+        &tree_option(&tree),
+    );
+    let tracking = p.room_tracking(ROOM).unwrap().unwrap();
+    let carol = Member::new("mimi://example.com/u/carol");
+    let (commit, alices, _tree) = add_commit(&mut group, &alice, &[&carol]);
+    let message = MlsMessageIn::tls_deserialize_exact(commit.as_slice())
+        .unwrap()
+        .try_into_protocol_message()
+        .unwrap();
+    let ProcessedMessageContent::StagedCommitMessage(staged) = bob_group
+        .process_message(&bob.provider, message)
+        .unwrap()
+        .into_content()
+    else {
+        panic!("a Commit");
+    };
+    bob_group
+        .merge_staged_commit(&bob.provider, *staged)
+        .unwrap();
+    let bobs = group_info_after(&bob_group, &bob);
+    assert!(
+        matches!(
+            p.stage_tracked_commit(ROOM, &tracking, &commit, Some(&full(&bobs))),
+            Err(UpdateRefusal::Invalid(_))
+        ),
+        "PLANT-GROUP-INFO-COMMITTER: a GroupInfo Bob signed passed for Alice's Commit"
+    );
+    assert!(p
+        .stage_tracked_commit(ROOM, &tracking, &commit, Some(&full(&alices)))
+        .is_ok());
 }
 
 /// Untracking drops the group and the record, so the next bundle can seed again.
