@@ -236,6 +236,33 @@ fn a_group_info_that_does_not_match_the_group_after_the_commit_is_refused() {
     );
 }
 
+/// A Full GroupInfo in the bundle must be signed by the Commit's sender with the key it holds after the Commit: Alice's
+/// own GroupInfo stages, and the same GroupInfo with one byte of its signature changed is refused, though its
+/// GroupContext is the group after the Commit. Revert check: compare the GroupContext without the signature, and the
+/// altered GroupInfo stages.
+#[test]
+fn a_group_info_not_signed_by_the_committer_is_refused() {
+    let p = hub();
+    let mut room = room(&p);
+    seed(&p, &room, &example_peer());
+    let tracking = p.room_tracking(ROOM).unwrap().unwrap();
+    let carol = Member::new("mimi://example.com/u/carol");
+    let (commit, group_info, _tree) = add_commit(&mut room.group, &room.alice, &[&carol]);
+    assert!(p
+        .stage_tracked_commit(ROOM, &tracking, &commit, Some(&full(&group_info)))
+        .is_ok());
+    let mut altered = group_info;
+    let last = altered.len() - 1;
+    altered[last] ^= 0x01;
+    assert!(
+        matches!(
+            p.stage_tracked_commit(ROOM, &tracking, &commit, Some(&full(&altered))),
+            Err(UpdateRefusal::Invalid(_))
+        ),
+        "PLANT-GROUP-INFO-SIGNED: a GroupInfo with a broken signature passed"
+    );
+}
+
 /// Untracking drops the group and the record, so the next bundle can seed again.
 #[test]
 fn untracking_drops_the_tree() {

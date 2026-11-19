@@ -409,7 +409,10 @@ belongs to a sibling draft this code does not implement, so there is nothing tha
 where one ends. It is written with a `<V>` length prefix, the only way to keep
 `ratchetTreeOption` (the trailing field) findable, and it is not suite-gated. A peer that
 sends a raw `Partial` payload will not decode against this codec until `PartialGroupInfo` is
-implemented. The codec is not wired to any route, so no live exchange depends on it.
+implemented. The codec is not wired to any route, so no live exchange depends on it. A Commit to a tracked room whose
+GroupInfo is `Partial` is therefore not checked against the hub's group: were that group to drift from the members',
+the drift is refused one epoch late, when the next member `PublicMessage`, whose signature covers the GroupContext,
+fails to verify against it.
 
 The protocol-07 wire vectors (`tests/vectors/protocol07-vectors.json`) are written so another implementation can decode
 them: every `HandshakeBundle` carries a one-byte `RatchetTreeOption` naming `distributionService`

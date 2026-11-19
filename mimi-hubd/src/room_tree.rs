@@ -11,13 +11,20 @@
 //! trust on first use, narrowed: the GroupInfo must be for the epoch after the Commit, signed by a member of the tree it
 //! comes with, that member's provider must be the peer that sent the bundle, and every participant the hub lists for the
 //! room must be a member of the tree. The hub records the group's id and which provider seeded the room.
+//!
+//! A tracked room's Commit with a Full GroupInfo is checked against the group after it: the GroupInfo must be signed by
+//! the committer with the key it holds after the Commit, and its GroupContext must be the hub's. A Commit with a Partial
+//! GroupInfo is not checked so, since the hub does not rebuild one (DIVERGENCES DIV-12), and a drift of the hub's group
+//! from the members' is refused one epoch late, when the next member PublicMessage's signature over the GroupContext
+//! fails to verify.
 
 use openmls::framing::{MlsMessageIn, ProcessedMessageContent, ProtocolMessage, Sender};
 use openmls::group::{PublicGroup, StagedCommit};
 use openmls::messages::group_info::VerifiableGroupInfo;
 use openmls::prelude::tls_codec::{Deserialize as _, Serialize as _};
 use openmls::prelude::{
-    AppDataUpdateOperation, Credential, GroupId, LeafNodeIndex, ProposalStore, RatchetTreeIn,
+    AppDataUpdateOperation, Credential, GroupId, LeafNodeIndex, OpenMlsSignaturePublicKey,
+    ProposalStore, RatchetTreeIn, Verifiable as _,
 };
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::OpenMlsProvider;
@@ -70,6 +77,28 @@ pub struct StagedRoomCommit {
     pub(crate) had_roles_list: bool,
     /// For an external Commit, the joiner's user, by the credential of the leaf its update path adds.
     pub(crate) joiner: Option<String>,
+}
+
+/// The key the committer of `staged` signs a GroupInfo with after it: its leaf in the Commit's update path when there is
+/// one, else its leaf in the tree. A member's Commit is signed for at its own leaf, so `signer` must be that leaf; an
+/// external Commit's joiner signs with the leaf its update path adds.
+fn committer_key(
+    group: &PublicGroup,
+    staged: &StagedCommit,
+    committer: Option<LeafNodeIndex>,
+    signer: LeafNodeIndex,
+) -> Option<OpenMlsSignaturePublicKey> {
+    if committer.is_some_and(|leaf| leaf != signer) {
+        return None;
+    }
+    let key = match staged.update_path_leaf_node() {
+        Some(leaf) => leaf.signature_key().clone(),
+        None => group.leaf(committer?)?.signature_key().clone(),
+    };
+    Some(OpenMlsSignaturePublicKey::from_signature_key(
+        key,
+        group.ciphersuite().signature_algorithm(),
+    ))
 }
 
 /// The refusal for a Commit whose AppDataUpdates the shared resolver refuses.
@@ -235,6 +264,10 @@ impl Provider {
                     UpdateRefusal::NotAllowed,
                 )
             })?;
+        let committer_leaf = match processed.sender() {
+            Sender::Member(leaf) => Some(*leaf),
+            _ => None,
+        };
         let (sender, external) = match processed.sender() {
             Sender::Member(leaf) => (member_uri(&group, *leaf), false),
             // An external Commit: its joiner is named by the leaf its update path adds, once staged.
@@ -303,12 +336,25 @@ impl Provider {
         if let Some(group_info) =
             group_info.filter(|info| info.representation == GroupInfoRepresentation::Full)
         {
-            let matches = VerifiableGroupInfo::tls_deserialize_exact(group_info.payload.as_slice())
-                .ok()
-                .is_some_and(|info| {
-                    info.group_context().tls_serialize_detached().ok()
-                        == staged.group_context().tls_serialize_detached().ok()
-                });
+            // Signed by the committer, with the key it holds after the Commit, before its GroupContext is compared: a
+            // GroupInfo rewritten on its way here cannot make a hub whose group has drifted match it.
+            let info =
+                VerifiableGroupInfo::tls_deserialize_exact(group_info.payload.as_slice()).ok();
+            let signed = info.as_ref().is_some_and(|info| {
+                committer_key(&group, &staged, committer_leaf, info.signer())
+                    .is_some_and(|key| info.verify_no_out(crypto.crypto(), &key).is_ok())
+            });
+            if !signed {
+                return Err(refused(
+                    "its GroupInfo is not signed by the committer",
+                    sender_provider,
+                    UpdateRefusal::Invalid("the GroupInfo is not signed by the Commit's sender"),
+                ));
+            }
+            let matches = info.is_some_and(|info| {
+                info.group_context().tls_serialize_detached().ok()
+                    == staged.group_context().tls_serialize_detached().ok()
+            });
             if !matches {
                 return Err(refused(
                     "its GroupInfo does not describe the group after it",
