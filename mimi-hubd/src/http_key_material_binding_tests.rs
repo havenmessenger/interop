@@ -209,3 +209,36 @@ async fn a_refused_request_spends_no_budget() {
         "PLANT-KM-COUNT-AFTER-BINDING: refused requests spent the requester's budget"
     );
 }
+
+/// A peer that names a new requester each time, through a room on its own domain, is still held to the hourly limit for
+/// one target: the count is on the domain it proved, not only on the names it chose. Another provider is counted on its
+/// own. Revert check: count per requester alone, and the request past the limit is answered.
+#[tokio::test]
+async fn a_peer_naming_new_requesters_is_held_to_its_providers_limit() {
+    let (router, _p) = app();
+    for n in 0..crate::client_lane_relay::KEY_MATERIAL_PER_TARGET_PER_HOUR {
+        let requester = format!("mimi://anyone{n}.example/u/x");
+        let (status, _) = ask(&router, "hub.example", "bob", &requester, BOB, HUB_ROOM).await;
+        assert_eq!(status, StatusCode::OK, "request {n}");
+    }
+    let (status, _) = ask(
+        &router,
+        "hub.example",
+        "bob",
+        "mimi://one-more.example/u/x",
+        BOB,
+        HUB_ROOM,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "PLANT-KM-PROVIDER-BUDGET: a peer stepped around the limit by naming new requesters"
+    );
+    let (status, _) = ask(&router, "third.example", "bob", ZED, BOB, "").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "another provider has its own budget"
+    );
+}

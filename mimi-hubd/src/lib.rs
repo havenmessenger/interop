@@ -498,29 +498,28 @@ impl Provider {
         }
     }
 
-    /// Whether `peer` may ask, on the provider path, for KeyPackages on behalf of `requester`: when its proof
-    /// authenticates the requester's provider (never for a user of this provider, see [`Self::peer_serves_user`]), or
-    /// when the request names a room on another provider and the peer's proof authenticates that provider, the room's
-    /// hub. protocol-07 §5.2 has every keyMaterial request go through the room's hub ("MUST be sent via the hub
-    /// provider of whatever room they will be used in"), so a user's provider hears most of them from the hub.
-    pub fn peer_may_request_key_material(
+    /// The provider domain on whose proof `peer` may ask, on the provider path, for KeyPackages on behalf of
+    /// `requester`: the requester's provider, when the peer's proof authenticates it (never a user of this provider, see
+    /// [`Self::peer_serves_user`]), or else the provider of the room the request names, when the room is on another
+    /// provider and the peer's proof authenticates it, the room's hub. protocol-07 §5.2 has every keyMaterial request go
+    /// through the room's hub ("MUST be sent via the hub provider of whatever room they will be used in"), so a user's
+    /// provider hears most of them from the hub. `None`: the peer may not.
+    pub fn key_material_peer_domain(
         &self,
         requester: &str,
         room: Option<&str>,
         peer: Option<&crate::peer::PeerIdentity>,
-    ) -> bool {
+    ) -> Option<String> {
         if self.peer_serves_user(requester, peer) {
-            return true;
+            return user_domain(requester);
         }
-        let Some(room) = room else {
-            return false;
-        };
+        let room = room?;
         match MimiUri::parse(room) {
             Ok(uri) if uri.kind == Some(MimiKind::Room) && !uri.is_local_to(&self.domain) => {
                 uri_domain(room, MimiKind::Room)
-                    .is_some_and(|domain| peer.is_some_and(|peer| peer.authenticates(&domain)))
+                    .filter(|domain| peer.is_some_and(|peer| peer.authenticates(domain)))
             }
-            _ => false,
+            _ => None,
         }
     }
 

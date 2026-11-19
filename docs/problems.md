@@ -92,10 +92,12 @@ limits. Retry after a minute.
 | `title` | Too many keyMaterial requests for this target |
 | `status` | 429 |
 
-A `keyMaterial` request on the provider path (protocol-07 §5.2) from a requester that has already asked for the same
-target user's KeyPackages the most times the hub takes in an hour (5, as on the client lane). A target's KeyPackages
-are spent by being claimed, and a reused last-resort one (DIVERGENCES DIV-23) is the same each time, so the hub bounds
-how often one requester can claim them. Retry after an hour.
+A `keyMaterial` request on the provider path (protocol-07 §5.2) from a requesting provider, or a requester, that has
+already asked for the same target user's KeyPackages the most times the hub takes in an hour (5 each, as on the client
+lane). The requesting provider is the domain the peer's proof authenticated; the requester is only the name the
+request carries, so the per-provider bound is the one a peer cannot step around. A target's KeyPackages are spent by
+being claimed, and a reused last-resort one (DIVERGENCES DIV-23) is the same each time, so the hub bounds how often
+they can be claimed. Retry after an hour.
 
 ## not-authenticated
 

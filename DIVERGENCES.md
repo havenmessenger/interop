@@ -167,10 +167,14 @@ identity have different answers, not one shared gap:
   this provider's users), or the provider hosting the room the request names, the room's hub, through which §5.2 sends
   every request ("MUST be sent via the hub provider of whatever room they will be used in"); otherwise `403
   not-permitted`. The path's user and the body's `targetUser` must be the same user, since the KeyPackage is taken for
-  the one and consent is read for the other; otherwise `400 malformed-request`. What stays open is the hub's own word:
-  a peer that hosts a room can name any requester for it, as §5.2 has the target's provider hear the request from the
-  hub, and nothing this hub holds ties the request's signature to the requester. Unlike `submitMessage`, the draft's
-  own `KeyMaterialRequest` (§5.2) carries a self-signed identity claim (`requesterSignatureKey`/`requesterCredential`/
+  the one and consent is read for the other; otherwise `400 malformed-request`. What stays open is the room clause, at
+  its full width: any authenticated peer can name any requester by naming a room on its own domain, since the target's
+  provider cannot tell whether that room exists. It follows from §5.2, which has the target's provider hear the request
+  from the room's hub, and from a BasicCredential, which binds the request's signature key to no one; there is no fix
+  inside protocol-07. A consent scoped to a room narrows it, and that is the granting user's choice. What the binding
+  does close is a peer naming a requester of another provider for a room on that provider or on a third one. The
+  provider-path rate limit is therefore counted on what is proven, the peer's domain, as well as on the requester
+  (DIV-23). Unlike `submitMessage`, the draft's own `KeyMaterialRequest` (§5.2) carries a self-signed identity claim (`requesterSignatureKey`/`requesterCredential`/
   `keyMaterialRequestSignature`) - a real mechanism, not an invented one. This hub checks the
   credential's embedded identity against the claimed `requestingUser` and logs the outcome, but
   never refuses a request over a mismatch, and does not verify the signature itself (the exact
@@ -749,9 +753,9 @@ the last-resort KeyPackage encrypts its Welcome to the same init key, and the cl
 replaces the KeyPackage. The hub narrows how often that happens; it does not remove it. §16.8 also has the publication
 system "rate-limit KeyPackage requests, especially if not authenticated". Every `keyMaterial` request from a peer or a
 client is authenticated (the peer's proof on the provider path, the user's signature on the client lane) and passes the
-consent gate, and both paths take at most 5 requests an hour from one requester for one target user (429
-`key-material-rate-limited` on the provider path, `client-rate-limited` on the lane, which also limits each user to 30
-a minute). On the provider path the requester is one the asking peer speaks for (DIV-6): a user of its provider or, as the
-room's hub, any requester for a room it hosts. A peer that names many can make that many sets of requests; a request
-refused for its requester or its target is not counted. The operator's loopback route that serves a KeyPackage (DIV-16, "The operator's
+consent gate. The client lane takes at most 5 requests an hour from one user for one target user, and 30 a minute from
+one user (429 `client-rate-limited`). The provider path takes at most 5 an hour per requesting provider and target user,
+the provider being the domain the peer proved, and 5 per requester and target (429 `key-material-rate-limited`): a
+peer can name any requester by naming a room on its own domain (DIV-6), so the per-provider count is the bound that
+holds. A request refused for its requester or its target is not counted. The operator's loopback route that serves a KeyPackage (DIV-16, "The operator's
 routes") is the operator's, and is neither gated nor limited.

@@ -29,15 +29,17 @@ use crate::peer_directory::PeerAccess;
 pub const KEY_MATERIAL_PER_MINUTE: u32 = 30;
 
 /// keyMaterial requests one requester may make for one target user in an hour, on the client lane and on the provider
-/// path.
+/// path, where one requesting provider may also make no more than this for one target user.
 // LIMIT-REASON: quota: a target's KeyPackages are single-use; this bounds one user spending another's
 pub const KEY_MATERIAL_PER_TARGET_PER_HOUR: u32 = 5;
 
-/// keyMaterial requests per user (this minute) and per user and target (this hour), in memory.
+/// keyMaterial requests per user (this minute), per user and target (this hour), and on the provider path per
+/// requesting provider and target (this hour), in memory.
 #[derive(Default)]
 pub struct KeyMaterialCap {
     per_user: Mutex<HashMap<String, (i64, u32)>>,
     per_target: Mutex<HashMap<(String, String), (i64, u32)>>,
+    per_provider_target: Mutex<HashMap<(String, String), (i64, u32)>>,
 }
 
 fn count<K: std::hash::Hash + Eq>(
@@ -73,19 +75,25 @@ impl KeyMaterialCap {
         user_ok && target_ok
     }
 
-    /// Count one request by `requester` for `target` at `now` (seconds) against the per-target limit alone: the
-    /// provider path's, where the requester is the user the request names and the per-user limit is the requesting
+    /// Count one provider-path request at `now` (seconds) from the peer whose proof authenticated `provider`, naming
+    /// `requester`, for `target`; false when either hourly limit is passed. The per-provider limit is the one that holds:
+    /// requester names cost a peer nothing, the domain it proved does. The per-user minute limit is the requesting
     /// provider's to keep.
-    pub fn admit_target(&self, requester: &str, target: &str, now: i64) -> bool {
-        count(
-            &self.per_target,
-            (
-                mimi_core::uri::canonical(requester),
-                mimi_core::uri::canonical(target),
-            ),
+    pub fn admit_peer(&self, provider: &str, requester: &str, target: &str, now: i64) -> bool {
+        let target = mimi_core::uri::canonical(target);
+        let provider_ok = count(
+            &self.per_provider_target,
+            (provider.to_ascii_lowercase(), target.clone()),
             now / 3600,
             KEY_MATERIAL_PER_TARGET_PER_HOUR,
-        )
+        );
+        let requester_ok = count(
+            &self.per_target,
+            (mimi_core::uri::canonical(requester), target),
+            now / 3600,
+            KEY_MATERIAL_PER_TARGET_PER_HOUR,
+        );
+        provider_ok && requester_ok
     }
 }
 

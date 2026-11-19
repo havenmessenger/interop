@@ -213,7 +213,7 @@ async fn key_material(State(p): State<SharedProvider>, Query(q): Query<UserQuery
 /// draft's own NoConsent/NoConsentForThisRoom userStatus code (5/6), not a generic failure.
 /// The request's `requestingUser` is taken only from a peer that speaks for it: its proof authenticates the
 /// requester's provider, or the provider of the room the request names, the room's hub, which protocol-07 §5.2 has
-/// every keyMaterial request go through (`Provider::peer_may_request_key_material`); otherwise `not-permitted`. The
+/// every keyMaterial request go through (`Provider::key_material_peer_domain`); otherwise `not-permitted`. The
 /// path's user and the body's `targetUser` must be the same user, since the consent gate reads the one and the claim
 /// the other; otherwise `malformed-request`. Both are checked before the request is counted, so a refused one spends
 /// no requester's budget. [`log_key_material_identity_claim`] checks the request's self-signed credential against the
@@ -232,26 +232,31 @@ async fn key_material_wire(
         .as_ref()
         .and_then(|Extension(PeerCert(identity))| identity.as_ref());
     let room = (!req.room_id.0.is_empty()).then_some(req.room_id.0.as_str());
-    {
+    let domain = {
         let provider = lock(&p);
-        if !provider.peer_may_request_key_material(&req.requesting_user.0, room, peer) {
+        let Some(domain) = provider.key_material_peer_domain(&req.requesting_user.0, room, peer)
+        else {
             eprintln!(
                 "[mimi-hubd] keyMaterial: not-permitted, the peer speaks neither for the requester nor as the room's hub"
             );
             return crate::problem::NOT_PERMITTED.response();
-        }
+        };
         let same_user = |user: &str| mimi_core::uri::canonical(&provider.key_package_user(user));
         if same_user(&target_user) != same_user(&req.target_user.0) {
             return crate::problem::MALFORMED_REQUEST.response();
         }
-    }
-    // At most so many a requester for one target in an hour, as on the client lane: a target's KeyPackages are spent by
-    // being claimed, and a last-resort one, when reused (DIVERGENCES DIV-23), is the same one each time.
+        domain
+    };
+    // At most so many from one requesting provider, and from one requester, for one target in an hour: a target's
+    // KeyPackages are spent by being claimed, and a last-resort one, when reused (DIVERGENCES DIV-23), is the same one
+    // each time. The provider is the domain the peer proved; the requester is only a name it chose.
     let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
-    if !lock(&p)
-        .key_material_cap
-        .admit_target(&req.requesting_user.0, &req.target_user.0, now)
-    {
+    if !lock(&p).key_material_cap.admit_peer(
+        &domain,
+        &req.requesting_user.0,
+        &req.target_user.0,
+        now,
+    ) {
         return crate::problem::KEY_MATERIAL_RATE_LIMITED.response();
     }
     match key_material_answer(&p, target_user, &req, body.to_vec()).await {

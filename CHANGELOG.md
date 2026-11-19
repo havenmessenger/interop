@@ -10,8 +10,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   provider, or the provider hosting the room the request names (the room's hub, protocol-07 §5.2); otherwise `403
   not-permitted`. Before, any peer could name any requester, and a request passed the consent gate for any requester
   ever granted. The path's user and the body's `targetUser` must now be the same user (`400 malformed-request`
-  otherwise): consent was read for the body's and the KeyPackage taken for the path's. A refused request is not
-  counted against the per-target limit. DIV-6 has what stays open.
+  otherwise): consent was read for the body's and the KeyPackage taken for the path's. The provider path's hourly
+  limit of 5 for one target user is now counted per requesting provider (the domain the peer proved) as well as per
+  requester, and a refused request is not counted. DIV-6 has what stays open: any peer can name any requester by naming
+  a room on its own domain.
 - `mimi-core`: `partial_group_info`, the `PartialGroupInfo` of draft-ietf-mls-ratchet-tree-options §4: read, written,
   split from a GroupInfo by its committer, and rebuilt into the GroupInfo it stands for from the GroupContext,
   confirmation tag, signer leaf and tree its receiver holds.

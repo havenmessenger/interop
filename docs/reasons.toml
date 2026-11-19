@@ -53,7 +53,7 @@ spec = "RFC 9420"
 section = "16.8"
 quote = "To prevent such a denial-of-service attack, the KeyPackage publication system SHOULD rate-limit KeyPackage requests, especially if not authenticated."
 divergence = "DIV-23"
-reason = "More keyMaterial requests from one requester for one target user in an hour than the hub takes."
+reason = "More keyMaterial requests from one requesting provider, or one requester, for one target user in an hour than the hub takes."
 
 [[reason]]
 id = "no-consent"
