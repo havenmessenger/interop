@@ -1,17 +1,41 @@
 //! One-time and last-resort KeyPackages in the store: one-time ones are handed out first and once each, the last-resort
-//! one only when none is left and kept for the next claim, never evicted for the per-user cap, and replaced by a newer
-//! one.
+//! one only when none is left, and then once too unless reuse is on, when it is kept for the next claim; it is never
+//! evicted for the per-user cap, and a newer one replaces it.
 
 use super::*;
 
 const NOW: u64 = 1_000;
 const LATER: u64 = NOW + 100;
 
-/// Bob's last-resort KeyPackage and two one-time ones: the one-time ones are claimed first, oldest first, and then the
-/// last-resort one, as often as asked. Revert checks: hand out the oldest row whatever it is, and the last-resort one
-/// comes first; delete it when claimed, and the second claim of it finds nothing.
+/// Bob's last-resort KeyPackage and two one-time ones, reuse off (the default): the one-time ones are claimed first,
+/// oldest first, then the last-resort one, once, as protocol-07 §5.2 has key material. Revert check: keep the
+/// last-resort one whatever the setting, and the fourth claim finds it again.
 #[test]
-fn one_time_key_packages_go_first_and_the_last_resort_one_stays() {
+fn the_last_resort_key_package_is_handed_out_once_by_default() {
+    let s = SqliteStore::in_memory().unwrap();
+    s.add_key_package_marked("bob", b"last", LATER, true)
+        .unwrap();
+    s.add_key_package_marked("bob", b"one", LATER, false)
+        .unwrap();
+    s.add_key_package_marked("bob", b"two", LATER, false)
+        .unwrap();
+    let claim = || s.claim_key_package("bob", NOW, false).unwrap();
+    assert_eq!(claim().as_deref(), Some(&b"one"[..]));
+    assert_eq!(claim().as_deref(), Some(&b"two"[..]));
+    assert_eq!(claim().as_deref(), Some(&b"last"[..]));
+    assert_eq!(
+        claim(),
+        None,
+        "PLANT-HUB-KP-ONCE: with reuse off, the last-resort KeyPackage is handed out once"
+    );
+    assert_eq!(s.key_package_count("bob", NOW).unwrap(), (0, false));
+}
+
+/// The same with reuse on: the one-time ones first, then the last-resort one, as often as asked. Revert checks: hand
+/// out the oldest row whatever it is, and the last-resort one comes first; delete it when claimed whatever the setting,
+/// and the second claim of it finds nothing.
+#[test]
+fn with_reuse_on_the_last_resort_key_package_stays() {
     let s = SqliteStore::in_memory().unwrap();
     s.add_key_package_marked("bob", b"last", LATER, true)
         .unwrap();
@@ -20,29 +44,24 @@ fn one_time_key_packages_go_first_and_the_last_resort_one_stays() {
     s.add_key_package_marked("bob", b"two", LATER, false)
         .unwrap();
     assert_eq!(s.key_package_count("bob", NOW).unwrap(), (2, true));
+    let claim = || s.claim_key_package("bob", NOW, true).unwrap();
     assert_eq!(
-        s.claim_key_package("bob", NOW).unwrap().as_deref(),
+        claim().as_deref(),
         Some(&b"one"[..]),
         "PLANT-HUB-KP-ONE-TIME-FIRST: a one-time KeyPackage is handed out before the last-resort one"
     );
+    assert_eq!(claim().as_deref(), Some(&b"two"[..]));
+    assert_eq!(claim().as_deref(), Some(&b"last"[..]));
     assert_eq!(
-        s.claim_key_package("bob", NOW).unwrap().as_deref(),
-        Some(&b"two"[..])
-    );
-    assert_eq!(
-        s.claim_key_package("bob", NOW).unwrap().as_deref(),
-        Some(&b"last"[..])
-    );
-    assert_eq!(
-        s.claim_key_package("bob", NOW).unwrap().as_deref(),
+        claim().as_deref(),
         Some(&b"last"[..]),
-        "PLANT-HUB-KP-KEPT: the last-resort KeyPackage is handed out again"
+        "PLANT-HUB-KP-KEPT: with reuse on, the last-resort KeyPackage is handed out again"
     );
     assert_eq!(s.key_package_count("bob", NOW).unwrap(), (0, true));
 }
 
 /// A claim that names what it needs passes over a one-time KeyPackage that does not meet it to the last-resort one,
-/// and keeps that.
+/// and, with reuse on, keeps that.
 #[test]
 fn a_claim_that_meets_only_the_last_resort_one_keeps_it() {
     let s = SqliteStore::in_memory().unwrap();
@@ -52,7 +71,7 @@ fn a_claim_that_meets_only_the_last_resort_one_keeps_it() {
         .unwrap();
     for _ in 0..2 {
         assert!(matches!(
-            s.claim_key_package_meeting("bob", NOW, |kp| kp == b"last").unwrap(),
+            s.claim_key_package_meeting("bob", NOW, true, |kp| kp == b"last").unwrap(),
             KeyClaim::Claimed(kp) if kp == b"last"
         ));
     }
@@ -91,11 +110,11 @@ fn a_new_last_resort_key_package_replaces_the_old() {
     s.add_key_package_marked("bob", b"second", LATER, true)
         .unwrap();
     assert_eq!(
-        s.claim_key_package("bob", NOW).unwrap().as_deref(),
+        s.claim_key_package("bob", NOW, false).unwrap().as_deref(),
         Some(&b"second"[..]),
         "PLANT-HUB-KP-REPLACED: the newer last-resort KeyPackage is the one handed out"
     );
-    assert_eq!(s.key_package_count("bob", NOW).unwrap(), (0, true));
+    assert_eq!(s.key_package_count("bob", NOW).unwrap(), (0, false));
 }
 
 /// A store written before KeyPackages were marked opens with the column added, and its rows are one-time KeyPackages.
@@ -118,8 +137,11 @@ fn a_store_from_before_the_mark_reads_its_key_packages_as_one_time() {
     }
     let s = SqliteStore::open(path.to_str().unwrap()).unwrap();
     assert_eq!(s.key_package_count("bob", NOW).unwrap(), (1, false));
-    assert_eq!(s.claim_key_package("bob", NOW).unwrap(), Some(vec![1]));
-    assert_eq!(s.claim_key_package("bob", NOW).unwrap(), None);
+    assert_eq!(
+        s.claim_key_package("bob", NOW, false).unwrap(),
+        Some(vec![1])
+    );
+    assert_eq!(s.claim_key_package("bob", NOW, false).unwrap(), None);
     drop(s);
     let _ = std::fs::remove_file(&path);
 }

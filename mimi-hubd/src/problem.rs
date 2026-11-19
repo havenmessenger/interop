@@ -173,10 +173,19 @@ pub const CLIENT_RATE_LIMITED: ProblemType = ProblemType {
         "The lane takes a bounded number of requests per user per minute. Retry after a minute.",
 };
 
+/// A requester asked for one target's KeyPackages more often than the hub takes in an hour.
+pub const KEY_MATERIAL_RATE_LIMITED: ProblemType = ProblemType {
+    anchor: "key-material-rate-limited",
+    title: "Too many keyMaterial requests for this target",
+    status: StatusCode::TOO_MANY_REQUESTS,
+    detail: "The hub takes a bounded number of keyMaterial requests from one requester for one target user in an hour. Retry after an hour.",
+};
+
 /// Every problem type, for the page check and the fallback.
-pub const ALL: [&ProblemType; 18] = [
+pub const ALL: [&ProblemType; 19] = [
     &CLIENT_NOT_AUTHENTICATED,
     &CLIENT_RATE_LIMITED,
+    &KEY_MATERIAL_RATE_LIMITED,
     &NO_LOCAL_MEMBER,
     &MALFORMED_REQUEST,
     &MATERIAL_NOT_ACCEPTED,

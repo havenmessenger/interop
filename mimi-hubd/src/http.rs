@@ -226,6 +226,15 @@ async fn key_material_wire(
         Ok(r) => r,
         Err(_) => return crate::problem::MALFORMED_REQUEST.response(),
     };
+    // At most so many a requester for one target in an hour, as on the client lane: a target's KeyPackages are spent by
+    // being claimed, and a last-resort one, when reused (DIVERGENCES DIV-23), is the same one each time.
+    let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+    if !lock(&p)
+        .key_material_cap
+        .admit_target(&req.requesting_user.0, &req.target_user.0, now)
+    {
+        return crate::problem::KEY_MATERIAL_RATE_LIMITED.response();
+    }
     match key_material_answer(&p, target_user, &req, body.to_vec()).await {
         Ok(bytes) => (StatusCode::OK, bytes).into_response(),
         Err(response) => response,

@@ -30,6 +30,7 @@ const KNOWN_KEYS: &[&str] = &[
     "policy",
     "public_base_url",
     "activity_log",
+    "last_resort_reuse",
     "otlp_endpoint",
     "peer_keys",
     "outbound_allow",
@@ -71,6 +72,9 @@ pub struct ConfigFile {
     pub public_base_url: Option<String>,
     /// `1` turns on the activity line (see `activity.rs`). Anything else, or no value, leaves it off.
     pub activity_log: Option<String>,
+    /// `true` keeps a claimed last-resort KeyPackage to hand out again (DIVERGENCES DIV-23); `false` or no value hands it
+    /// out once, as protocol-07 §5.2 has key material. Any other value stops the start.
+    pub last_resort_reuse: Option<String>,
     /// The OpenTelemetry collector's base URL (see `telemetry.rs`). Unset means no export.
     pub otlp_endpoint: Option<String>,
     pub peer_keys: Option<String>,
@@ -91,6 +95,18 @@ pub struct ConfigFile {
     pub signing_selector: Option<String>,
     /// The file holding the hub's own MLS signing key (a base64 32-byte Ed25519 seed), which signs GroupInfoResponses.
     pub hub_mls_key: Option<String>,
+}
+
+/// `MIMI_LAST_RESORT_REUSE`: `true` keeps a claimed last-resort KeyPackage to hand out again, `false` or no value hands
+/// it out once. Any other value is an error, so a mistyped setting stops the start instead of choosing for the operator.
+pub fn last_resort_reuse(value: Option<&str>) -> anyhow::Result<bool> {
+    match value {
+        None | Some("false") => Ok(false),
+        Some("true") => Ok(true),
+        Some(other) => {
+            anyhow::bail!("MIMI_LAST_RESORT_REUSE must be true or false, not {other:?}")
+        }
+    }
 }
 
 impl ConfigFile {
@@ -136,6 +152,7 @@ impl ConfigFile {
             "policy" => self.policy.as_ref(),
             "public_base_url" => self.public_base_url.as_ref(),
             "activity_log" => self.activity_log.as_ref(),
+            "last_resort_reuse" => self.last_resort_reuse.as_ref(),
             "otlp_endpoint" => self.otlp_endpoint.as_ref(),
             "peer_keys" => self.peer_keys.as_ref(),
             "outbound_allow" => self.outbound_allow.as_ref(),
@@ -314,6 +331,11 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
         "MIMI_ACTIVITY_LOG",
         resolve("MIMI_ACTIVITY_LOG", "activity_log", file, None),
     );
+    // No default: a last-resort KeyPackage is handed out once unless an operator sets this to `true`.
+    m.insert(
+        "MIMI_LAST_RESORT_REUSE",
+        resolve("MIMI_LAST_RESORT_REUSE", "last_resort_reuse", file, None),
+    );
     // No default: nothing is exported unless an operator names a collector.
     m.insert(
         "MIMI_OTLP_ENDPOINT",
@@ -363,6 +385,10 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
     );
     m
 }
+
+#[cfg(test)]
+#[path = "config_last_resort_tests.rs"]
+mod last_resort_tests;
 
 #[cfg(test)]
 mod tests {

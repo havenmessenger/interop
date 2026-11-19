@@ -374,14 +374,21 @@ fn the_per_user_cap_is_per_user_and_per_minute() {
     assert!(cap.admit(BOB, 660), "a new minute starts again");
 }
 
-/// Bob publishes a one-time KeyPackage and a last-resort one: the one-time one is handed out first, then the last-resort
-/// one, and again, and the count Bob's client reads says what is left. Revert check: store every published KeyPackage
+/// With reuse on, Bob publishes a one-time KeyPackage and a last-resort one: the one-time one is handed out first, then
+/// the last-resort one, and again, and the count Bob's client reads says what is left. Revert check: store every published KeyPackage
 /// as one-time, and the last-resort one is gone after its first claim.
 #[tokio::test]
 async fn a_published_last_resort_key_package_is_handed_out_last_and_kept() {
     use openmls::prelude::tls_codec::Serialize as _;
     use openmls::prelude::KeyPackage;
     let lane = lane("last-resort");
+    // A deployment that turns reuse on (MIMI_LAST_RESORT_REUSE); the default hands a last-resort KeyPackage out once.
+    {
+        let mut hub = lane.provider.lock().expect("lock");
+        let placeholder = Provider::in_memory(DOMAIN).expect("provider");
+        let current = std::mem::replace(&mut *hub, placeholder);
+        *hub = current.with_last_resort_reuse(true);
+    }
     let bob = crate::mls_fixtures::Member::new(BOB);
     let last = KeyPackage::builder()
         .leaf_node_capabilities(crate::mls_fixtures::capabilities())

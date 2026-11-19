@@ -502,26 +502,29 @@ impl SqliteStore {
     }
 
     /// Claim ONE unexpired KeyPackage for `username` (K1 once-only + K2 expiry): the oldest one-time KeyPackage,
-    /// which is deleted, or when none is left the last-resort one, which stays to be handed out again. One
-    /// transaction, so two concurrent callers cannot get the same one-time row.
+    /// which is deleted, or when none is left the last-resort one, which is deleted too unless `keep_last_resort`, when
+    /// it stays to be handed out again (DIVERGENCES DIV-23). One transaction, so two concurrent callers cannot get the
+    /// same row.
     pub fn claim_key_package(
         &self,
         username: &str,
         now_unix: u64,
+        keep_last_resort: bool,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        match self.claim_key_package_meeting(username, now_unix, |_| true)? {
+        match self.claim_key_package_meeting(username, now_unix, keep_last_resort, |_| true)? {
             KeyClaim::Claimed(bytes) => Ok(Some(bytes)),
             KeyClaim::NoneStored | KeyClaim::NoneCompatible => Ok(None),
         }
     }
 
-    /// Claim the oldest unexpired one-time KeyPackage of `username` that `meets` accepts, and delete it, or when none
-    /// does the last-resort one, which stays; the others stay. Says whether the user had none at all, or only ones
-    /// `meets` refused.
+    /// Claim the oldest unexpired one-time KeyPackage of `username` that `meets` accepts, or when none does the
+    /// last-resort one, and delete it, unless it is the last-resort one and `keep_last_resort`; the others stay. Says
+    /// whether the user had none at all, or only ones `meets` refused.
     pub fn claim_key_package_meeting(
         &self,
         username: &str,
         now_unix: u64,
+        keep_last_resort: bool,
         meets: impl Fn(&[u8]) -> bool,
     ) -> anyhow::Result<KeyClaim> {
         let username = mimi_core::uri::canonical(username);
@@ -556,7 +559,7 @@ impl SqliteStore {
         else {
             return Ok(KeyClaim::NoneCompatible);
         };
-        if !last_resort {
+        if !(last_resort && keep_last_resort) {
             tx.execute("DELETE FROM keypackages WHERE id = ?1", params![id])?;
         }
         tx.commit()?;
@@ -1572,8 +1575,8 @@ mod tests {
         s.add_key_package("alice", b"kp2", now + 100).unwrap();
         s.add_key_package("alice", b"expired", now - 1).unwrap();
 
-        let a = s.claim_key_package("alice", now).unwrap().unwrap();
-        let b = s.claim_key_package("alice", now).unwrap().unwrap();
+        let a = s.claim_key_package("alice", now, false).unwrap().unwrap();
+        let b = s.claim_key_package("alice", now, false).unwrap().unwrap();
         assert_ne!(
             a, b,
             "two claims return two DIFFERENT KeyPackages (K1 once-only)"
@@ -1582,10 +1585,10 @@ mod tests {
         assert!([b"kp1".to_vec(), b"kp2".to_vec()].contains(&b));
         // expired (K2) never served; live ones now exhausted.
         assert!(
-            s.claim_key_package("alice", now).unwrap().is_none(),
+            s.claim_key_package("alice", now, false).unwrap().is_none(),
             "expired KP must not be served"
         );
-        assert!(s.claim_key_package("nobody", now).unwrap().is_none());
+        assert!(s.claim_key_package("nobody", now, false).unwrap().is_none());
     }
 
     #[test]
@@ -1632,7 +1635,7 @@ mod tests {
         }
         // exactly the cap survives, and it's the NEWEST ones (oldest 5 evicted).
         let mut served = Vec::new();
-        while let Some(kp) = s.claim_key_package("alice", now).unwrap() {
+        while let Some(kp) = s.claim_key_package("alice", now, false).unwrap() {
             served.push(kp);
         }
         assert_eq!(
@@ -1741,7 +1744,7 @@ mod tests {
         let removed = s.sweep_expired_keypackages(now).unwrap();
         assert_eq!(removed, 1, "only the past-expiry, never-claimed row swept");
         assert_eq!(
-            s.claim_key_package("alice", now).unwrap(),
+            s.claim_key_package("alice", now, false).unwrap(),
             Some(b"live".to_vec()),
             "the live one is still claimable"
         );
@@ -1827,7 +1830,7 @@ mod tests {
                     let s = SqliteStore::open(&p).unwrap();
                     let mut got = Vec::new();
                     // each thread claims until the pool is drained
-                    while let Some(kp) = s.claim_key_package("alice", 1000).unwrap() {
+                    while let Some(kp) = s.claim_key_package("alice", 1000, false).unwrap() {
                         got.push(kp);
                     }
                     got
@@ -1908,7 +1911,7 @@ mod tests {
                 "enrollment must survive reopen"
             );
             assert_eq!(
-                s.claim_key_package("alice", 1000).unwrap(),
+                s.claim_key_package("alice", 1000, false).unwrap(),
                 Some(b"kp1".to_vec())
             );
         }

@@ -28,7 +28,8 @@ use crate::peer_directory::PeerAccess;
 // LIMIT-REASON: quota: adding a room's members takes one request per member; this bounds a user fetching for many
 pub const KEY_MATERIAL_PER_MINUTE: u32 = 30;
 
-/// keyMaterial requests one lane user may make for one target user in an hour.
+/// keyMaterial requests one requester may make for one target user in an hour, on the client lane and on the provider
+/// path.
 // LIMIT-REASON: quota: a target's KeyPackages are single-use; this bounds one user spending another's
 pub const KEY_MATERIAL_PER_TARGET_PER_HOUR: u32 = 5;
 
@@ -70,6 +71,21 @@ impl KeyMaterialCap {
             KEY_MATERIAL_PER_TARGET_PER_HOUR,
         );
         user_ok && target_ok
+    }
+
+    /// Count one request by `requester` for `target` at `now` (seconds) against the per-target limit alone: the
+    /// provider path's, where the requester is the user the request names and the per-user limit is the requesting
+    /// provider's to keep.
+    pub fn admit_target(&self, requester: &str, target: &str, now: i64) -> bool {
+        count(
+            &self.per_target,
+            (
+                mimi_core::uri::canonical(requester),
+                mimi_core::uri::canonical(target),
+            ),
+            now / 3600,
+            KEY_MATERIAL_PER_TARGET_PER_HOUR,
+        )
     }
 }
 

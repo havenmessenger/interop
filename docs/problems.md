@@ -84,6 +84,19 @@ retry, with a fresh signature.
 The client lane takes a bounded number of requests per user per minute, a backstop to the client-facing service's own
 limits. Retry after a minute.
 
+## key-material-rate-limited
+
+| field | value |
+|---|---|
+| `type` | `https://github.com/havenmessenger/interop/blob/main/docs/problems.md#key-material-rate-limited` |
+| `title` | Too many keyMaterial requests for this target |
+| `status` | 429 |
+
+A `keyMaterial` request on the provider path (protocol-07 §5.2) from a requester that has already asked for the same
+target user's KeyPackages the most times the hub takes in an hour (5, as on the client lane). A target's KeyPackages
+are spent by being claimed, and a reused last-resort one (DIVERGENCES DIV-23) is the same each time, so the hub bounds
+how often one requester can claim them. Retry after an hour.
+
 ## not-authenticated
 
 | field | value |

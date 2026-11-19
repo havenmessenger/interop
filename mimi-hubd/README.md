@@ -302,6 +302,7 @@ the file - see [`debian/mimi-hubd.toml.example`](debian/mimi-hubd.toml.example) 
 | `MIMI_POLICY` | `policy` | no | none | A TOML file of the deployment's choices, below. Unset means the drafts' defaults. A named file the hub cannot read, or one that is not a valid policy, stops the start. |
 | `MIMI_PEER_KEYS` | `peer_keys` | no | none | Path of a JSON file of peers' DNS-published signing keys, `{"<keyid>._mimi.<domain>": "<base64 Ed25519 public key>"}`, an empty value for a revoked key. Re-read when it changes. Without it, no signature verifies and only a client certificate admits a peer. |
 | `MIMI_ACTIVITY_LOG` | `activity_log` | no | off | `1` prints one line per request on the peer-facing listener to stderr: `[mimi-activity] method=POST route=/mimi/pl/update/:room_id status=200`. The route is the template the request matched (`route=unmatched` when none did), so no path, query string, header, certificate or body appears in it. Any other value, or none, leaves it off. The directory-only listener is not logged. |
+| `MIMI_LAST_RESORT_REUSE` | `last_resort_reuse` | no | `false` | `true` keeps a claimed last-resort KeyPackage (draft-ietf-mls-extensions §6.4) to hand out again; `false` hands it out once and deletes it, as protocol-07 §5.2 has key material ("may not be reused"). Any other value stops the start. `../DIVERGENCES.md`, DIV-23, has what reuse rests on and its limits. |
 | `MIMI_OTLP_ENDPOINT` | `otlp_endpoint` | no | off | The base URL of an OpenTelemetry collector that takes OTLP/HTTP with protobuf bodies (`/v1/traces` and `/v1/metrics` are added). `https`, or `http` only to a loopback address (`localhost`, 127.0.0.0/8, `::1`): the collector is the operator's own, so requests to it skip the outbound gate, and this is the gate's stance applied to it. Exported: a span and the counters and latency histograms `mimi.server.requests`/`mimi.server.duration` (requests peers make) and `mimi.client.requests`/`mimi.client.duration` (requests this hub makes), with the method, route template, status or failure class, the peer provider's domain, a refusal's problem type and a delivery's attempt number. Never a path value, query, header, certificate, body, user or room. Needs a build with the `otlp` feature (the release binary and .deb have it); the startup log says `otlp: off (not built)`, `otlp: off`, or `otlp: <endpoint>`. |
 | `MIMI_OUTBOUND_ALLOW` | `outbound_allow` | no | none | Comma-separated `addr/len` ranges an outbound request may reach although they are special (loopback, private, link-local, ...), for a test deployment whose peers run on such addresses. A value that does not parse stops the start. See "Outbound requests" below. |
 | `MIMI_OUTBOUND_PROXY` | `outbound_proxy` | no | none | An HTTP `CONNECT` proxy for outbound requests, `http://host:port`. The tunnel is opened to the address the hub checked, and TLS with the hub's client certificate runs end to end inside it. |
@@ -383,14 +384,16 @@ room and provider, delivered in order by a worker in the hub (`../DIVERGENCES.md
 the outbox: an accepted Commit, the Welcome in its bundle, held leave proposals and application messages, for each
 other provider with a participant in the room (DIV-5). A `keyMaterial` request for another provider's user, for a room
 this hub hosts and from a participant who may add participants, is forwarded to that provider, and each KeyPackage it
-returns is recorded so the Welcome that uses it goes there; any other such request is answered `noConsent`.
+returns is recorded so the Welcome that uses it goes there; any other such request is answered `noConsent`. One
+requester may make at most 5 `keyMaterial` requests an hour for one target user, as on the client lane; past that the
+hub answers 429 `key-material-rate-limited` (`../docs/problems.md`).
 
 ## Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/.well-known/mimi-protocol-directory` | Advertises supported ciphersuite, draft revisions, and endpoint URLs. |
-| GET | `/mimi/v1/keyMaterial?user=` | Serve one local user's KeyPackage: a one-time one, or the last-resort one when none is left. |
+| GET | `/mimi/v1/keyMaterial?user=` | Serve one local user's KeyPackage: a one-time one, or the last-resort one when none is left (handed out once unless `MIMI_LAST_RESORT_REUSE` is `true`). |
 | POST | `/mimi/v1/keyMaterial/ingest` | Gate + optionally publish a KeyPackage, for a user of the provider the peer's proof names (403 otherwise; never for a user of this provider, whose operator publishes on its own listener). |
 | POST | `/mimi/v1/notify?room=` | Idempotent fanout receipt; the peer must be the hub of `room` (403 otherwise). |
 | POST | `/mimi/v1/welcome/ingest` | Gate a Welcome; with `?recipient=`, relay it for a user of the peer's own provider (403 for a user of this provider). |
@@ -418,7 +421,7 @@ A refused request is a 401 `client-not-authenticated`; past 600 requests a minut
 
 | Path | Body → answer | What it does |
 |---|---|---|
-| `publishKeyPackages` | `{key_packages}` → `{count}` | Adds KeyPackages for the user (at most 32 a request; the hub keeps 64 a user, dropping the oldest one-time ones). Each passes the suite gate and names the user, exactly, in its basic credential. One-time KeyPackages are handed out first, once each; a last-resort one (draft-ietf-mls-extensions) only when none is left, and it stays, the newest replacing the one before. |
+| `publishKeyPackages` | `{key_packages}` → `{count}` | Adds KeyPackages for the user (at most 32 a request; the hub keeps 64 a user, dropping the oldest one-time ones). Each passes the suite gate and names the user, exactly, in its basic credential. One-time KeyPackages are handed out first, once each; a last-resort one (draft-ietf-mls-extensions) only when none is left, once, or again and again when `MIMI_LAST_RESORT_REUSE` is `true`; the newest replaces the one before. |
 | `keyPackageCount` | `{}` → `{one_time, last_resort}` | How many unexpired one-time KeyPackages the user has here, and whether a last-resort one is: what the client reads to know when to publish more. |
 | `withdrawKeyPackages` | `{}` → `{count}` | Removes them; no one can claim the user's KeyPackages after. |
 | `inboxFetch` | `{after_welcome, after_message, limit}` → `{welcomes, messages, more}` | Reads the user's queued Welcomes and messages after the cursors, oldest first (at most 256 of each), without removing them. |

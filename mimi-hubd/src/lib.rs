@@ -215,6 +215,11 @@ pub struct Provider {
     peer_access: Option<std::sync::Arc<peer_directory::PeerAccess>>,
     /// The hub's own MLS key and credential, which sign a GroupInfoResponse as its `hub_sender` (`group_info_endpoint`).
     hub_signer: Option<std::sync::Arc<mimi_core::group_info_wire::HubSigner>>,
+    /// Whether a claimed last-resort KeyPackage stays to be handed out again (`MIMI_LAST_RESORT_REUSE`; off by default,
+    /// so it is handed out once, as protocol-07 §5.2 has key material; DIVERGENCES DIV-23).
+    last_resort_reuse: bool,
+    /// keyMaterial requests on the provider path, per requester and target (`key_material_wire`).
+    pub(crate) key_material_cap: client_lane_relay::KeyMaterialCap,
 }
 
 /// The capability each room-policy component's change needs (room-policy-04 §8.6), with the refusal that names it.
@@ -282,6 +287,8 @@ impl Provider {
             outbox_waker: None,
             peer_access: None,
             hub_signer: None,
+            last_resort_reuse: false,
+            key_material_cap: client_lane_relay::KeyMaterialCap::default(),
         })
     }
 
@@ -295,6 +302,8 @@ impl Provider {
             outbox_waker: None,
             peer_access: None,
             hub_signer: None,
+            last_resort_reuse: false,
+            key_material_cap: client_lane_relay::KeyMaterialCap::default(),
         })
     }
 
@@ -317,6 +326,13 @@ impl Provider {
     /// Run with `policy` instead of the drafts' defaults.
     pub fn with_policy(mut self, policy: policy::HubPolicy) -> Self {
         self.policy = policy;
+        self
+    }
+
+    /// Keep a claimed last-resort KeyPackage to hand out again, when `reuse` (DIVERGENCES DIV-23). Off, it is handed out
+    /// once and deleted like any other.
+    pub fn with_last_resort_reuse(mut self, reuse: bool) -> Self {
+        self.last_resort_reuse = reuse;
         self
     }
 
@@ -422,15 +438,18 @@ impl Provider {
         doc
     }
 
-    // ---- K1/K2: serve a local user's one-time KeyPackage ----
+    // ---- K1/K2: serve a local user's KeyPackage ----
 
     pub fn serve_key_material(
         &self,
         username: &str,
         now_unix: u64,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        self.store
-            .claim_key_package(&self.key_package_user(username), now_unix)
+        self.store.claim_key_package(
+            &self.key_package_user(username),
+            now_unix,
+            self.last_resort_reuse,
+        )
     }
 
     /// The key a user's KeyPackages are kept under: the name, for a user of this provider named by name or by URI;
@@ -977,6 +996,7 @@ impl Provider {
             KeyPackageAccess::Allowed => Ok(Ok(self.store.claim_key_package_meeting(
                 &self.key_package_user(target_username),
                 now_unix,
+                self.last_resort_reuse,
                 meets,
             )?)),
             deny => Ok(Err(deny)),

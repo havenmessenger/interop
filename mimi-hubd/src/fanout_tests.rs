@@ -271,13 +271,15 @@ fn a_store_error_fails_the_fan_out() {
     );
 }
 
-/// Erin's only KeyPackage is a last-resort one, so two rooms on other providers claim the same one and each sends a
+/// With reuse on, Erin's only KeyPackage is a last-resort one, so two rooms on other providers claim the same one and each sends a
 /// Welcome for it in a notify: both reach Erin, the KeyPackageRef still naming her after the first. Revert check: forget
 /// the ref once its first Welcome is delivered, and the second room's Welcome is dropped.
 #[test]
 fn two_welcomes_on_one_last_resort_key_package_both_reach_the_user() {
     use openmls::prelude::KeyPackage;
-    let p = Provider::in_memory("hub.example").unwrap();
+    let p = Provider::in_memory("hub.example")
+        .unwrap()
+        .with_last_resort_reuse(true);
     let erin = Member::new("mimi://hub.example/u/erin");
     let last = KeyPackage::builder()
         .leaf_node_capabilities(crate::mls_fixtures::capabilities())
@@ -320,4 +322,38 @@ fn two_welcomes_on_one_last_resort_key_package_both_reach_the_user() {
     assert!(p.fetch_welcome("erin").unwrap().is_some());
     assert!(p.fetch_welcome("erin").unwrap().is_some());
     assert!(p.fetch_welcome("erin").unwrap().is_none());
+}
+
+/// By default (reuse off) Erin's last-resort KeyPackage is handed out once: the first room gets it, the second room's
+/// claim finds nothing, and Erin's client is told none is left. Revert check: keep the last-resort KeyPackage whatever
+/// the setting, and the second claim gets it again.
+#[test]
+fn by_default_a_last_resort_key_package_goes_to_one_room() {
+    use openmls::prelude::KeyPackage;
+    let p = Provider::in_memory("hub.example").unwrap();
+    let erin = Member::new("mimi://hub.example/u/erin");
+    let last = KeyPackage::builder()
+        .leaf_node_capabilities(crate::mls_fixtures::capabilities())
+        .mark_as_last_resort()
+        .build(
+            crate::mls_fixtures::SUITE,
+            &erin.provider,
+            &erin.signer,
+            erin.credential.clone(),
+        )
+        .unwrap()
+        .key_package()
+        .tls_serialize_detached()
+        .unwrap();
+    p.publish_key_package("erin", &last, 1).unwrap();
+    assert_eq!(
+        p.serve_key_material("erin", 2).unwrap().as_deref(),
+        Some(last.as_slice())
+    );
+    assert_eq!(
+        p.serve_key_material("erin", 2).unwrap(),
+        None,
+        "PLANT-HUB-KP-ONCE-DEFAULT: by default a last-resort KeyPackage is handed out once"
+    );
+    assert_eq!(p.store.key_package_count("erin", 2).unwrap(), (0, false));
 }

@@ -125,3 +125,45 @@ async fn another_spelling_of_the_target_finds_its_consent() {
         "{answer:?}"
     );
 }
+
+/// One requester may ask for one target's KeyPackages only so often in an hour on the provider path, as on the client
+/// lane: past it, 429 `key-material-rate-limited`, and another target is still answered. Revert check: skip the count,
+/// and the request past the limit is answered.
+#[tokio::test]
+async fn a_requester_past_the_per_target_limit_is_told_to_wait() {
+    let (router, p) = app();
+    granted(&p);
+    let status_for = |target: &'static str| {
+        let router = router.clone();
+        async move {
+            let request = KeyMaterialRequest::minimal(REQUESTER, target).unwrap();
+            let response = router
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/mimi/pl/keyMaterial/bob")
+                        .body(Body::from(request.encode().unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            (status, String::from_utf8_lossy(&body).to_string())
+        }
+    };
+    for _ in 0..crate::client_lane_relay::KEY_MATERIAL_PER_TARGET_PER_HOUR {
+        assert_eq!(status_for(TARGET).await.0, StatusCode::OK);
+    }
+    let (status, body) = status_for(TARGET).await;
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "PLANT-KM-PROVIDER-RATE: a request past the per-target limit was answered"
+    );
+    assert!(body.contains("key-material-rate-limited"), "{body}");
+    assert_eq!(
+        status_for("mimi://havenmessenger.com/u/carol").await.0,
+        StatusCode::OK
+    );
+}

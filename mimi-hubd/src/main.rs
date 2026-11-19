@@ -15,6 +15,9 @@
 //!   MIMI_PUBLIC_BASE_URL   https URL the directory's endpoint URLs start at (default https://{domain})
 //!                          (mTLS peer-trust allowlist; see README.md for how to generate one)
 //!   MIMI_ACTIVITY_LOG      optional; 1 prints one line per peer request (method, route template, status); off otherwise
+//!   MIMI_LAST_RESORT_REUSE optional; `true` keeps a claimed last-resort KeyPackage to hand out again (DIVERGENCES
+//!                          DIV-23); `false` or unset hands it out once, as protocol-07 §5.2 has key material. Any other
+//!                          value stops the start
 //!   MIMI_OTLP_ENDPOINT     optional; an OpenTelemetry collector's base URL (https, or http to loopback); traces and
 //!                          metrics per peer go there over OTLP/HTTP. Needs a build with the `otlp` feature
 //!   MIMI_DIRECTORY_BIND_ADDR  optional; a second listener, plain HTTP, that serves the directory document only
@@ -182,7 +185,14 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let require_nonce_on_key_material = policy.require_nonce_on_key_material;
-    let mut provider = Provider::open(&domain, &db_path)?.with_policy(policy);
+    let last_resort_reuse =
+        config::last_resort_reuse(resolved["MIMI_LAST_RESORT_REUSE"].as_deref())?;
+    if last_resort_reuse {
+        eprintln!("[mimi-hubd] a last-resort KeyPackage is handed out more than once (MIMI_LAST_RESORT_REUSE)");
+    }
+    let mut provider = Provider::open(&domain, &db_path)?
+        .with_policy(policy)
+        .with_last_resort_reuse(last_resort_reuse);
     if let Some(url) = &resolved["MIMI_PUBLIC_BASE_URL"] {
         provider = provider.with_public_base_url(url)?;
     }
