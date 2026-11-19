@@ -12,6 +12,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   the test vectors with their SHA-256 for download, plus the same facts as JSON. It reads only the checkout, which
   must be at the named revision with no local changes, and writes a static page with no script. `--self-test` runs
   in CI.
+- `docs/reasons.toml`: why each refusal is given. One row per problem type, per refusal a protocol answer carries
+  (`notAllowed`, `notAuthorized`, `noConsent`, ...) and per MLS check a client in a room reports, each naming the
+  specification and section it rests on with that section's sentence quoted, or saying the behaviour is this code's
+  own and naming the divergence. The status page renders it and fails when a problem type has no row.
 - An example, `mimi-hubd/examples/probe_bodies.rs`, makes the bodies a peer probe sends to a live hub, fresh each run:
   a `SubmitMessageRequest` from a named sender, a KeyPackage for a named user, and the notify `FanoutMessage` carrying
   a Welcome that adds that KeyPackage's holder. Each is a real openmls object encoded with the types the hub decodes.

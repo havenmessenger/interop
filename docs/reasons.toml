@@ -1,0 +1,282 @@
+# Why a hub refuses, and what each refusal rests on.
+#
+# One row per reason a refusal can give: each problem type in docs/problems.md, each refusal a protocol answer carries
+# in a 2xx (update's notAllowed, groupInfo's notAuthorized, keyMaterial's noConsent), and the MLS checks a client in a
+# room reports. Each row names how it surfaces, the specification and section it rests on, and the sentence of that
+# section, quoted. Where the behaviour is this repository's own choice or reading, `spec` is "local" or the row names
+# the divergence that explains it. A row never names a user, a client or a room.
+#
+# Fields:
+#   id            stable name; for a problem type, the type's own name
+#   surfaces_as   how a requester sees it: a problem type and HTTP status, a protocol answer, or a client's report
+#   spec          the document it rests on, with its revision ("local" when it is this repository's own)
+#   section       the section of `spec`
+#   quote         the sentence of that section the reason rests on, verbatim (whitespace joined)
+#   divergence    the DIVERGENCES.md entry, when ours is a reading or a departure
+#   reason        one sentence, in words, of why
+
+# --- transport and authentication -------------------------------------------------------------------------------
+
+[[reason]]
+id = "not-authenticated"
+surfaces_as = "problem not-authenticated, 403"
+spec = "draft-ietf-mimi-protocol-07"
+section = "4.1"
+quote = "The TLS connection underlying the HTTPS connection MUST be mutually authenticated. The certificates presented in the TLS handshake MUST authenticate the source and target provider domains, according to [RFC6125]."
+divergence = "DIV-16"
+reason = "The request carries no proof of the provider it comes from: no client certificate and no valid request signature, or a From header naming a provider the proof does not authenticate."
+
+[[reason]]
+id = "client-not-authenticated"
+surfaces_as = "problem client-not-authenticated, 401"
+spec = "local"
+section = ""
+quote = ""
+divergence = "DIV-19"
+reason = "A client lane request whose signature does not verify with a configured key, is older than 30 seconds, reuses a nonce, or names a user who is not on this provider."
+
+[[reason]]
+id = "client-rate-limited"
+surfaces_as = "problem client-rate-limited, 429"
+spec = "local"
+section = ""
+quote = ""
+divergence = "DIV-19"
+reason = "More client lane requests for one user in a minute than the hub takes."
+
+# --- key material ------------------------------------------------------------------------------------------------
+
+[[reason]]
+id = "no-consent"
+surfaces_as = "keyMaterial answer noConsent"
+spec = "draft-ietf-mimi-protocol-07"
+section = "5.2"
+quote = "noConsent indicates that the requester does not have consent to fetch key material for the target user. The target provider can use this response as a catch all and in place of other status codes such as userUnknown if desired to preserve the privacy of its users."
+divergence = ""
+reason = "The target user has not consented to this requester, or the hub does not say whether the user exists."
+
+[[reason]]
+id = "material-not-accepted"
+surfaces_as = "problem material-not-accepted, 400"
+spec = "local"
+section = ""
+quote = ""
+divergence = "DIV-2"
+reason = "A KeyPackage or Welcome that does not decode, uses a ciphersuite this deployment does not accept, or fails the hub's other checks; its credential must name the user it is published for."
+
+[[reason]]
+id = "not-permitted"
+surfaces_as = "problem not-permitted, 403"
+spec = "local"
+section = ""
+quote = ""
+divergence = ""
+reason = "A provider acting for a user it does not serve: publishing their KeyPackages, or reading or filling their queue; only a user's own provider may."
+
+[[reason]]
+id = "upstream-failed"
+surfaces_as = "problem upstream-failed, 502"
+spec = "local"
+section = ""
+quote = ""
+divergence = ""
+reason = "The hub forwarded a request to another provider, which could not be reached or answered with something the hub cannot read."
+
+# --- room state ----------------------------------------------------------------------------------------------------
+
+[[reason]]
+id = "update-not-allowed"
+surfaces_as = "update answer notAllowed"
+spec = "draft-ietf-mimi-protocol-07"
+section = "5.3"
+quote = "notAllowed indicates that some type of policy or authorization prevented the hub provider from accepting the UpdateRequest."
+divergence = ""
+reason = "The room's policy or the proposer's role does not allow this change."
+
+[[reason]]
+id = "update-invalid-proposal"
+surfaces_as = "update answer invalidProposal"
+spec = "draft-ietf-mimi-protocol-07"
+section = "5.3"
+quote = "invalidProposal indicates that at least one proposal is invalid. A list of invalidProposals is provided in the response."
+divergence = ""
+reason = "At least one proposal in the update is not valid for the room as the hub holds it."
+
+[[reason]]
+id = "roles-change-with-participant-change"
+surfaces_as = "update answer notAllowed; reported by a client in the room"
+spec = "draft-ietf-mimi-room-policy-04"
+section = "3"
+quote = "Changing Role definitions is sufficiently disruptive, that an update to this component is not valid if it appear in the same commit as any Participant List change."
+divergence = ""
+reason = "A Commit changes the roles_list and the participant list together."
+
+[[reason]]
+id = "first-roles-list-by-commit"
+surfaces_as = "update answer notAllowed; reported by a client in the room"
+spec = "mimi-room-policy pull request 52 (open), commit ffd0e96"
+section = ""
+quote = "A Commit that adds a roles_list to a group that has none is invalid."
+divergence = "DIV-15"
+reason = "A room whose group was created without a roles_list cannot get its first one by Commit; draft-ietf-mimi-room-policy-04 does not say this, the open pull request does."
+
+[[reason]]
+id = "room-is-tracked"
+surfaces_as = "problem room-is-tracked, 409"
+spec = "local"
+section = ""
+quote = ""
+divergence = "DIV-10"
+reason = "An operator change to the list or policy of a room whose ratchet tree the hub keeps; that room changes by Commit."
+
+# --- messages and fan-out ----------------------------------------------------------------------------------------
+
+[[reason]]
+id = "submit-not-allowed"
+surfaces_as = "submitMessage answer notAllowed"
+spec = "draft-ietf-mimi-protocol-07"
+section = "5.4"
+quote = "notAllowed indicates that some type of policy or authorization prevented the hub provider from accepting the SubmitMessageRequest. This could include nonsensical inputs such as an MLS epoch more recent than the hub's."
+divergence = ""
+reason = "The sender may not send in this room, or the message is empty or larger than one queued item."
+
+[[reason]]
+id = "sender-not-allowed"
+surfaces_as = "problem sender-not-allowed, 403"
+spec = "draft-ietf-mimi-room-policy-04"
+section = "8.3"
+quote = "canSendMessage - the holder can send instant messages to the room."
+divergence = ""
+reason = "The sender is not an active participant whose role holds canSendMessage."
+
+[[reason]]
+id = "message-not-queued"
+surfaces_as = "problem message-not-queued, 400"
+spec = "local"
+section = ""
+quote = ""
+divergence = ""
+reason = "The JSON lane's submitMessage: the message is empty, too large, for a recipient the hub keeps no queue for, or the queue is full."
+
+[[reason]]
+id = "not-the-rooms-hub"
+surfaces_as = "problem not-the-rooms-hub, 403"
+spec = "draft-ietf-mimi-protocol-07"
+section = "5.5"
+quote = "A provider that receives a /notify/{roomId} request MUST verify that the source provider authenticated by the transport layer (see Section 4.1) corresponds to the hub of roomId. If it is not, the receiving provider MUST reject the request and MUST NOT process, store, or forward any FanoutMessage it carries."
+divergence = ""
+reason = "A notify for a room from a provider that is not that room's hub."
+
+[[reason]]
+id = "no-local-member"
+surfaces_as = "problem no-local-member, 404"
+spec = "draft-ietf-mimi-protocol-07"
+section = "5.5"
+quote = "The HTTP response code indicates if the messages in the request were accepted (201 response code), or if there was an error."
+divergence = "DIV-5"
+reason = "A notify for a room hosted elsewhere when no user of this provider is a member of it; nothing is recorded, so a retry gets the same answer."
+
+[[reason]]
+id = "remote-room-not-delivered"
+surfaces_as = "problem remote-room-not-delivered, 422 (retired)"
+spec = "local"
+section = ""
+quote = ""
+divergence = "DIV-5"
+reason = "Retired: the answer to a message for a room on another hub while this hub did not yet deliver those."
+
+# --- GroupInfo, consent, discovery ------------------------------------------------------------------------------
+
+[[reason]]
+id = "group-info-not-authorized"
+surfaces_as = "groupInfo answer notAuthorized"
+spec = "draft-ietf-mimi-protocol-07"
+section = "5.6"
+quote = "notAuthorized indicates that the requester was not authorized to access the GroupInfo."
+divergence = "DIV-1"
+reason = "The requester may not have this room's GroupInfo."
+
+[[reason]]
+id = "room-not-hosted"
+surfaces_as = "problem room-not-hosted, 404"
+spec = "draft-ietf-mimi-protocol-07"
+section = "5.6"
+quote = "noSuchRoom indicates that the requested room does not exist. If the hub does not want to reveal if a room ID does not exist it can use notAuthorized instead."
+divergence = ""
+reason = "A groupInfo request for a room this hub does not host; ask the room's own hub."
+
+[[reason]]
+id = "wrong-operation"
+surfaces_as = "problem wrong-operation, 422"
+spec = "draft-ietf-mimi-protocol-07"
+section = "5.7"
+quote = "A requestConsent whose consentOperation is not request or cancel gets a 422 Unprocessable Content response."
+divergence = ""
+reason = "A consent entry sent to the endpoint for the other operations."
+
+[[reason]]
+id = "not-found"
+surfaces_as = "problem not-found, 404"
+spec = "local"
+section = ""
+quote = ""
+divergence = "DIV-4"
+reason = "Nothing answers the request; one body for every case, so it says nothing about which."
+
+# --- the request itself ------------------------------------------------------------------------------------------
+
+[[reason]]
+id = "malformed-request"
+surfaces_as = "problem malformed-request, 400"
+spec = "local"
+section = ""
+quote = ""
+divergence = ""
+reason = "A body, path or query the endpoint cannot read."
+
+[[reason]]
+id = "body-too-large"
+surfaces_as = "problem body-too-large, 413"
+spec = "local"
+section = ""
+quote = ""
+divergence = ""
+reason = "A body larger than the endpoint takes."
+
+[[reason]]
+id = "method-not-allowed"
+surfaces_as = "problem method-not-allowed, 405"
+spec = "local"
+section = ""
+quote = ""
+divergence = ""
+reason = "A method the route does not take; the Allow header names the ones it does."
+
+[[reason]]
+id = "http-error"
+surfaces_as = "problem http-error, the answer's own status"
+spec = "local"
+section = ""
+quote = ""
+divergence = ""
+reason = "Any other error status, such as 415 for a JSON endpoint asked without a JSON content type."
+
+[[reason]]
+id = "internal-error"
+surfaces_as = "problem internal-error, 500"
+spec = "local"
+section = ""
+quote = ""
+divergence = ""
+reason = "The hub's own failure, such as its store; never reported as accepted."
+
+# --- MLS checks a client in the room reports --------------------------------------------------------------------
+
+[[reason]]
+id = "leaf-lifetime"
+surfaces_as = "reported by a client in the room"
+spec = "RFC 9420"
+section = "7.3"
+quote = "If instead the LeafNode appears in a message being received by the client, e.g., a Proposal, a Commit, or a ratchet tree of the group the client is joining, it is RECOMMENDED that the client verifies that the current time is within the range of the lifetime field."
+divergence = ""
+reason = "A leaf in a received Proposal, Commit or joining tree is outside its lifetime; RFC 9420 recommends this check on receipt and requires it only for what a client sends."

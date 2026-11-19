@@ -9,7 +9,7 @@ settings, and the test vectors to check against, for download.
     render_status_page.py --self-test
 
 Everything on the page comes from the checkout at --revision: docs/mimi/CONFORMANCE.md, CHANGELOG.md, DIVERGENCES.md,
-docs/problems.md and tests/vectors/. The checkout must be at --revision with no local changes, so the page describes
+docs/problems.md, docs/reasons.toml and tests/vectors/. The checkout must be at --revision with no local changes, so the page describes
 the code that was built. --setting adds a file of the deployment's own choices (a policy file, a room profile),
 shown as it is; pass nothing secret.
 
@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 REPO_URL = "https://github.com/havenmessenger/interop"
@@ -358,6 +359,7 @@ def gather(repo: Path, revision: str, previous: str | None) -> dict:
             for heading, body in sections(problems, 2)
         ],
         "vectors": vectors(repo),
+        "reasons": tomllib.loads(read("docs/reasons.toml")).get("reason", []),
         "new_entries": [],
         "commits": [],
         "commit_count": 0,
@@ -442,6 +444,7 @@ def page(facts: dict, args) -> str:
                 ("conformance", "Conformance"),
                 ("divergences", "Divergences"),
                 ("problems", "Problem types"),
+                ("reasons", "Reasons"),
                 ("settings", "Settings"),
                 ("vectors", "Test vectors"),
             )
@@ -522,6 +525,27 @@ def page(facts: dict, args) -> str:
         )
     parts.append("</dl>")
 
+    parts.append(
+        '<h2 id="reasons">Reasons</h2><p>Why each refusal is given, and the sentence of the specification it rests '
+        "on. Where the behaviour is this code's own, the row says so and names the divergence that explains it.</p>"
+        '<div class="table"><table><thead><tr><th>Reason</th><th>Seen as</th><th>Rests on</th><th>Why</th>'
+        "</tr></thead><tbody>"
+    )
+    for r in facts["reasons"]:
+        source = html.escape(r["spec"]) + (
+            f" §{html.escape(r['section'])}" if r.get("section") else ""
+        )
+        if r.get("quote"):
+            source += f"<br><q>{html.escape(r['quote'])}</q>"
+        if r.get("divergence"):
+            d = r["divergence"]
+            source += f'<br><a href="#{d.lower()}">{html.escape(d)}</a>'
+        parts.append(
+            f'<tr id="reason-{slug(r["id"])}"><td><code>{html.escape(r["id"])}</code></td>'
+            f"<td>{html.escape(r['surfaces_as'])}</td><td>{source}</td><td>{html.escape(r['reason'])}</td></tr>"
+        )
+    parts.append("</tbody></table></div>")
+
     parts.append('<h2 id="settings">Settings</h2>')
     if args.setting:
         parts.append(
@@ -566,6 +590,7 @@ def status_json(facts: dict, args) -> dict:
         "drafts": facts["drafts"],
         "divergences": [d["id"] for d in facts["divergences"]],
         "problem_types": [p["uri"] for p in facts["problem_types"]],
+        "reasons": [r["id"] for r in facts["reasons"]],
         "vectors": [
             {k: v[k] for k in ("path", "bytes", "sha256")} for v in facts["vectors"]
         ],
@@ -596,10 +621,55 @@ def render(repo: Path, args, check_checkout: bool = True) -> dict:
 
 # --- the audit: what a rendered page must hold -----------------------------------------------------------------
 
+REASON_FIELDS = (
+    "id",
+    "surfaces_as",
+    "spec",
+    "section",
+    "quote",
+    "divergence",
+    "reason",
+)
+
+
+def check_reasons(facts: dict) -> list[str]:
+    """The reason table: complete rows, one per problem type at least, sources named, divergences that exist."""
+    errs = []
+    reasons = facts["reasons"]
+    ids = [r.get("id") for r in reasons]
+    if len(ids) != len(set(ids)):
+        errs.append("docs/reasons.toml has a repeated id")
+    for r in reasons:
+        missing = [f for f in REASON_FIELDS if not isinstance(r.get(f), str)]
+        if missing:
+            errs.append(f"reason {r.get('id')}: missing {', '.join(missing)}")
+            continue
+        if r["spec"] != "local" and not (
+            r["quote"] and (r["section"] or "pull request" in r["spec"])
+        ):
+            errs.append(
+                f"reason {r['id']}: rests on {r['spec']} but quotes no section of it"
+            )
+        if r["spec"] == "local" and (r["quote"] or r["section"]):
+            errs.append(f"reason {r['id']}: a local reason quotes a specification")
+    divergences = {d["id"] for d in facts["divergences"]}
+    for r in reasons:
+        if r.get("divergence") and r["divergence"] not in divergences:
+            errs.append(
+                f"reason {r.get('id')}: names {r['divergence']}, which DIVERGENCES.md does not have"
+            )
+    for p in facts["problem_types"]:
+        if p["type"] not in ids:
+            errs.append(f"problem type {p['type']} has no row in docs/reasons.toml")
+    return errs
+
 
 def audit(out: Path, facts: dict) -> list[str]:
-    errs = []
+    errs = check_reasons(facts)
     text = (out / "index.html").read_text(encoding="utf-8")
+    for r in facts["reasons"]:
+        if f'id="reason-{slug(r.get("id", ""))}"' not in text:
+            errs.append(f"reason {r.get('id')} is missing")
     for row in facts["conformance_ids"]:
         if f"<td>{row}</td>" not in text:
             errs.append(f"conformance row {row} is missing")
@@ -607,10 +677,10 @@ def audit(out: Path, facts: dict) -> list[str]:
         if html.escape(d["draft"]) not in text:
             errs.append(f"draft {d['draft']} is missing")
     for d in facts["divergences"]:
-        if f">{d['id']}</a>" not in text:
+        if f'<dt id="{d["id"].lower()}">' not in text:
             errs.append(f"{d['id']} is missing")
     for p in facts["problem_types"]:
-        if f"<code>{p['type']}</code>" not in text:
+        if f'<dt id="{slug(p["type"])}">' not in text:
             errs.append(f"problem type {p['type']} is missing")
     for v in facts["vectors"]:
         copy = out / "vectors" / v["path"]
@@ -696,10 +766,10 @@ def self_test() -> int:
                 f"<td>{row}</td>", "<td></td>", 1
             ),
             "a divergence dropped": good.replace(
-                f">{facts['divergences'][0]['id']}</a>", "></a>", 1
+                f'<dt id="{facts["divergences"][0]["id"].lower()}">', "<dt>", 1
             ),
             "a problem type dropped": good.replace(
-                f"<code>{facts['problem_types'][0]['type']}</code>", "", 1
+                f'<dt id="{slug(facts["problem_types"][0]["type"])}">', "<dt>", 1
             ),
             "a vector unlisted": good.replace(
                 f'href="vectors/{facts["vectors"][0]["path"]}"', 'href="#"', 1
@@ -741,6 +811,26 @@ def self_test() -> int:
         finally:
             MAX_COMMITS = saved
 
+    # The table check catches a table that is wrong.
+    base = gather(repo, head, None)
+    first_problem = base["problem_types"][0]["type"]
+    table_plants = {
+        "a problem type without a row": [
+            r for r in base["reasons"] if r["id"] != first_problem
+        ],
+        "a row naming a divergence that does not exist": base["reasons"]
+        + [dict(base["reasons"][0], id="x", divergence="DIV-999")],
+        "a row resting on a draft without a quote": base["reasons"]
+        + [dict(base["reasons"][0], id="y", spec="RFC 9420", section="7.3", quote="")],
+        "a row missing a field": base["reasons"] + [{"id": "z"}],
+        "a repeated id": base["reasons"] + [base["reasons"][0]],
+    }
+    assert not check_reasons(base), check_reasons(base)
+    for name, rows in table_plants.items():
+        assert check_reasons(dict(base, reasons=rows)), (
+            f"the table check missed: {name}"
+        )
+
     # The checkout check: a page is never rendered from a revision other than the one named.
     with tempfile.TemporaryDirectory() as tmp:
         wrong = argparse.Namespace(
@@ -757,7 +847,9 @@ def self_test() -> int:
             pass
         else:
             raise AssertionError("rendered from a checkout at another revision")
-    print(f"render_status_page self-test: ok ({len(plants) + 1} planted errors caught)")
+    print(
+        f"render_status_page self-test: ok ({len(plants) + 1 + len(table_plants)} planted errors caught)"
+    )
     return 0
 
 

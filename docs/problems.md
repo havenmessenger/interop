@@ -9,6 +9,9 @@ that are a protocol structure in a 2xx (`update`'s `notAllowed`, `groupInfo`'s `
 `noConsent`) are not HTTP errors and keep their protocol form. As mimi-protocol PR #211 asks, a client acts on the
 `type` and shows neither `title` nor `detail` to a user.
 
+Why each refusal is given, and the sentence of the specification it rests on, is in [`reasons.toml`](reasons.toml):
+one row per problem type, per refusal a protocol answer carries, and per MLS check a client in a room reports.
+
 ## no-local-member
 
 | field | value |
