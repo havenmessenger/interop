@@ -422,8 +422,9 @@ group's GroupInfo, except `hb-03-partial-group-info`, which carries the `Partial
 
 ## DIV-13 - an exhausted client is answered with `partialSuccess`
 
-When a user has no key material left, the `keyMaterial` response carries user status
-`partialSuccess` with one client entry whose status is `keyMaterialExhausted`. §5.2 defines
+When a user has no key material left (no unexpired one-time KeyPackage and no last-resort one, DIV-23), the
+`keyMaterial` response carries user status `partialSuccess` with one client entry whose status is
+`keyMaterialExhausted`. §5.2 defines
 `partialSuccess` as key material for at least one client, so a response with no successful
 client does not fit it, and the draft gives no user code for "known user, nothing left to
 issue": `noCompatibleMaterial` is defined as no client able to supply material compatible with
@@ -696,3 +697,43 @@ member leave (role 3 has an entry 3 → 0 and no `canRemoveParticipant`) and doe
 so an admin cannot remove another admin and cannot leave either. An admin leaves by first being changed to a member by
 another admin (the entry 2 → 3); the room's last admin cannot. A deployment that wants admins to leave writes the entry
 2 → 0 in its own profile, and with it admins may remove one another.
+
+## DIV-23 - a last-resort KeyPackage is handed out more than once
+
+protocol-07 §5.2 says of the key material a `keyMaterial` request claims: "The keying material is designed for use in a
+single room and may not be reused." This hub hands a user's last-resort KeyPackage out more than once, so two
+`keyMaterial` responses, for two rooms or two requesters, can carry the same KeyPackage. That departs from the letter of
+§5.2, which does not mention last-resort KeyPackages.
+
+What it rests on. RFC 9420 §16.8: "KeyPackages are intended to be used only once", and "An application MAY allow for
+reuse of a 'last resort' KeyPackage in order to prevent denial-of-service attacks. Since a KeyPackage is needed to add a
+client to a new group, an attacker could prevent a client from being added to new groups by exhausting all available
+KeyPackages." draft-ietf-mls-extensions-10 §6.4 gives the marker RFC 9420 lacks, the `last_resort_key_package`
+component, "to specifically mark KeyPackages as KeyPackages of last resort that MAY be used more than once in scenarios
+where all other KeyPackages have already been used". The hub reuses only a KeyPackage its client marked so: it reads the
+mark when the KeyPackage is published (openmls `KeyPackage::last_resort`, which recognizes the component and the
+obsolete `last_resort` extension `0x000a`), and every other KeyPackage is handed out once and deleted, as before.
+
+What the hub does:
+
+- **Served last.** A claim takes the oldest unexpired one-time KeyPackage that meets it, and the last-resort one only
+  when none does. It answers `success` with it, like any other; a requester that wants to know reads the mark in the
+  KeyPackage itself, as extensions-10 §6.4 has a client processing the Add do.
+- **Kept.** A claimed last-resort KeyPackage stays stored to be handed out again, and its `KeyPackageRef` stays mapped
+  to its user, so every Welcome sent for it reaches the user (protocol-07 §5.2's association of the ref with the target
+  client is kept, not deleted after the first Welcome).
+- **One per user.** Publishing a new last-resort KeyPackage replaces the old one. A user's one-time and last-resort
+  KeyPackages share the per-user cap of 64; the cap evicts the oldest one-time KeyPackages and never the last-resort
+  one. An expired last-resort KeyPackage is not served.
+- **The client can see it.** The client lane's `keyPackageCount` says how many one-time KeyPackages are left and
+  whether a last-resort one is, so a client knows when it is being served its last resort and should publish more and
+  replace it.
+
+Limits. Reuse is what RFC 9420 §16.8 warns "can lead to replay attacks": every group that adds the user through the
+last-resort KeyPackage encrypts its Welcome to the same init key, and the client holds that private key until it
+replaces the KeyPackage. The hub narrows how often that happens; it does not remove it. §16.8 also has the publication
+system "rate-limit KeyPackage requests, especially if not authenticated". Every `keyMaterial` request from a peer or a
+client is authenticated (the peer's proof on the provider path, the user's signature on the client lane) and passes the
+consent gate; the client lane is also limited per user and per user and target (DIV-19). The provider path has no rate
+limit of its own. The operator's loopback route that serves a KeyPackage (DIV-16, "The operator's routes") is the
+operator's, and is neither gated nor limited.

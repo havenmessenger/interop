@@ -24,6 +24,11 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   of a user here (as this hub's own forwarding sends it) now finds the KeyPackages published for that user.
 - `mimi-core`: `KeyMaterialRequest::sign` and `signature_verifies`, for its §5.2 signature over
   `KeyMaterialRequestTBS`.
+- `mimi-hubd`: a last-resort KeyPackage (draft-ietf-mls-extensions §6.4, marked by its client) is handed out only when
+  no one-time KeyPackage is left, and kept to be handed out again, with its `KeyPackageRef` still routing every Welcome
+  sent for it. A user has one, the newest replacing the one before, and the per-user cap never evicts it. The client
+  lane's `keyPackageCount` says how many one-time KeyPackages are left and whether a last-resort one is. Before, every
+  KeyPackage was handed out once. protocol-07 §5.2 says key material "may not be reused": DIV-23.
 - `mimi-hubd`: a user of this provider has one KeyPackage pool, whether published for or claimed by name or by URI;
   a store that kept some under the URI joins them to the name when it opens.
 - `mimi-hubd`: `updateConsent` is recorded only from the provider of its target user and for a requester of this
