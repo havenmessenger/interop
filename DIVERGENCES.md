@@ -217,13 +217,13 @@ rejects attached `AbusiveMessage` values rather than accepting them unverified.
 
 ## DIV-10 - CLOSED for room updates by Commit; four operations have no wire route of their own
 
-`update` (§5.3) applies a Commit carrying one participant-list change, one room-policy change, or one of each, with or
-without `Add` and `Remove` proposals, and a member's leave through proposals the next Commit includes by reference.
+`update` (§5.3) applies a Commit carrying participant-list changes, room-policy changes, or both (one change per
+policy component; a roles_list never beside a participant-list change), with or without `Add` and `Remove` proposals, and a member's leave through proposals the next Commit includes by reference.
 `roomPolicy`, `memberRole`, `addParticipant` and `authorizeSender` have no wire route of their own: on the wire they
 are what an `update` does.
 
 `POST /mimi/pl/update/{roomId}` (§5.3) takes an `UpdateRequest`, a `HandshakeBundle` whose
-`PublicMessage`-wrapped MLS Commit carries a participant-list change, a room-policy change, or one of each (and, since
+`PublicMessage`-wrapped MLS Commit carries participant-list changes, room-policy changes, or both (and, since
 the rewrite below, any `Add` and `Remove` proposals beside them). `mimi_core::commit_wire::decode_commit_proposals` reads
 each change's type and payload and the Adds and Removes - independent of openmls's own (crate-private) `Commit` type,
 hand-coded the same way every other MIMI-specific structure in this codebase is. For a room whose ratchet tree the hub

@@ -388,7 +388,7 @@ impl Provider {
             "unsupported": {
                 "groupInfo_joining_code": "DIV-1: a GroupInfoRequest with a joining code is refused; preauthorized users are not read",
                 "assets_ohttp": "DIV-3: v1 is messaging-only",
-                "update_wire_endpoint_mixed_commits": "DIV-10: a Commit is applied when it carries a participant-list change, a room-policy change, or one of each (a role list never beside a participant-list change, room-policy-04 §3), alone or with Add and Remove proposals beside it; proposals by reference are accepted only when they are the ones this hub holds for a member's leave. A second change of one kind, a role list beside a participant-list change, a Commit with no change, any other proposal type and any other proposal by reference are refused",
+                "update_wire_endpoint_mixed_commits": "DIV-10: a Commit is applied when it carries participant-list changes, room-policy changes, or both (one change per policy component; a role list never beside a participant-list change, room-policy-04 §3), alone or with Add and Remove proposals beside it; proposals by reference are accepted only when they are the ones this hub holds for a member's leave. A second change of one policy component, a role list beside a participant-list change, a Commit with no change, any other proposal type and any other proposal by reference are refused",
                 "reportAbuse_with_abusive_messages": "DIV-9: a report attaching an AbusiveMessage is refused (its Frank cannot yet be verified) - metadata-only reports are accepted"
             }
         });
@@ -2459,11 +2459,11 @@ mod tests {
             .expect("a statement")
             .to_owned();
         let (applied, refused) = said
-            .split_once(" A second change of one kind")
+            .split_once(" A second change of one policy component")
             .expect("what is applied, then what is refused");
         assert!(applied.starts_with("DIV-10: "), "{said}");
         assert!(
-            applied.contains("a participant-list change, a room-policy change, or one of each"),
+            applied.contains("participant-list changes, room-policy changes, or both"),
             "{said}"
         );
         assert!(applied.contains("Add and Remove"), "{said}");
