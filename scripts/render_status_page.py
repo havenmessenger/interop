@@ -240,16 +240,41 @@ def sections(text: str, level: int) -> list[tuple[str, str]]:
 
 
 def first_paragraph(body: str) -> str:
+    """A section's lead: its first paragraph after any opening table, and the list it introduces when it ends in a
+    colon, so a lead never stops mid-sentence."""
+    lines = body.strip().splitlines()
+    i = 0
+    while i < len(lines) and (
+        not lines[i].strip() or lines[i].lstrip().startswith("|")
+    ):
+        i += 1
     para = []
+    while i < len(lines) and lines[i].strip() and not lines[i].startswith(("```", "#")):
+        para.append(lines[i])
+        i += 1
+    if para and para[-1].rstrip().endswith(":"):
+        while i < len(lines) and not lines[i].strip():
+            i += 1
+        while i < len(lines) and (
+            re.match(r"^\s*([-*]|\d+\.)\s+", lines[i]) or lines[i].startswith("  ")
+        ):
+            para.append(lines[i])
+            i += 1
+    return "\n".join(para)
+
+
+def table_fields(body: str) -> dict[str, str]:
+    """The `| field | value |` rows of a section's opening table."""
+    fields = {}
     for line in body.strip().splitlines():
-        if not line.strip():
-            if para:
+        if not line.lstrip().startswith("|"):
+            if fields:
                 break
             continue
-        if line.startswith(("|", "```", "#")) and not para:
-            break
-        para.append(line)
-    return "\n".join(para)
+        row = cells(line)
+        if len(row) >= 2 and not re.fullmatch(r"[\s:-]*", row[0]):
+            fields[row[0].strip("`")] = row[1].strip("`")
+    return fields
 
 
 def changelog_entries(text: str) -> list[str]:
@@ -354,6 +379,8 @@ def gather(repo: Path, revision: str, previous: str | None) -> dict:
             {
                 "type": heading,
                 "uri": f"{PROBLEM_BASE}#{slug(heading)}",
+                "title": table_fields(body).get("title", ""),
+                "status": table_fields(body).get("status", ""),
                 "summary": first_paragraph(body),
             }
             for heading, body in sections(problems, 2)
@@ -434,7 +461,7 @@ def page(facts: dict, args) -> str:
         f"<title>{html.escape(title)}</title><style>{STYLE}</style></head><body><main>",
         f"<h1>{html.escape(title)}</h1>",
         '<p class="muted">Generated when this hub was deployed, from the '
-        f'<a href="{REPO_URL}/tree/{rev}">interop repository at {short}</a>. Nothing here is written by hand.</p>',
+        f'<a href="{REPO_URL}/tree/{rev}">interop repository at {short}</a>.</p>',
         "<nav><ul>"
         + "".join(
             f'<li><a href="#{a}">{t}</a></li>'
@@ -521,7 +548,8 @@ def page(facts: dict, args) -> str:
     for p in facts["problem_types"]:
         parts.append(
             f'<dt id="{slug(p["type"])}"><a href="{html.escape(p["uri"])}"><code>{html.escape(p["type"])}'
-            f"</code></a></dt><dd>{render_markdown(p['summary'], prob_links)}</dd>"
+            f"</code></a> {html.escape(p['status'])}: {html.escape(p['title'])}</dt>"
+            f"<dd>{render_markdown(p['summary'], prob_links)}</dd>"
         )
     parts.append("</dl>")
 
@@ -682,6 +710,13 @@ def audit(out: Path, facts: dict) -> list[str]:
     for p in facts["problem_types"]:
         if f'<dt id="{slug(p["type"])}">' not in text:
             errs.append(f"problem type {p['type']} is missing")
+        if not (p["summary"].strip() and p["title"] and p["status"]):
+            errs.append(
+                f"problem type {p['type']} renders without its title, status or description"
+            )
+    for d in facts["divergences"]:
+        if not d["summary"].strip() or d["summary"].rstrip().endswith(":"):
+            errs.append(f"{d['id']}'s lead is empty or stops at a colon")
     for v in facts["vectors"]:
         copy = out / "vectors" / v["path"]
         if f'href="vectors/{v["path"]}"' not in text:
