@@ -52,6 +52,9 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 - [`docs/vc-01-vector-report.md`](docs/vc-01-vector-report.md) - a cross-implementation test
   against openmls-main, including the small-space PRP (§5.6.1) divergence found and how it was
   narrowed down.
+- [`scripts/render_status_page.py`](scripts/render_status_page.py) - renders a deployment's status page at deploy
+  time: the revision it runs, what changed since the last deployment, the drafts and sections implemented, the
+  divergences, the problem types, the deployment's settings and the test vectors, from this repository alone.
 
 ## Why this is open
 - This is the runnable reference for interoperating with Haven, and an interop layer any

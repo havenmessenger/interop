@@ -60,6 +60,8 @@ jobs:
           fetch-depth: 0
       - name: commit-message-hygiene self-test
         run: python3 scripts/check_commit_message_hygiene.py --self-test
+      - name: status-page self-test
+        run: python3 scripts/render_status_page.py --self-test
       - name: commit-message-hygiene (guard 6)
         env:
           EVENT: ${{ github.event_name }}
