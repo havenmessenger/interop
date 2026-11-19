@@ -1,6 +1,6 @@
 //! The lane room profile file: what it takes, and what stops the start.
 
-use super::{LaneRoomProfile, ROLE_MEMBER};
+use super::{LaneRoomProfile, ROLE_ADMIN, ROLE_MEMBER};
 
 /// The profile in the module's documentation, which a deployment copies.
 const DOCUMENTED: &str = r#"
@@ -110,4 +110,63 @@ fn the_neutral_profile_lets_a_member_leave() {
             .is_ok(),
         "PLANT-NEUTRAL-MEMBER-LEAVES: a member of a neutral-profile room may leave"
     );
+}
+
+/// A profile whose admins may leave and remove one another (room-policy-04 §8.1.2): the admin role's own entry from
+/// itself to 0, beside the neutral profile's entries; members leave as in the neutral profile.
+const ADMINS_LEAVE: &str = r#"
+creator_role = 2
+external_commit_allowed = false
+
+[room_policy.base]
+fixed_membership = false
+parent_dependant = false
+discoverable = false
+
+[[room_policy.roles]]
+role_index = 1
+role_name = "banned"
+capabilities = []
+
+[[room_policy.roles]]
+role_index = 2
+role_name = "admin"
+capabilities = ["SendMessage", "AddParticipant", "RemoveParticipant", "RemoveSelf", "ChangeRole", "Ban"]
+authorized_role_changes = [
+  { from_role_index = 0, target_role_indexes = [2, 3] },
+  { from_role_index = 3, target_role_indexes = [0, 1, 2] },
+  { from_role_index = 2, target_role_indexes = [0, 3] },
+]
+
+[[room_policy.roles]]
+role_index = 3
+role_name = "member"
+capabilities = ["SendMessage", "RemoveSelf"]
+authorized_role_changes = [{ from_role_index = 3, target_role_indexes = [0] }]
+"#;
+
+/// With the admin role's entry from itself to 0 a deployment's admins may leave and remove another admin; the neutral
+/// profile, which has no such entry, refuses both (DIV-22). A member may leave under either. Revert check: refuse every
+/// self-removal, and the admin's leave is refused.
+#[test]
+fn a_profile_may_let_admins_leave_and_remove_admins() {
+    let admins_leave = LaneRoomProfile::parse(ADMINS_LEAVE).unwrap().room_policy;
+    assert!(
+        admins_leave.authorize_self_removal(ROLE_ADMIN).is_ok(),
+        "PLANT-ADMIN-LEAVES: an admin may leave under a profile that lets admins leave"
+    );
+    assert!(
+        admins_leave
+            .authorize_role_change(ROLE_ADMIN, ROLE_ADMIN, 0)
+            .is_ok(),
+        "an admin may remove another admin"
+    );
+    assert!(admins_leave.authorize_self_removal(ROLE_MEMBER).is_ok());
+
+    let neutral = LaneRoomProfile::neutral().room_policy;
+    assert!(neutral.authorize_self_removal(ROLE_ADMIN).is_err());
+    assert!(neutral
+        .authorize_role_change(ROLE_ADMIN, ROLE_ADMIN, 0)
+        .is_err());
+    assert!(neutral.authorize_self_removal(ROLE_MEMBER).is_ok());
 }

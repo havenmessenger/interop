@@ -734,16 +734,17 @@ of this repository uses too, append them in the order the Commit's AppDataUpdate
 come in, the order draft-ietf-mls-extensions §4.7 hands a component's updates to the application. A client that appends
 them in another order computes another list, and so a GroupContext that differs from the Commit's.
 
-## DIV-22 - the neutral lane profile's admins cannot leave
+## DIV-22 - the neutral lane profile's admins cannot leave; a deployment's profile may let them
 
 room-policy-04 §8.1.2 authorizes `canRemoveSelf` by the holder's role's `authorized_role_changes` "entry where
 from_role_index matches its current role", whose targets contain zero, and `canRemoveParticipant` by the entry whose
 from_role_index matches the removed user's role. Both read the same entry, so a role that may leave from role 2 may also
 remove other holders of role 2 when it holds `canRemoveParticipant`. The neutral profile (`client_lane_rooms.rs`) lets a
 member leave (role 3 has an entry 3 → 0 and no `canRemoveParticipant`) and does not give the admin role an entry 2 → 0,
-so an admin cannot remove another admin and cannot leave either. An admin leaves by first being changed to a member by
-another admin (the entry 2 → 3); the room's last admin cannot. A deployment that wants admins to leave writes the entry
-2 → 0 in its own profile, and with it admins may remove one another.
+so under it an admin cannot remove another admin and cannot leave either: an admin leaves by first being changed to a
+member by another admin (the entry 2 → 3), and the room's last admin cannot. A deployment whose admins should leave
+writes the entry 2 → 0 in its own profile (`MIMI_LANE_ROOM_POLICY`), and with it its admins may also remove one another,
+as §8.1.2 reads; the neutral profile keeps the narrower rule as its default.
 
 ## DIV-23 - with `MIMI_LAST_RESORT_REUSE=true`, a last-resort KeyPackage is handed out more than once
 
