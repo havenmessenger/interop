@@ -53,12 +53,13 @@ mechanism and a client calls it.
 
 | ID | § | Requirement | Status | Where |
 |---|---|---|---|---|
-| M1 | 5.4 | An application message is an MLS PrivateMessage | Client | The hub relays it opaque |
+| M1 | 5.4 | An application message is an MLS PrivateMessage with content_type application | Implemented | `submit.rs` reads the outer header, with no key, and refuses anything else |
 | M2 | 5.4 | `sendingUri` is an active participant | Implemented | `Provider::authorize_sender` |
 | M3 | 5.5 | Fan out to every provider with active participants | Implemented | Commits, held proposals and application messages, through the outbox (DIV-5) |
 | M4 | 5.5 | Route a Welcome by the KeyPackageRef it carries | Implemented | By the provider recorded when the hub forwarded keyMaterial for that KeyPackage, else the added user's domain (DIV-5) |
 | M5 | 5.5 | A duplicate `notify` is answered 201, byte-exact | Implemented | The `notify_seen` ledger |
 | M6 | 5.4, 5.5 | Store and deliver a PrivateMessage once | Implemented | `submitMessage`, `message` |
+| M7 | 5.4 | A message for an earlier epoch is answered `epochTooOld` with the current one; one after the hub's is `notAllowed` | Implemented | `submit.rs`, for a room whose tree the hub keeps (DIV-20) |
 | W9 | 5.5 | `notify` is accepted only from the room's hub | Implemented | `notify_source.rs` |
 
 ## GroupInfo and join (protocol-07 §5.6)

@@ -34,8 +34,8 @@
 
 use openmls::ciphersuite::signature::SignaturePublicKey;
 use openmls::prelude::{
-    Capabilities, Ciphersuite, Credential, KeyPackageIn, MlsMessageIn, MlsMessageOut,
-    RequiredCapabilitiesExtension, Welcome,
+    Capabilities, Ciphersuite, ContentType, Credential, KeyPackageIn, MlsMessageIn, MlsMessageOut,
+    ProtocolMessage, RequiredCapabilitiesExtension, Welcome,
 };
 use tls_codec::{
     Deserialize as TlsDeserialize, DeserializeBytes, Error as TlsError, Serialize as TlsSerialize,
@@ -54,13 +54,31 @@ pub const PROTOCOL_MLS10: Protocol = 1;
 
 /// The unauthenticated routing header carried in an MLS protocol envelope.
 ///
-/// This is deliberately limited to fields exposed before decryption. A delivery service can use the
-/// group id and epoch to route or order ciphertext, but cannot learn its sender or plaintext from this
-/// value.
+/// This is deliberately limited to fields exposed before decryption (RFC 9420 §6.3). A delivery service can use
+/// them to route, order or refuse ciphertext, but cannot learn its sender or plaintext from this value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MlsOuterHeader {
     pub group_id: Vec<u8>,
     pub epoch: u64,
+    /// Whether the envelope is a PrivateMessage (sealed) or a PublicMessage (signed only).
+    pub wire_format: MlsWireFormat,
+    /// What the envelope carries: an application message, a proposal or a commit.
+    pub content_type: MlsContentType,
+}
+
+/// The wire format of an MLS protocol envelope (RFC 9420 §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MlsWireFormat {
+    PrivateMessage,
+    PublicMessage,
+}
+
+/// The content type of an MLS protocol envelope (RFC 9420 §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MlsContentType {
+    Application,
+    Proposal,
+    Commit,
 }
 
 /// Wire error for this module. Fail-closed: every decode path either produces a valid value or an
@@ -116,6 +134,15 @@ pub fn inspect_mls_outer_header(bytes: &[u8]) -> Result<MlsOuterHeader, WireErro
     Ok(MlsOuterHeader {
         group_id: message.group_id().as_slice().to_vec(),
         epoch: message.epoch().as_u64(),
+        wire_format: match message {
+            ProtocolMessage::PrivateMessage(_) => MlsWireFormat::PrivateMessage,
+            ProtocolMessage::PublicMessage(_) => MlsWireFormat::PublicMessage,
+        },
+        content_type: match message.content_type() {
+            ContentType::Application => MlsContentType::Application,
+            ContentType::Proposal => MlsContentType::Proposal,
+            ContentType::Commit => MlsContentType::Commit,
+        },
     })
 }
 
@@ -3274,7 +3301,12 @@ mod tests {
 
         assert_eq!(
             inspect_mls_outer_header(&ciphertext).unwrap(),
-            MlsOuterHeader { group_id, epoch },
+            MlsOuterHeader {
+                group_id,
+                epoch,
+                wire_format: MlsWireFormat::PrivateMessage,
+                content_type: MlsContentType::Application,
+            },
             "the outer header remains readable when the sealed body is changed"
         );
     }

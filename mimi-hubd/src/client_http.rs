@@ -436,6 +436,11 @@ async fn submit_message(
     ) {
         crate::submit::Acceptance::Accepted => Json(Empty {}).into_response(),
         crate::submit::Acceptance::Refused => crate::problem::NOT_PERMITTED.response(),
+        crate::submit::Acceptance::EpochTooOld { current_epoch } => crate::problem::EPOCH_TOO_OLD
+            .response_with(serde_json::Map::from_iter([(
+                "current_epoch".to_string(),
+                current_epoch.into(),
+            )])),
         crate::submit::Acceptance::Failed => crate::problem::INTERNAL_ERROR.response(),
     }
 }

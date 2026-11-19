@@ -124,6 +124,15 @@ pub const ROOM_IS_TRACKED: ProblemType = ProblemType {
     detail: "The hub keeps this room's ratchet tree, so its participant list and policy change only by a Commit.",
 };
 
+/// A client lane message for an epoch before the room's: the room's group has moved on (the client lane's
+/// `epochTooOld`, draft-ietf-mimi-protocol-07 §5.4).
+pub const EPOCH_TOO_OLD: ProblemType = ProblemType {
+    anchor: "epoch-too-old",
+    title: "The room's group is at a later epoch",
+    status: StatusCode::CONFLICT,
+    detail: "The message is for an earlier epoch of the room's group, given as current_epoch. Process the room's pending Commits, then send it again in the current epoch.",
+};
+
 /// A body larger than the endpoint takes.
 pub const BODY_TOO_LARGE: ProblemType = ProblemType {
     anchor: "body-too-large",
@@ -182,7 +191,7 @@ pub const KEY_MATERIAL_RATE_LIMITED: ProblemType = ProblemType {
 };
 
 /// Every problem type, for the page check and the fallback.
-pub const ALL: [&ProblemType; 19] = [
+pub const ALL: [&ProblemType; 20] = [
     &CLIENT_NOT_AUTHENTICATED,
     &CLIENT_RATE_LIMITED,
     &KEY_MATERIAL_RATE_LIMITED,
@@ -198,6 +207,7 @@ pub const ALL: [&ProblemType; 19] = [
     &ROOM_NOT_HOSTED,
     &METHOD_NOT_ALLOWED,
     &ROOM_IS_TRACKED,
+    &EPOCH_TOO_OLD,
     &BODY_TOO_LARGE,
     &WRONG_OPERATION,
     &INTERNAL_ERROR,
@@ -228,6 +238,7 @@ fn for_status(status: StatusCode) -> (&'static str, Body) {
                 title: "The request was refused",
                 status: status.as_u16(),
                 detail: "The HTTP status says why; no more specific type applies.",
+                members: serde_json::Map::new(),
             },
         ),
     }
@@ -263,6 +274,9 @@ struct Body {
     title: &'static str,
     status: u16,
     detail: &'static str,
+    /// RFC 9457 §3.2's extension members, after the standard ones; none for most problems.
+    #[serde(flatten)]
+    members: serde_json::Map<String, serde_json::Value>,
 }
 
 impl ProblemType {
@@ -277,12 +291,29 @@ impl ProblemType {
             title: self.title,
             status: self.status.as_u16(),
             detail: self.detail,
+            members: serde_json::Map::new(),
         }
     }
 
     /// The answer: the problem's status, `Content-Type: application/problem+json`, and the body.
     pub fn response(&self) -> Response {
-        let json = serde_json::to_vec(&self.body()).unwrap_or_default();
+        self.response_with(serde_json::Map::new())
+    }
+
+    /// As [`Self::response`], with `members` added to the body: RFC 9457 §3.2's extension members, for what the client
+    /// needs to act on the problem.
+    pub fn response_with(
+        &self,
+        mut members: serde_json::Map<String, serde_json::Value>,
+    ) -> Response {
+        for standard in ["type", "title", "status", "detail"] {
+            members.remove(standard);
+        }
+        let body = Body {
+            members,
+            ..self.body()
+        };
+        let json = serde_json::to_vec(&body).unwrap_or_default();
         let mut response = (self.status, json).into_response();
         response
             .headers_mut()

@@ -260,3 +260,33 @@ pub(crate) fn group_info_after(group: &MlsGroup, by: &Member) -> Vec<u8> {
         other => panic!("not a GroupInfo: {other:?}"),
     }
 }
+
+/// An application message `by` sends in `group`, as serialized MLSMessage bytes: a PrivateMessage at the group's
+/// current epoch.
+pub(crate) fn application_message(group: &mut MlsGroup, by: &Member, text: &[u8]) -> Vec<u8> {
+    group
+        .create_message(&by.provider, &by.signer, text)
+        .unwrap()
+        .tls_serialize_detached()
+        .unwrap()
+}
+
+/// A sender of real application messages in a group of its own, for a room whose tree the hub does not keep: the hub
+/// checks only that each is a PrivateMessage carrying an application message.
+pub(crate) struct Chatter {
+    member: Member,
+    group: MlsGroup,
+}
+
+impl Chatter {
+    pub(crate) fn new() -> Self {
+        let member = Member::new("mimi://example.com/u/chatter");
+        let group = member.create_group(b"mimi://example.com/g/chatter");
+        Self { member, group }
+    }
+
+    /// The next application message, carrying `text`.
+    pub(crate) fn say(&mut self, text: &[u8]) -> Vec<u8> {
+        application_message(&mut self.group, &self.member, text)
+    }
+}

@@ -30,6 +30,7 @@ M3
 M4
 M5
 M6
+M7
 
 # store/custody conformance rows (store.rs)
 K1

@@ -2,6 +2,7 @@
 //! members' own queues are what bound delivery.
 
 use super::Acceptance;
+use crate::mls_fixtures::Chatter;
 use crate::Provider;
 
 const ROOM: &str = "mimi://hub.example/r/room";
@@ -22,15 +23,16 @@ fn room_of(members: &[&str]) -> Provider {
 #[test]
 fn a_room_takes_more_messages_than_a_queue_holds_while_its_members_read_them() {
     let p = room_of(&[ALICE, DAVE]);
+    let mut chatter = Chatter::new();
     let count = u64::try_from(crate::store::MAX_QUEUE_MESSAGES).unwrap() + 44;
     for n in 0..count {
-        let body = format!("m{n}");
+        let body = chatter.say(format!("m{n}").as_bytes());
         assert_eq!(
-            p.accept_application_message(ROOM, ALICE, body.as_bytes(), 10 + n),
+            p.accept_application_message(ROOM, ALICE, &body, 10 + n),
             Acceptance::Accepted,
             "PLANT-ROOM-QUEUE: message {n} of {count} was refused"
         );
-        assert_eq!(p.fetch_message(DAVE).unwrap(), Some(body.into_bytes()));
+        assert_eq!(p.fetch_message(DAVE).unwrap(), Some(body));
     }
     assert!(
         p.fetch_message(ROOM).unwrap().is_none(),
@@ -53,7 +55,12 @@ fn an_empty_or_oversize_message_is_refused_and_reaches_no_one() {
     );
     assert!(p.fetch_message(DAVE).unwrap().is_none());
     assert_eq!(
-        p.accept_application_message(ROOM, ALICE, &vec![7u8; crate::store::MAX_ITEM_BYTES], 12),
+        p.accept_application_message(
+            ROOM,
+            ALICE,
+            &message_of_length(crate::store::MAX_ITEM_BYTES),
+            12
+        ),
         Acceptance::Accepted
     );
 }
@@ -77,8 +84,21 @@ fn a_fan_out_store_error_is_a_failure_not_an_acceptance() {
     let p = room_of(&[ALICE, DAVE]);
     p.store.break_message_queue_for_test();
     assert_eq!(
-        p.accept_application_message(ROOM, ALICE, b"hello", 10),
+        p.accept_application_message(ROOM, ALICE, &Chatter::new().say(b"hello"), 10),
         Acceptance::Failed,
         "PLANT-ROOM-FANOUT-ERROR: a message nothing queued was not reported as the hub's failure"
     );
+}
+
+/// A real application message whose serialized length is exactly `length`.
+fn message_of_length(length: usize) -> Vec<u8> {
+    let mut chatter = Chatter::new();
+    let overhead = chatter.say(b"").len();
+    for text in (length.saturating_sub(overhead + 16)..=length.saturating_sub(overhead)).rev() {
+        let message = chatter.say(&vec![b'x'; text]);
+        if message.len() == length {
+            return message;
+        }
+    }
+    panic!("no application message of exactly {length} bytes");
 }

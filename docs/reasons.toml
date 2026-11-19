@@ -168,13 +168,22 @@ reason = "An operator change to the list or policy of a room whose ratchet tree 
 # --- messages and fan-out ----------------------------------------------------------------------------------------
 
 [[reason]]
+id = "epoch-too-old"
+surfaces_as = "problem epoch-too-old, 409; submitMessage answer epochTooOld"
+spec = "draft-ietf-mimi-protocol-07"
+section = "5.4"
+quote = "epochTooOld indicates that the hub provider is using a new MLS epoch for the group. The currentEpoch is provided in the response."
+divergence = "DIV-20"
+reason = "The message is for an earlier epoch of the room's group than the one the hub keeps for it; the sender resends in the current epoch."
+
+[[reason]]
 id = "submit-not-allowed"
 surfaces_as = "submitMessage answer notAllowed"
 spec = "draft-ietf-mimi-protocol-07"
 section = "5.4"
 quote = "notAllowed indicates that some type of policy or authorization prevented the hub provider from accepting the SubmitMessageRequest. This could include nonsensical inputs such as an MLS epoch more recent than the hub's."
-divergence = ""
-reason = "The sender may not send in this room, or the message is empty or larger than one queued item."
+divergence = "DIV-20"
+reason = "The sender may not send in this room; the message is empty or larger than one queued item; it is not a PrivateMessage carrying an application message; or, in a room whose tree the hub keeps, it is for another group or for an epoch after the room's."
 
 [[reason]]
 id = "sender-not-allowed"

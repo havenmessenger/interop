@@ -179,6 +179,16 @@ A route asked with a method it does not take. The `Allow` header is kept. Use a 
 
 The operator's `roomPolicy`, `memberRole` and `addParticipant` for a room whose ratchet tree the hub keeps: its list and policy are its group's, changed by Commit (DIV-10). Change the room by Commit, or untrack it first.
 
+## epoch-too-old
+
+| field | value |
+|---|---|
+| `type` | `https://github.com/havenmessenger/interop/blob/main/docs/problems.md#epoch-too-old` |
+| `title` | The room's group is at a later epoch |
+| `status` | 409 |
+
+A client lane `submitMessage` whose MLS message is for an earlier epoch of the room's group than the one the hub keeps for it: the client lane's form of `epochTooOld` (draft-ietf-mimi-protocol-07 §5.4). The body adds `current_epoch`, the room's epoch, as the wire's answer carries `currentEpoch`. Process the room's pending Commits, then send the message again in that epoch. Only for a room whose ratchet tree the hub keeps.
+
 ## body-too-large
 
 | field | value |

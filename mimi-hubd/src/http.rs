@@ -596,6 +596,9 @@ async fn submit_message_wire(
                 accepted_timestamp: now_unix_millis(),
             },
             crate::submit::Acceptance::Refused => SubmitMessageResponse::NotAllowed,
+            crate::submit::Acceptance::EpochTooOld { current_epoch } => {
+                SubmitMessageResponse::EpochTooOld { current_epoch }
+            }
             crate::submit::Acceptance::Failed => return crate::problem::INTERNAL_ERROR.response(),
         };
     (StatusCode::OK, outcome.encode()).into_response()

@@ -102,15 +102,17 @@ async fn a_participant_sends_and_a_non_participant_is_refused() {
             STANDARD.encode(message)
         )
     };
+    let mut chatter = crate::mls_fixtures::Chatter::new();
+    let (one, two) = (chatter.say(b"one"), chatter.say(b"two"));
     let (status, body) = call(
         &l.router,
-        signed(&l.key, "submitMessage", ALICE, &send(b"one")),
+        signed(&l.key, "submitMessage", ALICE, &send(&one)),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, _) = call(
         &l.router,
-        signed(&l.key, "submitMessage", DAVE, &send(b"two")),
+        signed(&l.key, "submitMessage", DAVE, &send(&two)),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -119,7 +121,7 @@ async fn a_participant_sends_and_a_non_participant_is_refused() {
     let bobs: Vec<Vec<u8>> = bobs.into_iter().map(|item| item.bytes).collect();
     assert_eq!(
         bobs,
-        vec![b"one".to_vec()],
+        vec![one],
         "PLANT-LANE-SUBMIT: a non-participant's message was delivered"
     );
     assert!(p.lane_inbox(ALICE, 0, 0, 10).unwrap().messages.is_empty());
@@ -195,5 +197,50 @@ async fn a_leave_on_the_lane_is_its_senders_own() {
     assert_eq!(
         body["answer"], "success",
         "PLANT-LANE-UPDATE-REQUESTER: Bob's own leave on the lane was refused: {body}"
+    );
+}
+
+/// A lane message for an earlier epoch of a room whose tree the hub keeps is answered `epoch-too-old`, and the body says
+/// which epoch the room is at, so the client knows what to catch up to. Revert check: answer the bare problem, and the
+/// body has no `current_epoch`.
+#[tokio::test]
+async fn an_old_epochs_message_is_told_the_rooms_epoch() {
+    use crate::mls_fixtures::{add_commit, application_message, Member};
+    use mimi_core::protocol_wire::{GroupInfoOption, GroupInfoRepresentation};
+
+    let l = lane("submit-old-epoch");
+    let room = alices_room(&l).await;
+    let alice = Member::new(ALICE);
+    let mut group = alice.create_group(b"lane-old-epoch");
+    add_commit(&mut group, &alice, &[&Member::new(BOB)]);
+    let at_one = application_message(&mut group, &alice, b"at epoch 1");
+    let (_, group_info, tree) = add_commit(&mut group, &alice, &[&Member::new(DAVE)]);
+    {
+        let p = l.provider.lock().unwrap();
+        p.store.commit_accepted_at(&room, 1).unwrap();
+        p.seed_room_tree(
+            &room,
+            1,
+            crate::requester::Requester::LaneUser(ALICE),
+            &GroupInfoOption {
+                representation: GroupInfoRepresentation::Full,
+                payload: group_info,
+            },
+            &[&[1u8][..], &tree].concat(),
+        );
+        assert!(
+            p.room_tracking(&room).unwrap().is_some(),
+            "the room is tracked"
+        );
+    }
+    let request = format!(
+        r#"{{"room":"{room}","message":"{}"}}"#,
+        STANDARD.encode(&at_one)
+    );
+    let (status, body) = call(&l.router, signed(&l.key, "submitMessage", ALICE, &request)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["current_epoch"], 2,
+        "PLANT-LANE-EPOCH-TOO-OLD: the lane's answer does not say the room's epoch: {body}"
     );
 }

@@ -705,6 +705,19 @@ the lane user's credential, with a signature that verifies. A relayed Commit or 
 bind it to its sender's leaf, which the hosting hub and the room's members check; this hub holds neither the room's list
 nor its tree (DIV-5), so it does not check what a relayed update changes.
 
+## DIV-20 - a room whose tree the hub does not keep: a message's framing is checked, not its group or epoch
+
+draft-ietf-mimi-protocol-07 §5.4 has the hub answer `epochTooOld` for a message from an earlier epoch and `notAllowed`
+for one from a later epoch, which needs the room's group and its current epoch. The hub records an epoch for every room
+it has accepted a Commit for, but only for a room whose ratchet tree it keeps (DIV-10) is that epoch verified: the
+Commits that moved it were checked against the tree. An untracked room's epoch comes from Commits the hub could not
+verify, so refusing messages by it would let one bad Commit silence the room. For such a room the hub checks what the
+message itself shows, with no key: that it is a PrivateMessage carrying an application message (RFC 9420 §6.3). Its
+group and epoch are not checked there, and a member's client is the one that refuses a message of another group or
+epoch, as it does for any message. With `untracked_rooms = "refuse"` (the default, DIV-10), a hosted room is tracked
+from its first Commit, so this covers rooms the hub took Commits for before it kept their tree, and hubs set to
+`"accept"`.
+
 ## DIV-21 - several participant-list updates in one Commit: the order their additions are appended in
 
 protocol-07 §7.5 says every `ParticipantListUpdate` in a Commit indexes the list as it stood before the Commit ("This

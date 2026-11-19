@@ -6,6 +6,12 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimi-hubd`: a submitted message's MLS framing is checked, from its outer header and with no key (draft-ietf-mimi-protocol-07
+  §5.4): anything but a PrivateMessage carrying an application message is refused (`notAllowed`, or `not-permitted` on
+  the client lane). In a room whose tree the hub keeps, a message for another group or for an epoch after the room's is
+  refused, and one for an earlier epoch is answered `epochTooOld` with the room's epoch (on the client lane, the new
+  problem type `epoch-too-old`, 409, whose body carries it as `current_epoch`). For any other room only the framing is
+  checked (DIV-20). `MlsOuterHeader` gains the envelope's wire format and content type.
 - `mimi-hubd`: a room hosted here that the hub keeps no ratchet tree for no longer takes changes the hub cannot
   authorize. Its first Commit, and any participant-list or room-policy change to it, is taken only with a bundle
   carrying a Full GroupInfo and the full ratchet tree, which seed the tree; otherwise it is refused (`notAllowed`, saying

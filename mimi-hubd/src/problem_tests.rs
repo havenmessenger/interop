@@ -44,3 +44,20 @@ fn every_problem_anchor_is_on_the_problems_page() {
         );
     }
 }
+
+/// A problem's extension members join its body beside the standard ones, which they cannot replace.
+#[tokio::test]
+async fn extension_members_join_the_body_and_leave_the_standard_ones() {
+    let response = EPOCH_TOO_OLD.response_with(serde_json::Map::from_iter([
+        ("current_epoch".to_string(), serde_json::json!(7)),
+        ("status".to_string(), serde_json::json!(200)),
+    ]));
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let bytes = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["current_epoch"], 7);
+    assert_eq!(body["status"], 409);
+    assert_eq!(body["title"], EPOCH_TOO_OLD.title);
+}
