@@ -108,3 +108,37 @@ fn a_welcome_is_taken_by_name_or_by_uri() {
     );
     assert_eq!(p.take_local_welcome(ERIN).unwrap(), None);
 }
+
+/// Two last-resort KeyPackages, one kept under the URI and a newer one under the name, become one at open: the newer.
+/// Revert check: skip the last-resort step of the fold and the user holds two.
+#[test]
+fn joining_pools_keeps_only_the_newest_last_resort() {
+    let dir = std::env::temp_dir().join(format!("mimi-kp-fold-lr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("hub.db");
+    let path = path.to_str().unwrap();
+    {
+        let store = SqliteStore::open(path).unwrap();
+        store
+            .add_key_package_marked(ERIN, b"older-last-resort", NOW + 100, true)
+            .unwrap();
+        store
+            .add_key_package_marked("erin", b"newer-last-resort", NOW + 100, true)
+            .unwrap();
+        store
+            .add_key_package_marked("erin", b"one-time", NOW + 100, false)
+            .unwrap();
+    }
+    let p = Provider::open(DOMAIN, path).unwrap();
+    assert_eq!(p.store.key_package_count("erin", NOW).unwrap(), (1, true));
+    assert_eq!(
+        p.serve_key_material("erin", NOW).unwrap().as_deref(),
+        Some(&b"one-time"[..])
+    );
+    assert_eq!(
+        p.serve_key_material("erin", NOW).unwrap().as_deref(),
+        Some(&b"newer-last-resort"[..]),
+        "PLANT-KP-FOLD-ONE-LAST-RESORT: the newer last-resort KeyPackage is the one kept"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

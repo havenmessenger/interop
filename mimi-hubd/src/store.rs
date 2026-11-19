@@ -405,7 +405,8 @@ impl SqliteStore {
     // ---- KeyPackages (K1/K2) ----
 
     /// Move KeyPackages, and their ref → client associations, kept under a URI of a user of `domain` to that user's name,
-    /// so a user published for both ways has one pool. Returns how many rows moved.
+    /// so a user published for both ways has one pool, keeping only the newest of its last-resort KeyPackages. Returns
+    /// how many rows moved.
     pub fn fold_local_user_keys(&self, domain: &str) -> anyhow::Result<usize> {
         let prefix = format!("mimi://{}/u/", domain.to_ascii_lowercase());
         let mut moved = 0;
@@ -420,6 +421,12 @@ impl SqliteStore {
                 params![prefix],
             )?;
         }
+        // A user has one last-resort KeyPackage, the newest: joining two pools may have brought two together.
+        self.conn.execute(
+            "DELETE FROM keypackages WHERE last_resort = 1 AND id NOT IN \
+             (SELECT MAX(id) FROM keypackages WHERE last_resort = 1 GROUP BY username)",
+            [],
+        )?;
         Ok(moved)
     }
 
