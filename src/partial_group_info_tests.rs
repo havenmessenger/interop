@@ -6,7 +6,7 @@ use openmls::prelude::*;
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::signatures::{Signer, SignerError};
 use openmls_traits::OpenMlsProvider;
-use tls_codec::{Deserialize as _, DeserializeBytes as _, Serialize as _, VLBytes};
+use tls_codec::{Deserialize as _, Serialize as _, VLBytes};
 
 use super::{PartialGroupInfo, RatchetTreePresence, TreeAt, RATCHET_TREE_EXTENSION};
 
