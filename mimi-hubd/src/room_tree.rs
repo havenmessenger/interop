@@ -584,3 +584,7 @@ impl Provider {
 #[cfg(test)]
 #[path = "room_tree_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "room_tree_list_merge_tests.rs"]
+mod list_merge_tests;
