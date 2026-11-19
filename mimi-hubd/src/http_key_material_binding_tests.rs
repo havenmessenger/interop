@@ -242,3 +242,26 @@ async fn a_peer_naming_new_requesters_is_held_to_its_providers_limit() {
         "another provider has its own budget"
     );
 }
+
+/// A request refused for its peer's provider limit spends no requester's budget: the names in it are only names the peer
+/// chose, so counting them would let a peer past its own limit go on to lock out the requesters it names. Revert check:
+/// count the requester before the provider limit decides, and the requester's own provider is refused.
+#[tokio::test]
+async fn a_request_refused_for_its_providers_limit_spends_no_requesters_budget() {
+    let (router, _p) = app();
+    for n in 0..crate::client_lane_relay::KEY_MATERIAL_PER_TARGET_PER_HOUR {
+        let requester = format!("mimi://anyone{n}.example/u/x");
+        let (status, _) = ask(&router, "hub.example", "bob", &requester, BOB, HUB_ROOM).await;
+        assert_eq!(status, StatusCode::OK, "request {n}");
+    }
+    for _ in 0..crate::client_lane_relay::KEY_MATERIAL_PER_TARGET_PER_HOUR {
+        let (status, _) = ask(&router, "hub.example", "bob", ZED, BOB, HUB_ROOM).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    }
+    let (status, _) = ask(&router, "third.example", "bob", ZED, BOB, "").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "PLANT-KM-REFUSED-SPENDS-NOTHING: a peer past its limit spent the budget of a requester it named"
+    );
+}

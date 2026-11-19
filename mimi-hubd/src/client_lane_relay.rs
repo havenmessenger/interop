@@ -78,22 +78,39 @@ impl KeyMaterialCap {
     /// Count one provider-path request at `now` (seconds) from the peer whose proof authenticated `provider`, naming
     /// `requester`, for `target`; false when either hourly limit is passed. The per-provider limit is the one that holds:
     /// requester names cost a peer nothing, the domain it proved does. The per-user minute limit is the requesting
-    /// provider's to keep.
+    /// provider's to keep. A refused request is counted against neither limit: the requester is only a name the peer
+    /// chose, so a request past the peer's own limit must not spend the budget of the requester it names.
     pub fn admit_peer(&self, provider: &str, requester: &str, target: &str, now: i64) -> bool {
+        let window = now / 3600;
         let target = mimi_core::uri::canonical(target);
-        let provider_ok = count(
-            &self.per_provider_target,
-            (provider.to_ascii_lowercase(), target.clone()),
-            now / 3600,
-            KEY_MATERIAL_PER_TARGET_PER_HOUR,
-        );
-        let requester_ok = count(
-            &self.per_target,
-            (mimi_core::uri::canonical(requester), target),
-            now / 3600,
-            KEY_MATERIAL_PER_TARGET_PER_HOUR,
-        );
-        provider_ok && requester_ok
+        let provider_key = (provider.to_ascii_lowercase(), target.clone());
+        let requester_key = (mimi_core::uri::canonical(requester), target);
+        // Both maps are held together, the provider's first, so the check and the count are one step.
+        let mut per_provider = self
+            .per_provider_target
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut per_requester = self
+            .per_target
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        per_provider.retain(|_, (at, _)| *at == window);
+        per_requester.retain(|_, (at, _)| *at == window);
+        let spent = |counts: &HashMap<(String, String), (i64, u32)>, key: &(String, String)| {
+            counts.get(key).map_or(0, |(_, n)| *n)
+        };
+        if spent(&per_provider, &provider_key) >= KEY_MATERIAL_PER_TARGET_PER_HOUR
+            || spent(&per_requester, &requester_key) >= KEY_MATERIAL_PER_TARGET_PER_HOUR
+        {
+            return false;
+        }
+        for (counts, key) in [
+            (&mut *per_provider, provider_key),
+            (&mut *per_requester, requester_key),
+        ] {
+            counts.entry(key).or_insert((window, 0)).1 += 1;
+        }
+        true
     }
 }
 

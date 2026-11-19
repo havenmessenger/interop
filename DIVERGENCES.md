@@ -757,5 +757,6 @@ consent gate. The client lane takes at most 5 requests an hour from one user for
 one user (429 `client-rate-limited`). The provider path takes at most 5 an hour per requesting provider and target user,
 the provider being the domain the peer proved, and 5 per requester and target (429 `key-material-rate-limited`): a
 peer can name any requester by naming a room on its own domain (DIV-6), so the per-provider count is the bound that
-holds. A request refused for its requester or its target is not counted. The operator's loopback route that serves a KeyPackage (DIV-16, "The operator's
+holds. A request refused for its requester, its target or either limit is not counted, so a peer past its own limit
+spends no budget of the requesters it names. The operator's loopback route that serves a KeyPackage (DIV-16, "The operator's
 routes") is the operator's, and is neither gated nor limited.
