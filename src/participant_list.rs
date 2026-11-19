@@ -309,6 +309,45 @@ pub fn apply_update(
     Ok(ParticipantListData { participants })
 }
 
+/// Merge the participant-list updates one Commit carries into one update against the list as it stood before the
+/// Commit. protocol-07 §7.5: "All indices in changedRoleParticipants and removedIndices refer to the participants
+/// vector at the end of the epoch in which the proposal is sent, as with MLS Remove proposals. This holds even when a
+/// commit contains more than one ParticipantListUpdate. Removing one entry does not shift the indices of the other
+/// removals." So the updates' role changes and removals are gathered as given, and their added participants are
+/// appended in the order the updates come, which is the Commit's order (the order draft-ietf-mls-extensions §4.7 hands
+/// them over in; §7.5 does not say how two updates' additions are ordered, DIVERGENCES DIV-21).
+///
+/// §7.5 also says "A single commit is not valid if it contain any combination of Participant list updates that operate
+/// on (add, remove, or change the role of) the same user in the participant list more than once." The merged update
+/// carries every index and added user of all of them, so [`validate_participant_list_update`] and [`apply_update`]
+/// refuse a user two of them touch exactly as they refuse one update touching a user twice.
+#[must_use]
+pub fn merge_updates(updates: &[ParticipantListUpdate]) -> ParticipantListUpdate {
+    let mut merged = ParticipantListUpdate::default();
+    for update in updates {
+        merged
+            .changed_role_participants
+            .extend(update.changed_role_participants.iter().copied());
+        merged
+            .removed_indices
+            .extend(update.removed_indices.iter().copied());
+        merged
+            .added_participants
+            .extend(update.added_participants.iter().cloned());
+    }
+    merged
+}
+
+/// The participant list after every update one Commit carries: [`merge_updates`], then [`apply_update`] once against
+/// the list as it stood before the Commit. Each update's own validity rules hold for the merged one too, so an index out
+/// of range, or a user already listed being added, is refused.
+pub fn apply_updates(
+    current: &ParticipantListData,
+    updates: &[ParticipantListUpdate],
+) -> Result<ParticipantListData, ParticipantListError> {
+    apply_update(current, &merge_updates(updates))
+}
+
 /// Structural validation of a decoded update (wire-checkable, state-free): added users MUST be MIMI user
 /// URIs with a non-reserved role; role-changes MUST not assign role 0; the changed/removed index sets MUST
 /// each be unique and disjoint (the wire-level proxy for §7.5 "no same user twice"). Bounds + member

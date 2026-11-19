@@ -1346,8 +1346,9 @@ impl Provider {
         check_changes(&commit.updates).map_err(change_refusal)
     }
 
-    /// Apply a Commit whose references are already read in: its participant-list change, its room-policy change, or one
-    /// of each ([`check_changes`] has already refused any other combination). Everything is decoded and checked before
+    /// Apply a Commit whose references are already read in: its participant-list updates, merged into one against the
+    /// list before the Commit (protocol-07 §7.5, [`mimi_core::participant_list::merge_updates`]), its room-policy change,
+    /// or both ([`check_changes`] has already refused any other combination). Everything is decoded and checked before
     /// anything is written; the participant change is written first and the room policy second, so only a store failure
     /// between the two writes could leave one without the other.
     fn apply_decoded_commit(
@@ -1367,7 +1368,7 @@ impl Provider {
             };
         }
         let mut operational = None;
-        let mut participants = None;
+        let mut list_updates = Vec::new();
         let mut roles = None;
         let mut base = None;
         let mut metadata = None;
@@ -1382,7 +1383,7 @@ impl Provider {
                     for added in &mut update.added_participants {
                         added.user_uri = mimi_core::uri::canonical(&added.user_uri);
                     }
-                    participants = Some(update);
+                    list_updates.push(update);
                 }
                 MIMI_ROLES_LIST_PROPOSAL_TYPE => {
                     roles = Some(
@@ -1423,6 +1424,13 @@ impl Provider {
                 }
             }
         }
+        // Every update indexes the list before the Commit, so they are applied as one; a user two of them touch is
+        // refused where that one update is checked against the list.
+        let participants = if list_updates.is_empty() {
+            None
+        } else {
+            Some(mimi_core::participant_list::merge_updates(&list_updates))
+        };
         self.assert_hub_of_record(room_uri)
             .map_err(|_| UpdateRefusal::NotAllowed)?;
         self.check_commit_against_list(

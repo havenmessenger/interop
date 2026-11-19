@@ -371,8 +371,15 @@ fn a_commit_the_reader_has_no_rule_for_is_refused() {
     assert!(
         decode_commit_proposals(&commit_with(&[group_context_extensions, update.clone()])).is_err()
     );
-    // A second change.
-    assert!(decode_commit_proposals(&commit_with(&[update.clone(), update.clone()])).is_err());
+    // A second participant-list change is read too (protocol-07 §7.5 allows several in one Commit); whether two touch the
+    // same user is judged where the list is applied, by `participant_list::merge_updates`.
+    assert_eq!(
+        decode_commit_proposals(&commit_with(&[update.clone(), update.clone()]))
+            .unwrap()
+            .updates
+            .len(),
+        2
+    );
     // A Remove cut short.
     let mut cut = remove_entry(1);
     cut.truncate(cut.len() - 1);
@@ -400,12 +407,14 @@ fn which_changes_one_commit_may_carry_together() {
         vec![of(meta)],
         vec![of(list), of(meta)],
         vec![of(roles), of(base), of(meta)],
+        vec![of(list), of(list)],
+        vec![of(list), of(base), of(list)],
     ] {
         assert!(check_changes(&allowed).is_ok(), "{allowed:?}");
     }
     for refused in [
-        vec![of(list), of(list)],
         vec![of(list), of(roles)],
+        vec![of(list), of(list), of(roles)],
         vec![of(roles), of(list), of(base)],
         vec![of(base), of(base)],
         vec![of(roles), of(roles)],

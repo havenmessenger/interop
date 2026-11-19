@@ -103,6 +103,15 @@ divergence = ""
 reason = "At least one proposal in the update is not valid for the room as the hub holds it."
 
 [[reason]]
+id = "participant-list-user-touched-twice"
+surfaces_as = "update answer invalidProposal; reported by a client in the room"
+spec = "draft-ietf-mimi-protocol-07"
+section = "7.5"
+quote = "A single commit is not valid if it contain any combination of Participant list updates that operate on (add, remove, or change the role of) the same user in the participant list more than once."
+divergence = ""
+reason = "Two participant-list updates in one Commit, which all index the list before it, add, remove or change the role of the same user."
+
+[[reason]]
 id = "roles-change-with-participant-change"
 surfaces_as = "update answer notAllowed; reported by a client in the room"
 spec = "draft-ietf-mimi-room-policy-04"

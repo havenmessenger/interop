@@ -22,16 +22,14 @@ use openmls::prelude::{
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::OpenMlsProvider;
 
-use mimi_core::participant_list::{
-    apply_update, decode_participant_list_data, decode_participant_list_update,
-    encode_participant_list_data, ParticipantListData,
-};
+use mimi_core::app_data::{resolve_component, AppDataError, ComponentChange};
+use mimi_core::participant_list::decode_participant_list_data;
 use mimi_core::protocol_wire::{GroupInfoOption, GroupInfoRepresentation};
 
 use crate::{Provider, UpdateRefusal};
 
 /// `participant_list`'s component id in a GroupContext's app data dictionary (protocol-07 §10.3).
-pub const PARTICIPANT_LIST_COMPONENT: u16 = 0x0022;
+pub const PARTICIPANT_LIST_COMPONENT: u16 = mimi_core::app_data::PARTICIPANT_LIST_COMPONENT;
 
 /// ratchet-tree-options `RatchetTreeRepresentation.full`.
 const RATCHET_TREE_FULL: u8 = 1;
@@ -237,39 +235,44 @@ impl Provider {
         let staged = match processed.into_content() {
             ProcessedMessageContent::StagedCommitMessage(staged) => *staged,
             ProcessedMessageContent::UnresolvedAppDataCommit(unresolved) => {
-                let mut updater = group.app_data_dictionary_updater();
+                // Each component's updates go to the one resolver this hub and its clients share, together and in the
+                // Commit's order (draft-ietf-mls-extensions §4.7); the participant list's all index the list before the
+                // Commit (protocol-07 §7.5).
+                let mut by_component: Vec<(u16, Vec<ComponentChange<'_>>)> = Vec::new();
                 for proposal in unresolved.app_data_update_proposals() {
                     let component = proposal.component_id();
-                    match proposal.operation() {
-                        AppDataUpdateOperation::Remove => updater.remove(&component),
+                    let change = match proposal.operation() {
+                        AppDataUpdateOperation::Remove => ComponentChange::Remove,
                         AppDataUpdateOperation::Update(data) => {
-                            let value = if component == PARTICIPANT_LIST_COMPONENT {
-                                let current = match updater.old_value(component) {
-                                    Some(bytes) => decode_participant_list_data(bytes)
-                                        .map_err(|_| UpdateRefusal::Store)?,
-                                    None => ParticipantListData::default(),
-                                };
-                                let update = decode_participant_list_update(data.as_slice())
-                                    .map_err(|_| {
-                                        UpdateRefusal::Invalid(
-                                            "the participant list update is malformed",
-                                        )
-                                    })?;
-                                let next = apply_update(&current, &update).map_err(|_| {
-                                    UpdateRefusal::Invalid(
-                                        "the participant list update does not apply to the room's list",
-                                    )
-                                })?;
-                                encode_participant_list_data(&next)
-                                    .map_err(|_| UpdateRefusal::Store)?
-                            } else {
-                                data.as_slice().to_vec()
-                            };
-                            updater.set(openmls::component::ComponentData::from_parts(
-                                component,
-                                value.into(),
-                            ));
+                            ComponentChange::Update(data.as_slice())
                         }
+                    };
+                    match by_component.last_mut() {
+                        Some((last, changes)) if *last == component => changes.push(change),
+                        _ => by_component.push((component, vec![change])),
+                    }
+                }
+                let mut updater = group.app_data_dictionary_updater();
+                for (component, changes) in &by_component {
+                    let value =
+                        resolve_component(*component, updater.old_value(*component), changes)
+                            .map_err(|error| match error {
+                                AppDataError::Malformed(_) => UpdateRefusal::Invalid(
+                                    "the participant list update is malformed",
+                                ),
+                                AppDataError::StoredList(_) => UpdateRefusal::Store,
+                                AppDataError::DoesNotApply(_)
+                                | AppDataError::ListRemoved
+                                | AppDataError::Shape(_) => UpdateRefusal::Invalid(
+                                    "the participant list update does not apply to the room's list",
+                                ),
+                            })?;
+                    match value {
+                        Some(value) => updater.set(openmls::component::ComponentData::from_parts(
+                            *component,
+                            value.into(),
+                        )),
+                        None => updater.remove(component),
                     }
                 }
                 let changes = updater.changes();

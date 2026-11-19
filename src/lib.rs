@@ -23,6 +23,7 @@
 //! fixtures. It is a test, not an acceptance path: this crate does not yet serve a GroupInfo or
 //! accept an external commit (DIVERGENCES DIV-1; see `crate::gate`'s join note).
 
+pub mod app_data;
 pub mod commit_wire;
 pub mod consent;
 pub mod content;

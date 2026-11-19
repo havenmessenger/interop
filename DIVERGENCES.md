@@ -664,3 +664,13 @@ whose client-facing service authenticates its users and signs each request for o
 route or changes one: rooms, Commits, proposals and application messages it carries go through the same checks as on
 the provider path, with the user as the requester. A peer cannot reach it, and the operator's routes stay on their own
 loopback listener.
+
+## DIV-21 - several participant-list updates in one Commit: the order their additions are appended in
+
+protocol-07 §7.5 says every `ParticipantListUpdate` in a Commit indexes the list as it stood before the Commit ("This
+holds even when a commit contains more than one ParticipantListUpdate. Removing one entry does not shift the indices of
+the other removals."), and that a Commit whose updates touch one user twice is not valid. It does not say in which order
+two updates' added participants are appended. This hub, and `mimi_core::participant_list::merge_updates`, which a client
+of this repository uses too, append them in the order the Commit's AppDataUpdate proposals for the participant list
+come in, the order draft-ietf-mls-extensions §4.7 hands a component's updates to the application. A client that appends
+them in another order computes another list, and so a GroupContext that differs from the Commit's.

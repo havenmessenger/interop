@@ -681,13 +681,10 @@ pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError>
 }
 
 /// The reasons [`check_changes`] gives, so a caller can say which one refused a Commit.
-const CHANGE_REFUSALS: [&str; 3] = [
-    TWO_PARTICIPANT_LIST_UPDATES,
+const CHANGE_REFUSALS: [&str; 2] = [
     TWO_POLICY_CHANGES_OF_ONE_KIND,
     ROLE_LIST_BESIDE_PARTICIPANT_CHANGE,
 ];
-const TWO_PARTICIPANT_LIST_UPDATES: &str =
-    "more than one participant-list update in one Commit (this hub reads one)";
 const TWO_POLICY_CHANGES_OF_ONE_KIND: &str =
     "two changes of the same room-policy component in one Commit";
 /// The room-policy-04 §3 rule: a role list may not share a Commit with a participant-list change.
@@ -706,9 +703,10 @@ pub fn changes_refusal(error: &WireError) -> Option<&'static str> {
     }
 }
 
-/// Whether one Commit may carry these participant-list and room-policy changes together. At most one change of each kind:
-/// protocol-07 §7.5 lets a Commit carry several participant-list updates, but this crate reads one. A role list may not
-/// share a Commit with a participant-list change (room-policy-04 §3); a base room policy may.
+/// Whether one Commit may carry these participant-list and room-policy changes together. Any number of participant-list
+/// updates (protocol-07 §7.5: "This holds even when a commit contains more than one ParticipantListUpdate"; they are
+/// resolved together by [`crate::participant_list::apply_updates`]), and at most one change of each room-policy kind. A
+/// role list may not share a Commit with a participant-list change (room-policy-04 §3); a base room policy may.
 pub fn check_changes(changes: &[DecodedCustomProposal]) -> Result<(), &'static str> {
     let count = |kind: u16| {
         changes
@@ -722,13 +720,10 @@ pub fn check_changes(changes: &[DecodedCustomProposal]) -> Result<(), &'static s
     let room_metadata = count(crate::room_metadata::MIMI_ROOM_METADATA_PROPOSAL_TYPE);
     let operational_policy =
         count(crate::operational_parameters::MIMI_OPERATIONAL_POLICY_PROPOSAL_TYPE);
-    if participant_list > 1 {
-        return Err(TWO_PARTICIPANT_LIST_UPDATES);
-    }
     if roles_list > 1 || base_room_policy > 1 || room_metadata > 1 || operational_policy > 1 {
         return Err(TWO_POLICY_CHANGES_OF_ONE_KIND);
     }
-    if roles_list == 1 && participant_list == 1 {
+    if roles_list == 1 && participant_list > 0 {
         return Err(ROLE_LIST_BESIDE_PARTICIPANT_CHANGE);
     }
     Ok(())

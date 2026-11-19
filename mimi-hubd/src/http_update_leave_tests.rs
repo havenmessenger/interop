@@ -283,6 +283,69 @@ async fn a_member_leaves_through_proposals_the_next_commit_includes_by_reference
     assert!(is_success(&post_from(router, None, bundle_of(later)).await));
 }
 
+/// -07 §7.5: Bob (index 1) and Carol (index 2) leave at the same epoch and one Commit includes both leaves. Each update
+/// indexes the list as it stood before the Commit ("This holds even when a commit contains more than one
+/// ParticipantListUpdate"), so both leave and Alice stays. Revert check: refuse a Commit with two participant-list updates,
+/// and both stay listed.
+#[tokio::test]
+async fn two_members_leaving_at_one_epoch_leave_in_one_commit() {
+    let (router, p) = room().await;
+    let (bobs, bob_remove, bob_change) = bobs_leave();
+    let carols = vec![
+        remove(1, CAROL_AT, CAROL_AT),
+        change(1, CAROL_AT, &list_change(&[], &[CAROL_AT])),
+    ];
+    let (carol_remove, carol_change) = (reference_of(&carols[0]), reference_of(&carols[1]));
+    assert!(is_success(
+        &post_from(router.clone(), Some(HOME), bundle(&bobs)).await
+    ));
+    assert!(is_success(
+        &post_from(router.clone(), Some(OTHER), bundle(&carols)).await
+    ));
+    let commit = commit_of(
+        1,
+        &[
+            by_reference(&bob_remove),
+            by_reference(&carol_remove),
+            by_reference(&bob_change),
+            by_reference(&carol_change),
+        ],
+    );
+    let answer = post_from(router, None, bundle_of(commit)).await;
+    assert!(
+        is_success(&answer),
+        "PLANT-HUB-TWO-LIST-UPDATES: {answer:?}"
+    );
+    assert_eq!(listed(&p), vec![ALICE]);
+}
+
+/// -07 §7.5: "A single commit is not valid if it contain any combination of Participant list updates that operate on
+/// ... the same user in the participant list more than once." Bob's leave and a change of the committer's that removes
+/// Bob again are refused together, and the room stays as it was. Revert check: let the merge skip the repeated user,
+/// and the Commit is taken.
+#[tokio::test]
+async fn a_commit_whose_list_updates_touch_one_user_twice_is_refused() {
+    let (router, p) = room().await;
+    let (bobs, bob_remove, bob_change) = bobs_leave();
+    assert!(is_success(
+        &post_from(router.clone(), Some(HOME), bundle(&bobs)).await
+    ));
+    let commit = commit_of(
+        1,
+        &[
+            by_reference(&bob_remove),
+            by_reference(&bob_change),
+            by_value_change(&list_change(&[], &[BOB_AT])),
+        ],
+    );
+    let answer = post_from(router, None, bundle_of(commit)).await;
+    assert!(
+        !is_success(&answer),
+        "PLANT-HUB-TOUCHED-TWICE: the Commit is refused, got {answer:?}"
+    );
+    assert_eq!(listed(&p), vec![ALICE, BOB, CAROL]);
+}
+
 /// -07 §3.5 step 1: the leaving client proposes the removal of all its user's devices, itself included. One client of
 /// Bob's, at leaf 1, sends Removes for leaves 1 and 3 with the list change; the next Commit includes all three and Bob
 /// leaves. Revert check: hold only a Remove of its own sender and the leave is refused.
@@ -507,7 +570,8 @@ async fn a_provider_cannot_have_the_hub_hold_the_removal_of_another_providers_me
 }
 
 /// Proposals are taken only of the room's current epoch, and only as a leave: a change that adds, Removes with no change,
-/// or two changes are refused. A held change beside a change sent by value is a second change.
+/// or two changes are refused. A held leave beside a change the committer sends by value is two participant-list updates
+/// in one Commit, which -07 §7.5 allows when they touch different users: both apply to the list before the Commit.
 #[tokio::test]
 async fn proposals_of_another_epoch_or_that_are_not_a_leave_are_refused() {
     let (router, p) = room().await;
@@ -549,8 +613,8 @@ async fn proposals_of_another_epoch_or_that_are_not_a_leave_are_refused() {
         ],
     );
     let answer = post_from(router, None, bundle_of(beside)).await;
-    assert!(invalid_refs(&answer).is_some(), "{answer:?}");
-    assert_eq!(listed(&p), vec![ALICE, BOB, CAROL]);
+    assert!(is_success(&answer), "{answer:?}");
+    assert_eq!(listed(&p), vec![ALICE]);
 }
 
 /// A room holds at most a bounded count and size of proposals, and one message past what a leave needs is refused:
