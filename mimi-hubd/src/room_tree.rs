@@ -139,7 +139,7 @@ fn app_data_refusal(error: AppDataError) -> UpdateRefusal {
 }
 
 /// One component of a GroupContext's app data dictionary.
-fn app_data(context: &openmls::group::GroupContext, component: u16) -> Option<&[u8]> {
+pub(crate) fn app_data(context: &openmls::group::GroupContext, component: u16) -> Option<&[u8]> {
     context
         .extensions()
         .app_data_dictionary()

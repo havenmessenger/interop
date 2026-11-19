@@ -6,6 +6,13 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimi-hubd`: a Commit that would seed a room's tree may not change what the hub holds for the room. Its GroupInfo's
+  GroupContext must carry the room's policy (roles_list and base room policy), its operational policy, and its
+  participant list as the hub's list after the Commit; otherwise it is refused and nothing changes. Before, a seed took
+  the group's components as the room's state and cleared those the group lacked, so a lane room's creator could drop
+  the deployment's role checks and external-Commit refusal by creating its group without them. The client lane's
+  `createRoom` now answers the room's `creator_role` and `components` for the client to start its group with. The
+  neutral lane profile's member role may now leave (its own change to 0, which RemoveSelf alone does not grant).
 - `browser-js` now builds the library for wasm32-unknown-unknown: it also turns on getrandom's `js` feature, which the
   virtual clients' reuse guard needs in a browser. CI checks that build.
 - openmls moves to its main branch as of 2026-11-18, the commit `Cargo.toml` pins. With `extensions-draft` (`mimi-hubd`), commit staging

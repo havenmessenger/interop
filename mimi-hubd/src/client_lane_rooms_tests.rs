@@ -1,6 +1,6 @@
 //! The lane room profile file: what it takes, and what stops the start.
 
-use super::LaneRoomProfile;
+use super::{LaneRoomProfile, ROLE_MEMBER};
 
 /// The profile in the module's documentation, which a deployment copies.
 const DOCUMENTED: &str = r#"
@@ -96,4 +96,18 @@ fn a_profile_that_is_not_valid_is_refused() {
 #[test]
 fn a_missing_file_is_refused() {
     assert!(LaneRoomProfile::load(std::path::Path::new("/nonexistent/lane-room.toml")).is_err());
+}
+
+/// The neutral profile lets a member leave: RemoveSelf and the member role's own change to 0. Revert check: drop the
+/// member's authorized_role_changes and its self-removal is refused.
+#[test]
+fn the_neutral_profile_lets_a_member_leave() {
+    let profile = LaneRoomProfile::neutral();
+    assert!(
+        profile
+            .room_policy
+            .authorize_self_removal(ROLE_MEMBER)
+            .is_ok(),
+        "PLANT-NEUTRAL-MEMBER-LEAVES: a member of a neutral-profile room may leave"
+    );
 }

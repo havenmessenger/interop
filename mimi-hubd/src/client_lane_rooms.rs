@@ -24,6 +24,8 @@
 //! role_index = 3
 //! role_name = "member"
 //! capabilities = ["SendMessage", "RemoveSelf"]
+//! # Leaving is a change of one's own role to 0: RemoveSelf alone does not let a member leave.
+//! authorized_role_changes = [{ from_role_index = 3, target_role_indexes = [0] }]
 //! ```
 //!
 //! A named file the hub cannot read, a key it does not know, a room policy that is not valid, or a creator role the
@@ -106,6 +108,26 @@ impl LaneRoomProfile {
         )
     }
 
+    /// The app data components a lane room's group starts with, as (component id, data): its roles_list, base room
+    /// policy and operational policy. createRoom answers them so the client puts them in its GroupContext, and the hub
+    /// refuses a seed of the room's tree whose GroupContext differs (`seed_check.rs`).
+    pub fn components(&self) -> Vec<(u16, Vec<u8>)> {
+        vec![
+            (
+                crate::room_tree::ROLES_LIST_COMPONENT,
+                mimi_core::room_policy_wire::encode_role_data(&self.room_policy.roles),
+            ),
+            (
+                crate::room_tree::BASE_ROOM_POLICY_COMPONENT,
+                mimi_core::room_policy_wire::encode_base_room_policy(&self.room_policy.base, None),
+            ),
+            (
+                mimi_core::operational_parameters::OPERATIONAL_POLICY_COMPONENT_ID,
+                self.operational_policy(),
+            ),
+        ]
+    }
+
     fn operational_policy(&self) -> Vec<u8> {
         encode_operational_parameters(&OperationalParameters {
             external_commit_allowed: self.external_commit_allowed,
@@ -150,11 +172,15 @@ fn neutral_room_policy() -> RoomPolicy {
                     },
                 ],
             },
+            // A member may leave: RemoveSelf, and its own role's change to 0 (room-policy-04 §8.1.2).
             Role {
                 role_index: ROLE_MEMBER,
                 role_name: "member".into(),
                 capabilities: vec![Capability::SendMessage, Capability::RemoveSelf],
-                authorized_role_changes: vec![],
+                authorized_role_changes: vec![SingleSourceRoleChangeTargets {
+                    from_role_index: ROLE_MEMBER,
+                    target_role_indexes: vec![0],
+                }],
             },
         ],
     }

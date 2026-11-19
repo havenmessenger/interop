@@ -112,6 +112,15 @@ divergence = ""
 reason = "Two participant-list updates in one Commit, which all index the list before it, add, remove or change the role of the same user."
 
 [[reason]]
+id = "seed-changes-room-state"
+surfaces_as = "update answer notAllowed; reported by a client in the room"
+spec = "local"
+section = ""
+quote = ""
+divergence = "DIV-19"
+reason = "The first Commit with a full GroupInfo and ratchet tree seeds the room's tree, and its GroupContext must carry the room's policy, operational policy and participant list as the hub holds them after the Commit. A lane room's are the deployment's profile, which createRoom answers; a seed with others would replace them."
+
+[[reason]]
 id = "app-data-component-not-read"
 surfaces_as = "update answer invalidProposal; reported by a client in the room"
 spec = "draft-ietf-mls-extensions-10"

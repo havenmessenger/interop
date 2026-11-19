@@ -53,6 +53,7 @@ pub mod request_signing;
 pub mod requester;
 pub mod role_checks;
 pub mod room_tree;
+mod seed_check;
 pub mod signature;
 pub mod store;
 mod store_canonical;
@@ -1137,6 +1138,10 @@ impl Provider {
             self.authorize_tracked_commit(room_uri, staged, &commit, now_unix)?;
         }
         self.include_held_proposals(room_uri, &mut commit, now_unix)?;
+        // A Commit that will seed the room's tree may not replace the room's state with the group's (`seed_check.rs`).
+        if let (None, Some((group_info, ratchet_tree))) = (&tracked, bundle) {
+            self.check_seed_keeps_room_state(room_uri, &commit, group_info, ratchet_tree)?;
+        }
         let epoch = commit.epoch;
         let joiner = tracked.as_ref().and_then(|staged| staged.joiner.clone());
         self.apply_decoded_commit(room_uri, &commit, joiner.as_deref(), now_unix)?;

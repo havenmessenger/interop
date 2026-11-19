@@ -332,9 +332,20 @@ struct CreateRoomRequest {}
 #[derive(Serialize)]
 struct CreatedRoom {
     room: String,
+    /// The role the room's creator holds: the role the client lists itself in.
+    creator_role: u32,
+    /// The app data components the client's group starts with besides its participant list.
+    components: Vec<Component>,
 }
 
-/// Create a room hosted here with the user as its first participant, as the deployment's lane room profile says.
+#[derive(Serialize)]
+struct Component {
+    id: u16,
+    data: String,
+}
+
+/// Create a room hosted here with the user as its first participant, as the deployment's lane room profile says. The
+/// answer gives the role the user holds and the components its group must start with.
 async fn create_room(
     State(state): State<LaneState>,
     Extension(user): Extension<LaneUser>,
@@ -345,7 +356,23 @@ async fn create_room(
     }
     match crate::http::lock(&state.provider).lane_create_room(&user.user, &state.rooms, now_unix())
     {
-        Ok(room) => (axum::http::StatusCode::CREATED, Json(CreatedRoom { room })).into_response(),
+        Ok(room) => (
+            axum::http::StatusCode::CREATED,
+            Json(CreatedRoom {
+                room,
+                creator_role: state.rooms.creator_role,
+                components: state
+                    .rooms
+                    .components()
+                    .into_iter()
+                    .map(|(id, data)| Component {
+                        id,
+                        data: STANDARD.encode(data),
+                    })
+                    .collect(),
+            }),
+        )
+            .into_response(),
         Err(error) => internal("createRoom", error),
     }
 }
