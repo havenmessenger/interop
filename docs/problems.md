@@ -187,7 +187,7 @@ The operator's `roomPolicy`, `memberRole` and `addParticipant` for a room whose 
 | `title` | The room's group is at a later epoch |
 | `status` | 409 |
 
-A client lane `submitMessage` whose MLS message is for an earlier epoch of the room's group than the one the hub keeps for it: the client lane's form of `epochTooOld` (draft-ietf-mimi-protocol-07 §5.4). The body adds `current_epoch`, the room's epoch, as the wire's answer carries `currentEpoch`. Process the room's pending Commits, then send the message again in that epoch. Only for a room whose ratchet tree the hub keeps.
+A client lane `submitMessage` whose MLS message is for an earlier epoch of the room's group than the one the hub keeps for it: the client lane's form of `epochTooOld` (draft-ietf-mimi-protocol-07 §5.4). The body adds `current_epoch`, the room's epoch, as the wire's answer carries `currentEpoch`. Process the room's pending Commits, then send the message again in that epoch. For a room hosted here, only one whose ratchet tree the hub keeps; for a room on another hub, whenever that hub answers `epochTooOld`.
 
 ## body-too-large
 

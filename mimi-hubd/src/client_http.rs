@@ -567,6 +567,14 @@ async fn relay_submit(
     match answer {
         Ok((200, bytes)) => match SubmitMessageResponse::decode(&bytes) {
             Ok(SubmitMessageResponse::Accepted { .. }) => Json(Empty {}).into_response(),
+            // The room's hub has moved on: the user resends from the current epoch, which the answer names, as for a
+            // room hosted here.
+            Ok(SubmitMessageResponse::EpochTooOld { current_epoch }) => {
+                crate::problem::EPOCH_TOO_OLD.response_with(serde_json::Map::from_iter([(
+                    "current_epoch".to_string(),
+                    current_epoch.into(),
+                )]))
+            }
             Ok(_) => crate::problem::NOT_PERMITTED.response(),
             Err(_) => crate::problem::UPSTREAM_FAILED.response(),
         },

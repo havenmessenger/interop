@@ -21,11 +21,13 @@ use crate::peer_directory::{Directories, PeerAccess, PeerBases};
 const ALICE: &str = "mimi://havenmessenger.com/u/alice";
 /// A room hosted by the peer.
 const ROOM: &str = "mimi://peer.example/r/room";
+/// A room on the peer whose group has moved past the epoch the client sends in.
+const ROOM_BEHIND: &str = "mimi://peer.example/r/behind";
 /// A user of a third provider, which this hub cannot reach: a keyMaterial request for them goes to the room's hub.
 const CAROL: &str = "mimi://third.example/u/carol";
 
-/// A peer at `PEER` serving its directory, and answering submitMessage accepted, update wrongEpoch 7, keyMaterial with a
-/// KeyPackage; and the lane of a hub that reaches it, and only it.
+/// A peer at `PEER` serving its directory, and answering submitMessage accepted (epochTooOld at 9 for `ROOM_BEHIND`),
+/// update wrongEpoch 7, keyMaterial with a KeyPackage; and the lane of a hub that reaches it, and only it.
 async fn lane_and_peer(test: &str) -> (Lane, Arc<Mutex<Vec<Seen>>>) {
     let pki = Pki::new();
     let key_package = Member::new(CAROL)
@@ -44,6 +46,10 @@ async fn lane_and_peer(test: &str) -> (Lane, Arc<Mutex<Vec<Seen>>>) {
                     "keyMaterial": "https://{PEER}:{port}/v1/keyMaterial/{{targetUser}}"}}"#
             );
             return answer("200 OK", "", body.as_bytes());
+        }
+        if head.starts_with("POST /v1/submitMessage/") && head.contains("behind") {
+            let behind = SubmitMessageResponse::EpochTooOld { current_epoch: 9 };
+            return answer("200 OK", "", &behind.encode());
         }
         if head.starts_with("POST /v1/submitMessage/") {
             return answer(
@@ -124,6 +130,30 @@ async fn a_message_for_a_room_on_another_hub_is_posted_there_as_the_user() {
         posts[0].body, expected,
         "PLANT-LANE-RELAY-SUBMIT: the request names the lane user as its sender"
     );
+}
+
+/// A message into a room on the peer whose group has moved on is answered as a room hosted here would be: the client
+/// lane's `epoch-too-old`, naming the epoch the room's hub is at, so the user can catch up and resend. Revert check:
+/// answer every refusal from the room's hub `not-permitted`, and the user is told nothing about the epoch.
+#[tokio::test]
+async fn a_room_hubs_epoch_too_old_reaches_the_user_with_its_epoch() {
+    let (l, seen) = lane_and_peer("relay-peer-submit-behind").await;
+    let body = serde_json::json!({ "room": ROOM_BEHIND, "message": STANDARD.encode(b"old epoch") })
+        .to_string();
+    let (status, answer) = call(&l.router, signed(&l.key, "submitMessage", ALICE, &body)).await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "PLANT-LANE-RELAY-EPOCH-TOO-OLD: the room's hub's epochTooOld did not reach the user: {answer}"
+    );
+    assert!(
+        answer["type"]
+            .as_str()
+            .is_some_and(|kind| kind.ends_with("#epoch-too-old")),
+        "{answer}"
+    );
+    assert_eq!(answer["current_epoch"], 9);
+    assert_eq!(posted(&seen.lock().unwrap(), "submitMessage").len(), 1);
 }
 
 /// An update for a room on the peer is posted there as the bundle the client sent, and the peer's answer is passed on

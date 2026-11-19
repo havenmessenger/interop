@@ -12,6 +12,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   refused, and one for an earlier epoch is answered `epochTooOld` with the room's epoch (on the client lane, the new
   problem type `epoch-too-old`, 409, whose body carries it as `current_epoch`). For any other room only the framing is
   checked (DIV-20). `MlsOuterHeader` gains the envelope's wire format and content type.
+- `mimi-hubd`: the client lane passes the `epochTooOld` of a room's hub on another provider to its user as
+  `epoch-too-old` with `current_epoch`, as for a room hosted here. Before, it answered `not-permitted`, and the user
+  could not tell it was behind.
 - `mimi-hubd`: a room hosted here that the hub keeps no ratchet tree for no longer takes changes the hub cannot
   authorize. Its first Commit, and any participant-list or room-policy change to it, is taken only with a bundle
   carrying a Full GroupInfo and the full ratchet tree, which seed the tree; otherwise it is refused (`notAllowed`, saying
