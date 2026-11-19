@@ -47,6 +47,15 @@ reason = "More client lane requests for one user in a minute than the hub takes.
 # --- key material ------------------------------------------------------------------------------------------------
 
 [[reason]]
+id = "key-material-rate-limited"
+surfaces_as = "problem key-material-rate-limited, 429"
+spec = "RFC 9420"
+section = "16.8"
+quote = "To prevent such a denial-of-service attack, the KeyPackage publication system SHOULD rate-limit KeyPackage requests, especially if not authenticated."
+divergence = "DIV-23"
+reason = "More keyMaterial requests from one requester for one target user in an hour than the hub takes."
+
+[[reason]]
 id = "no-consent"
 surfaces_as = "keyMaterial answer noConsent"
 spec = "draft-ietf-mimi-protocol-07"
