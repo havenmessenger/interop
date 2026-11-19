@@ -302,15 +302,11 @@ pub(crate) async fn key_material_answer(
             };
         }
     }
-    // The routing key names the user as the path gives it: a peer fills `{targetUser}` with the user's URI, and this
-    // hub keeps a user's KeyPackages under the name they were published for, so a URI of a user here is read as that
-    // name.
-    let stored_as = lock(p)
-        .local_name(&target_user)
-        .unwrap_or_else(|| target_user.clone());
+    // A peer fills `{targetUser}` with the user's URI; `serve_key_material_for` reads a URI of a user here as the name
+    // its KeyPackages are kept under (`Provider::key_package_user`).
     let gated = lock(p).serve_key_material_for(
         &req.requesting_user.0,
-        &stored_as,
+        &target_user,
         &req.target_user.0,
         room_uri,
         now,
