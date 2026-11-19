@@ -191,3 +191,52 @@ fn a_partial_group_info_that_does_not_decode_is_refused() {
         .stage_tracked_commit(ROOM, &tracking, &commit, Some(&full(&group_info)))
         .is_ok());
 }
+
+/// What fails a rebuild is told apart: a Partial that does not decode and a Commit without a confirmation tag are the
+/// sender's, a tree the hub cannot rebuild (here, a group it does not hold) is the hub's. Revert check: answer every
+/// failure as the sender's, and the hub's own is blamed on the Partial.
+#[test]
+fn a_rebuild_the_hub_cannot_make_is_the_hubs_failure() {
+    let (p, tracking, mut group, alice) = tracked();
+    let carol = Member::new("mimi://example.com/u/carol");
+    let (commit, _group_info, _tree) = add_commit(&mut group, &alice, &[&carol]);
+    let with_tree = PartialGroupInfo::split(&group_info_with_tree(&group, &alice), true)
+        .unwrap()
+        .encode()
+        .unwrap();
+    let staged = p
+        .stage_tracked_commit(ROOM, &tracking, &commit, None)
+        .unwrap();
+    let elsewhere = RoomTracking {
+        group_id: b"a group the hub does not hold".to_vec(),
+        seeded_by: tracking.seeded_by.clone(),
+    };
+    let tag = [0u8; 33];
+    let rebuild = |tracking: &RoomTracking, partial: &[u8], tag: Option<&[u8]>| {
+        p.rebuilt_group_infos(
+            tracking,
+            &commit,
+            partial,
+            &staged.staged,
+            tag,
+            LeafNodeIndex::new(0),
+        )
+    };
+    assert_eq!(
+        rebuild(&elsewhere, &with_tree, Some(&tag)),
+        Err(RebuildError::Hub),
+        "PLANT-PARTIAL-GI-HUB-FAILURE: the hub's failure to rebuild the tree was blamed on the sender"
+    );
+    assert_eq!(
+        rebuild(&tracking, &[9, 0, 0], Some(&tag)),
+        Err(RebuildError::DoesNotDecode)
+    );
+    assert_eq!(
+        rebuild(&tracking, &with_tree, None),
+        Err(RebuildError::NoConfirmationTag)
+    );
+    assert_eq!(
+        rebuild(&tracking, &with_tree, Some(&tag)).map(|v| v.len()),
+        Ok(2)
+    );
+}

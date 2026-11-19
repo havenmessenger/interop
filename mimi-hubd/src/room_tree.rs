@@ -189,6 +189,17 @@ fn stage_commit(
     Ok((sender, staged))
 }
 
+/// Why a Partial GroupInfo could not be rebuilt: on the sender's side, or on the hub's.
+#[derive(Debug, PartialEq, Eq)]
+enum RebuildError {
+    /// The Partial GroupInfo does not decode.
+    DoesNotDecode,
+    /// The Commit has no confirmation tag.
+    NoConfirmationTag,
+    /// The hub could not rebuild the tree after the Commit, or encode what it rebuilt.
+    Hub,
+}
+
 /// The user a Commit's sender is, when it is a member named by its credential.
 fn sender_uri(group: &PublicGroup, sender: &Sender) -> Option<String> {
     match sender {
@@ -409,12 +420,22 @@ impl Provider {
                         confirmation_tag.as_deref(),
                         signer,
                     )
-                    .ok_or_else(|| {
-                        refused(
+                    .map_err(|error| match error {
+                        RebuildError::DoesNotDecode => refused(
                             "its Partial GroupInfo does not decode",
                             sender_provider.clone(),
                             UpdateRefusal::Invalid("the Partial GroupInfo does not decode"),
-                        )
+                        ),
+                        RebuildError::NoConfirmationTag => refused(
+                            "its Commit has no confirmation tag to rebuild its Partial GroupInfo with",
+                            sender_provider.clone(),
+                            UpdateRefusal::Invalid("the Commit carries no confirmation tag"),
+                        ),
+                        RebuildError::Hub => refused(
+                            "the hub could not rebuild the room's tree after it for its Partial GroupInfo",
+                            sender_provider.clone(),
+                            UpdateRefusal::Store,
+                        ),
                     })?,
             };
             // Signed by the committer, with the key it holds after the Commit, before its GroupContext is compared: a
@@ -475,7 +496,8 @@ impl Provider {
     /// The GroupInfos a Partial GroupInfo (ratchet-tree-options §4) stands for after `staged`: the GroupContext after the
     /// Commit, its extensions, the Commit's `confirmation_tag`, `signer` and its signature, with the tree after the
     /// Commit last (as the draft has it) and first (as openmls writes it) when its presence says the GroupInfo carries
-    /// one. None when it does not decode, carries a ratchet_tree itself, or the Commit has no confirmation tag.
+    /// one. Fails on the sender's side when it does not decode (a ratchet_tree in it included) or the Commit has no
+    /// confirmation tag, and on the hub's when the hub cannot rebuild the tree after the Commit.
     fn rebuilt_group_infos(
         &self,
         tracking: &RoomTracking,
@@ -484,20 +506,24 @@ impl Provider {
         staged: &StagedCommit,
         confirmation_tag: Option<&[u8]>,
         signer: LeafNodeIndex,
-    ) -> Option<Vec<Vec<u8>>> {
-        let partial = PartialGroupInfo::decode(partial).ok()?;
-        let confirmation_tag = confirmation_tag?;
-        let group_context = staged.group_context().tls_serialize_detached().ok()?;
+    ) -> Result<Vec<Vec<u8>>, RebuildError> {
+        let partial = PartialGroupInfo::decode(partial).map_err(|_| RebuildError::DoesNotDecode)?;
+        let confirmation_tag = confirmation_tag.ok_or(RebuildError::NoConfirmationTag)?;
+        let group_context = staged
+            .group_context()
+            .tls_serialize_detached()
+            .map_err(|_| RebuildError::Hub)?;
+        // The tree is given exactly when the presence calls for one, so a rebuild fails only in encoding.
         let rebuild = |tree| {
             partial
                 .group_info(&group_context, tree, confirmation_tag, signer.u32())
-                .ok()
+                .map_err(|_| RebuildError::Hub)
         };
         if !partial.ratchet_tree_presence.in_current_epoch() {
-            return Some(vec![rebuild(None)?]);
+            return Ok(vec![rebuild(None)?]);
         }
-        let tree = self.tree_after(tracking, commit)?;
-        Some(vec![
+        let tree = self.tree_after(tracking, commit).ok_or(RebuildError::Hub)?;
+        Ok(vec![
             rebuild(Some((&tree, TreeAt::Last)))?,
             rebuild(Some((&tree, TreeAt::First)))?,
         ])
