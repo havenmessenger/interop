@@ -38,7 +38,9 @@ class RenderError(Exception):
 
 
 def git(repo: Path, *args: str) -> str:
-    result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True
+    )
     if result.returncode != 0:
         raise RenderError(f"git {' '.join(args)}: {result.stderr.strip()}")
     return result.stdout
@@ -124,16 +126,24 @@ def render_markdown(text: str, links: Links, shift: int = 0) -> str:
             j = i + 1
             while j < len(lines) and not lines[j].startswith("```"):
                 j += 1
-            out.append(f"<pre><code>{html.escape(chr(10).join(lines[i + 1 : j]), quote=False)}</code></pre>")
+            out.append(
+                f"<pre><code>{html.escape(chr(10).join(lines[i + 1 : j]), quote=False)}</code></pre>"
+            )
             i = j + 1
             continue
         m = re.match(r"^(#{1,6})\s+(.*)$", line)
         if m:
             level = min(len(m.group(1)) + shift, 6)
-            out.append(f'<h{level} id="{slug(m.group(2))}">{inline(m.group(2), links)}</h{level}>')
+            out.append(
+                f'<h{level} id="{slug(m.group(2))}">{inline(m.group(2), links)}</h{level}>'
+            )
             i += 1
             continue
-        if line.lstrip().startswith("|") and i + 1 < len(lines) and re.match(r"^\s*\|?[\s:|-]+\|?\s*$", lines[i + 1]):
+        if (
+            line.lstrip().startswith("|")
+            and i + 1 < len(lines)
+            and re.match(r"^\s*\|?[\s:|-]+\|?\s*$", lines[i + 1])
+        ):
             head = cells(line)
             rows = []
             j = i + 2
@@ -144,7 +154,11 @@ def render_markdown(text: str, links: Links, shift: int = 0) -> str:
             out.extend(f"<th>{inline(c, links)}</th>" for c in head)
             out.append("</tr></thead><tbody>")
             for row in rows:
-                out.append("<tr>" + "".join(f"<td>{inline(c, links)}</td>" for c in row) + "</tr>")
+                out.append(
+                    "<tr>"
+                    + "".join(f"<td>{inline(c, links)}</td>" for c in row)
+                    + "</tr>"
+                )
             out.append("</tbody></table></div>")
             i = j
             continue
@@ -152,7 +166,8 @@ def render_markdown(text: str, links: Links, shift: int = 0) -> str:
             j = i
             block = []
             while j < len(lines) and (
-                re.match(r"^\s*([-*]|\d+\.)\s+", lines[j]) or (lines[j].startswith("  ") and lines[j].strip())
+                re.match(r"^\s*([-*]|\d+\.)\s+", lines[j])
+                or (lines[j].startswith("  ") and lines[j].strip())
             ):
                 block.append(lines[j])
                 j += 1
@@ -258,8 +273,16 @@ def changelog_entries(text: str) -> list[str]:
 def drafts(conformance: str) -> list[dict]:
     for heading, body in sections(conformance, 2):
         if heading == "Drafts":
-            rows = [cells(line) for line in body.splitlines() if line.lstrip().startswith("|")]
-            return [{"draft": r[0].strip("`"), "revision": r[1]} for r in rows[2:] if len(r) >= 2]
+            rows = [
+                cells(line)
+                for line in body.splitlines()
+                if line.lstrip().startswith("|")
+            ]
+            return [
+                {"draft": r[0].strip("`"), "revision": r[1]}
+                for r in rows[2:]
+                if len(r) >= 2
+            ]
     raise RenderError("docs/mimi/CONFORMANCE.md has no Drafts table")
 
 
@@ -273,19 +296,34 @@ def conformance_ids(conformance: str) -> list[str]:
     return ids
 
 
+def opened_files(repo: Path) -> dict[Path, set[str]]:
+    """Each file a Rust source of the repository compiles in with include_str! or include_bytes!, resolved against that
+    source as the compiler does, mapped to the sources that open it."""
+    opened: dict[Path, set[str]] = {}
+    for src in repo.rglob("*.rs"):
+        rel = src.relative_to(repo)
+        if rel.parts[0] in ("target", ".git"):
+            continue
+        for m in re.finditer(
+            r'include_(?:str|bytes)!\(\s*"([^"]+)"\s*\)',
+            src.read_text(encoding="utf-8"),
+        ):
+            target = (src.parent / m.group(1)).resolve()
+            opened.setdefault(target, set()).add(rel.as_posix())
+    return opened
+
+
 def vectors(repo: Path) -> list[dict]:
     root = repo / "tests" / "vectors"
-    tests = {p.name: p.read_text() for p in (repo / "tests").glob("*.rs")}
+    opened = opened_files(repo)
     found = []
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
-        rel = path.relative_to(root).as_posix()
-        users = sorted(name for name, src in tests.items() if path.name in src or rel.split("/")[0] + "/" in src)
         found.append(
             {
-                "path": rel,
+                "path": path.relative_to(root).as_posix(),
                 "bytes": path.stat().st_size,
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                "replayed_by": users,
+                "opened_by": sorted(opened.get(path.resolve(), ())),
             }
         )
     return found
@@ -302,32 +340,66 @@ def gather(repo: Path, revision: str, previous: str | None) -> dict:
         "drafts": drafts(conformance),
         "conformance_ids": conformance_ids(conformance),
         "divergences": [
-            {"id": m.group(1), "title": m.group(2), "summary": first_paragraph(body), "anchor": slug(heading)}
+            {
+                "id": m.group(1),
+                "title": m.group(2),
+                "summary": first_paragraph(body),
+                "anchor": slug(heading),
+            }
             for heading, body in sections(divergences, 2)
             if (m := re.match(r"(DIV-\d+)\s*-\s*(.*)", heading))
         ],
         "problem_types": [
-            {"type": heading, "uri": f"{PROBLEM_BASE}#{heading}", "summary": first_paragraph(body)}
+            {
+                "type": heading,
+                "uri": f"{PROBLEM_BASE}#{slug(heading)}",
+                "summary": first_paragraph(body),
+            }
             for heading, body in sections(problems, 2)
         ],
         "vectors": vectors(repo),
         "new_entries": [],
         "commits": [],
+        "commit_count": 0,
     }
     if previous:
         try:
             git(repo, "merge-base", "--is-ancestor", previous, revision)
         except RenderError:
-            raise RenderError(f"the previous revision {previous} is not an ancestor of {revision}") from None
+            raise RenderError(
+                f"the previous revision {previous} is not an ancestor of {revision}"
+            ) from None
         try:
-            before = set(changelog_entries(git(repo, "show", f"{previous}:CHANGELOG.md")))
+            before = set(
+                changelog_entries(git(repo, "show", f"{previous}:CHANGELOG.md"))
+            )
         except RenderError:
             before = set()
-        facts["new_entries"] = [e for e in changelog_entries(changelog) if e not in before]
-        log = git(repo, "log", f"--max-count={MAX_COMMITS}", "--format=%H%x09%s", f"{previous}..{revision}")
-        facts["commits"] = [line.split("\t", 1) for line in log.splitlines() if "\t" in line]
+        facts["new_entries"] = [
+            e for e in changelog_entries(changelog) if e not in before
+        ]
+        log = git(
+            repo,
+            "log",
+            f"--max-count={MAX_COMMITS}",
+            "--format=%H%x09%s",
+            f"{previous}..{revision}",
+        )
+        facts["commits"] = [
+            line.split("\t", 1) for line in log.splitlines() if "\t" in line
+        ]
+        facts["commit_count"] = int(
+            git(repo, "rev-list", "--count", f"{previous}..{revision}").strip()
+        )
     else:
-        unreleased = next((body for heading, body in sections(changelog, 2) if heading == "Unreleased"), "")
+        unreleased = next(
+            (
+                body
+                for heading, body in sections(changelog, 2)
+                if heading == "Unreleased"
+            ),
+            "",
+        )
         facts["new_entries"] = changelog_entries(unreleased)
     return facts
 
@@ -386,7 +458,9 @@ def page(facts: dict, args) -> str:
         )
     if args.domain:
         url = f"https://{args.domain}/.well-known/mimi-protocol-directory"
-        parts.append(f'<dt>Directory</dt><dd><a href="{html.escape(url)}">{html.escape(url)}</a></dd>')
+        parts.append(
+            f'<dt>Directory</dt><dd><a href="{html.escape(url)}">{html.escape(url)}</a></dd>'
+        )
     parts.append("</dl>")
 
     changelog_links = Links(rev, "CHANGELOG.md")
@@ -394,13 +468,23 @@ def page(facts: dict, args) -> str:
     if args.previous:
         parts.append("<p>Changelog entries added since the previous deployment:</p>")
     else:
-        parts.append("<p>No previous deployment is recorded here; the changelog's unreleased entries:</p>")
+        parts.append(
+            "<p>No previous deployment is recorded here; the changelog's unreleased entries:</p>"
+        )
     if facts["new_entries"]:
-        parts.append("<ul>" + "".join(f"<li>{inline(e, changelog_links)}</li>" for e in facts["new_entries"]) + "</ul>")
+        parts.append(
+            "<ul>"
+            + "".join(
+                f"<li>{inline(e, changelog_links)}</li>" for e in facts["new_entries"]
+            )
+            + "</ul>"
+        )
     else:
         parts.append('<p class="muted">None.</p>')
     if facts["commits"]:
-        parts.append(f"<h3>Commits ({len(facts['commits'])})</h3><ul>")
+        shown, total = len(facts["commits"]), facts["commit_count"]
+        count = f"{shown}" if shown == total else f"the latest {shown} of {total}"
+        parts.append(f"<h3>Commits ({count})</h3><ul>")
         parts.extend(
             f'<li><a href="{REPO_URL}/commit/{sha}"><code>{sha[:12]}</code></a> {html.escape(subject)}</li>'
             for sha, subject in facts["commits"]
@@ -408,7 +492,9 @@ def page(facts: dict, args) -> str:
         parts.append("</ul>")
 
     parts.append('<h2 id="conformance">Conformance</h2>')
-    body = re.sub(r"\A#[^\n]*\n", "", facts["conformance"])  # its own title; this page has one
+    body = re.sub(
+        r"\A#[^\n]*\n", "", facts["conformance"]
+    )  # its own title; this page has one
     parts.append(render_markdown(body, Links(rev, "docs/mimi/CONFORMANCE.md"), shift=1))
 
     div_url = f"{REPO_URL}/blob/{rev}/DIVERGENCES.md"
@@ -431,29 +517,34 @@ def page(facts: dict, args) -> str:
     )
     for p in facts["problem_types"]:
         parts.append(
-            f'<dt id="{html.escape(p["type"])}"><a href="{html.escape(p["uri"])}"><code>{html.escape(p["type"])}'
+            f'<dt id="{slug(p["type"])}"><a href="{html.escape(p["uri"])}"><code>{html.escape(p["type"])}'
             f"</code></a></dt><dd>{render_markdown(p['summary'], prob_links)}</dd>"
         )
     parts.append("</dl>")
 
     parts.append('<h2 id="settings">Settings</h2>')
     if args.setting:
-        parts.append("<p>This deployment's own choices, where the drafts leave one, as the hub reads them.</p>")
+        parts.append(
+            "<p>This deployment's own choices, where the drafts leave one, as the hub reads them.</p>"
+        )
         for label, content in args.setting:
-            parts.append(f"<h3>{html.escape(label)}</h3><pre><code>{html.escape(content, quote=False)}</code></pre>")
+            parts.append(
+                f"<h3>{html.escape(label)}</h3><pre><code>{html.escape(content, quote=False)}</code></pre>"
+            )
     else:
         parts.append('<p class="muted">None given.</p>')
 
     parts.append(
-        '<h2 id="vectors">Test vectors</h2><p>The vectors this revision is tested against, for download. Each is '
-        "replayed by the test named beside it.</p>"
-        '<div class="table"><table><thead><tr><th>File</th><th>Bytes</th><th>SHA-256</th><th>Replayed by</th>'
+        '<h2 id="vectors">Test vectors</h2><p>The test vectors in this revision, for download. Beside each, the '
+        "sources that compile it in (<code>include_str!</code> or <code>include_bytes!</code>); a dash means none "
+        "does.</p>"
+        '<div class="table"><table><thead><tr><th>File</th><th>Bytes</th><th>SHA-256</th><th>Opened by</th>'
         "</tr></thead><tbody>"
     )
     for v in facts["vectors"]:
         tests = ", ".join(
-            f'<a href="{REPO_URL}/blob/{rev}/tests/{html.escape(t)}"><code>{html.escape(t)}</code></a>'
-            for t in v["replayed_by"]
+            f'<a href="{REPO_URL}/blob/{rev}/{html.escape(t)}"><code>{html.escape(t)}</code></a>'
+            for t in v["opened_by"]
         )
         parts.append(
             f'<tr><td><a href="vectors/{html.escape(v["path"])}"><code>{html.escape(v["path"])}</code></a></td>'
@@ -475,7 +566,9 @@ def status_json(facts: dict, args) -> dict:
         "drafts": facts["drafts"],
         "divergences": [d["id"] for d in facts["divergences"]],
         "problem_types": [p["uri"] for p in facts["problem_types"]],
-        "vectors": [{k: v[k] for k in ("path", "bytes", "sha256")} for v in facts["vectors"]],
+        "vectors": [
+            {k: v[k] for k in ("path", "bytes", "sha256")} for v in facts["vectors"]
+        ],
     }
 
 
@@ -485,12 +578,16 @@ def render(repo: Path, args, check_checkout: bool = True) -> dict:
         if head != args.revision:
             raise RenderError(f"the checkout is at {head}, not {args.revision}")
         if git(repo, "status", "--porcelain", "--untracked-files=no").strip():
-            raise RenderError("the checkout has local changes; the page must describe what was built")
+            raise RenderError(
+                "the checkout has local changes; the page must describe what was built"
+            )
     facts = gather(repo, args.revision, args.previous)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "index.html").write_text(page(facts, args), encoding="utf-8")
-    (out / "status.json").write_text(json.dumps(status_json(facts, args), indent=2) + "\n", encoding="utf-8")
+    (out / "status.json").write_text(
+        json.dumps(status_json(facts, args), indent=2) + "\n", encoding="utf-8"
+    )
     if (out / "vectors").exists():
         shutil.rmtree(out / "vectors")
     shutil.copytree(repo / "tests" / "vectors", out / "vectors")
@@ -519,7 +616,10 @@ def audit(out: Path, facts: dict) -> list[str]:
         copy = out / "vectors" / v["path"]
         if f'href="vectors/{v["path"]}"' not in text:
             errs.append(f"vector {v['path']} is not listed")
-        if not copy.is_file() or hashlib.sha256(copy.read_bytes()).hexdigest() != v["sha256"]:
+        if (
+            not copy.is_file()
+            or hashlib.sha256(copy.read_bytes()).hexdigest() != v["sha256"]
+        ):
             errs.append(f"vector {v['path']} is not served as listed")
     if re.search(r"\|\s*-{3,}", text) or re.search(r"\]\([^)]*\)", text):
         errs.append("Markdown syntax was left unrendered")
@@ -528,7 +628,9 @@ def audit(out: Path, facts: dict) -> list[str]:
     if re.search(r"\son[a-z]+\s*=", text, re.I):
         errs.append("the page has an inline event handler")
     for href in re.findall(r'href="([^"]*)"', text):
-        if not (href.startswith(("https://", "#", "vectors/")) or href == "status.json"):
+        if not (
+            href.startswith(("https://", "#", "vectors/")) or href == "status.json"
+        ):
             errs.append(f"a link that is not https, an anchor or a served file: {href}")
     return errs
 
@@ -536,7 +638,11 @@ def audit(out: Path, facts: dict) -> list[str]:
 def self_test() -> int:
     repo = Path(__file__).resolve().parent.parent
     head = git(repo, "rev-parse", "HEAD").strip()
-    parent = git(repo, "rev-parse", "HEAD~1").strip() if git(repo, "rev-list", "--count", "HEAD").strip() != "1" else None
+    parent = (
+        git(repo, "rev-parse", "HEAD~1").strip()
+        if git(repo, "rev-list", "--count", "HEAD").strip() != "1"
+        else None
+    )
     with tempfile.TemporaryDirectory() as tmp:
         args = argparse.Namespace(
             revision=head,
@@ -550,38 +656,100 @@ def self_test() -> int:
         out = Path(tmp)
         errs = audit(out, facts)
         assert not errs, errs
-        assert facts["conformance_ids"] and facts["divergences"] and facts["problem_types"] and facts["vectors"]
+        assert (
+            facts["conformance_ids"]
+            and facts["divergences"]
+            and facts["problem_types"]
+            and facts["vectors"]
+        )
         if parent:
             subject = git(repo, "log", "-1", "--format=%s", head).strip()
-            assert html.escape(subject) in (out / "index.html").read_text(), "the last commit is not listed"
+            assert html.escape(subject) in (out / "index.html").read_text(), (
+                "the last commit is not listed"
+            )
         status = json.loads((out / "status.json").read_text())
-        assert status["revision"] == head and len(status["vectors"]) == len(facts["vectors"])
+        assert status["revision"] == head and len(status["vectors"]) == len(
+            facts["vectors"]
+        )
+        # "Opened by" names only sources that compile the file in.
+        opened = {v["path"]: v["opened_by"] for v in facts["vectors"]}
+        assert any(opened.values()), (
+            "no vector is credited to any source: the include scan found nothing"
+        )
+        for path, sources in opened.items():
+            for source in sources:
+                text = (repo / source).read_text(encoding="utf-8")
+                assert Path(path).name in text, (
+                    f"{source} is credited with {path} but never names it"
+                )
+        for v in facts["vectors"]:
+            assert f'href="#{slug(v["path"])}"' not in (out / "index.html").read_text()
+        for p in facts["problem_types"]:
+            assert p["uri"].endswith("#" + slug(p["type"]))
 
         # The audit catches a page that is wrong. Each plant changes the rendered page and must be reported.
         page_path = out / "index.html"
         good = page_path.read_text()
         row = facts["conformance_ids"][0]
         plants = {
-            "a conformance row dropped": good.replace(f"<td>{row}</td>", "<td></td>", 1),
-            "a divergence dropped": good.replace(f">{facts['divergences'][0]['id']}</a>", "></a>", 1),
-            "a problem type dropped": good.replace(f"<code>{facts['problem_types'][0]['type']}</code>", "", 1),
-            "a vector unlisted": good.replace(f'href="vectors/{facts["vectors"][0]["path"]}"', 'href="#"', 1),
+            "a conformance row dropped": good.replace(
+                f"<td>{row}</td>", "<td></td>", 1
+            ),
+            "a divergence dropped": good.replace(
+                f">{facts['divergences'][0]['id']}</a>", "></a>", 1
+            ),
+            "a problem type dropped": good.replace(
+                f"<code>{facts['problem_types'][0]['type']}</code>", "", 1
+            ),
+            "a vector unlisted": good.replace(
+                f'href="vectors/{facts["vectors"][0]["path"]}"', 'href="#"', 1
+            ),
             "a script added": good.replace("</main>", "<script>x()</script></main>"),
             "an event handler added": good.replace("<main>", '<main onclick="x()">'),
             "a raw table left": good.replace("</main>", "| a | b |\n|---|---|</main>"),
-            "an http link": good.replace("</main>", '<a href="http://example.com">x</a></main>'),
+            "an http link": good.replace(
+                "</main>", '<a href="http://example.com">x</a></main>'
+            ),
         }
         for name, planted in plants.items():
             page_path.write_text(planted)
             assert audit(out, facts), f"the audit missed: {name}"
         page_path.write_text(good)
         (out / "vectors" / facts["vectors"][0]["path"]).write_bytes(b"changed")
-        assert audit(out, facts), "the audit missed: a served vector that differs from the listed one"
+        assert audit(out, facts), (
+            "the audit missed: a served vector that differs from the listed one"
+        )
+
+    # A cut commit list says how many there were.
+    if int(git(repo, "rev-list", "--count", "HEAD").strip()) >= 3:
+        global MAX_COMMITS
+        saved, MAX_COMMITS = MAX_COMMITS, 1
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                args = argparse.Namespace(
+                    revision=head,
+                    previous=git(repo, "rev-parse", "HEAD~2").strip(),
+                    deployed_at="x",
+                    domain=None,
+                    setting=[],
+                    out=tmp,
+                )
+                render(repo, args, check_checkout=False)
+                assert "the latest 1 of 2" in (Path(tmp) / "index.html").read_text(), (
+                    "a cut commit list is not marked"
+                )
+        finally:
+            MAX_COMMITS = saved
 
     # The checkout check: a page is never rendered from a revision other than the one named.
     with tempfile.TemporaryDirectory() as tmp:
         wrong = argparse.Namespace(
-            revision="0" * 40, previous=None, deployed_at="x", domain=None, setting=[], out=tmp
+            revision="0" * 40,
+            previous=None,
+            deployed_at="x",
+            domain=None,
+            setting=[],
+            out=tmp,
         )
         try:
             render(repo, wrong)
@@ -594,14 +762,18 @@ def self_test() -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--repo", default=str(Path(__file__).resolve().parent.parent))
     parser.add_argument("--revision")
     parser.add_argument("--previous")
     parser.add_argument("--deployed-at")
     parser.add_argument("--domain")
-    parser.add_argument("--setting", action="append", default=[], help='"<label>=<file>"')
+    parser.add_argument(
+        "--setting", action="append", default=[], help='"<label>=<file>"'
+    )
     parser.add_argument("--out")
     args = parser.parse_args()
     if args.self_test:
@@ -626,7 +798,11 @@ def main() -> int:
         return 1
     errs = audit(Path(args.out), facts)
     if errs:
-        print("render_status_page: the rendered page is incomplete:\n  " + "\n  ".join(errs), file=sys.stderr)
+        print(
+            "render_status_page: the rendered page is incomplete:\n  "
+            + "\n  ".join(errs),
+            file=sys.stderr,
+        )
         return 1
     print(f"render_status_page: {args.out}/index.html for {args.revision[:12]}")
     return 0
