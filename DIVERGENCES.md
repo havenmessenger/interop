@@ -243,7 +243,7 @@ on the wire.
   and logs it.
 - **A tracked room's Commit the tree cannot take is refused, not relayed.** Its sender must be a member whose signature
   verifies, it must be for the room's group and epoch (`wrongEpoch` naming the room's otherwise), its proposals must
-  apply to the tree, and a Full GroupInfo beside it must describe the group after it. A refused Commit changes nothing
+  apply to the tree, and a GroupInfo beside it (a Partial one rebuilt first, DIV-12) must describe the group after it. A refused Commit changes nothing
   and is logged with the room and the sender's provider. Relaying it and dropping the room's tracking instead would let
   one bad Commit switch the tree's checks off. The cost is that a tree the hub models wrong would stall the room; the
   operator's `untrackRoom` (on the loopback listener) drops the tree, and the room's next full bundle seeds it again.
