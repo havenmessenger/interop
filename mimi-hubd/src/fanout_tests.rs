@@ -270,3 +270,54 @@ fn a_store_error_fails_the_fan_out() {
         "PLANT-FANOUT-STORE-ERROR: a store error was skipped as a refusal"
     );
 }
+
+/// Erin's only KeyPackage is a last-resort one, so two rooms on other providers claim the same one and each sends a
+/// Welcome for it in a notify: both reach Erin, the KeyPackageRef still naming her after the first. Revert check: forget
+/// the ref once its first Welcome is delivered, and the second room's Welcome is dropped.
+#[test]
+fn two_welcomes_on_one_last_resort_key_package_both_reach_the_user() {
+    use openmls::prelude::KeyPackage;
+    let p = Provider::in_memory("hub.example").unwrap();
+    let erin = Member::new("mimi://hub.example/u/erin");
+    let last = KeyPackage::builder()
+        .leaf_node_capabilities(crate::mls_fixtures::capabilities())
+        .mark_as_last_resort()
+        .build(
+            crate::mls_fixtures::SUITE,
+            &erin.provider,
+            &erin.signer,
+            erin.credential.clone(),
+        )
+        .unwrap()
+        .key_package()
+        .clone();
+    let bytes = last.tls_serialize_detached().unwrap();
+    p.publish_key_package("erin", &bytes, 1).unwrap();
+    let mut delivered = Vec::new();
+    for (inviter, room) in [
+        ("mimi://other.example/u/alice", &b"room-a"[..]),
+        ("mimi://c.example/u/carol", &b"room-c"[..]),
+    ] {
+        assert_eq!(
+            p.serve_key_material("erin", 2).unwrap().as_deref(),
+            Some(bytes.as_slice())
+        );
+        let inviter = Member::new(inviter);
+        let mut group = inviter.create_group(room);
+        let (_commit, welcome, _info) = group
+            .add_members(&inviter.provider, &inviter.signer, &[last.clone()])
+            .unwrap();
+        delivered.push(
+            p.deliver_notified_welcome_to(&welcome.tls_serialize_detached().unwrap(), 3)
+                .unwrap(),
+        );
+    }
+    assert_eq!(
+        delivered,
+        vec![vec!["erin".to_string()], vec!["erin".to_string()]],
+        "PLANT-FANOUT-LAST-RESORT-WELCOMES: the second room's Welcome did not reach Erin"
+    );
+    assert!(p.fetch_welcome("erin").unwrap().is_some());
+    assert!(p.fetch_welcome("erin").unwrap().is_some());
+    assert!(p.fetch_welcome("erin").unwrap().is_none());
+}

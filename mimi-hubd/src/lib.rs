@@ -530,7 +530,8 @@ impl Provider {
         self.store.provider_for_kpref(kpref)
     }
 
-    /// Forget both associations once a Welcome has been forwarded/delivered for this ref.
+    /// Forget both associations for this ref. Delivering a Welcome does not: a last-resort KeyPackage's ref names its
+    /// user for every Welcome sent for it.
     pub fn forget_kpref(&self, kpref: &[u8]) -> anyhow::Result<()> {
         self.store.forget_kpref(kpref)
     }
