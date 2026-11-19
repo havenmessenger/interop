@@ -18,6 +18,17 @@
 //! # participant-list or room-policy change to it, only with a bundle that gives the hub the tree; "accept" applies
 //! # changes the hub cannot authorize, trusting the members to have checked them.
 //! untracked_rooms = "refuse"
+//! # Consent on the client lane (protocol-07 §8). A user may also decide for every user of a provider (default false:
+//! # the draft's scope is one requesting user). It is read against the requester URI's domain, which any peer naming a
+//! # room on its own domain can choose (DIVERGENCES DIV-6), so on it admits any authenticated peer: leave it off unless
+//! # every peer is trusted.
+//! consent_provider_grants = false
+//! # Send a revoke to the requester's provider (default false: §8, "typically not communicated").
+//! consent_revoke_notifies = false
+//! # Keep a user's consent decisions when they opt out (default false: they start over when they opt in again).
+//! consent_kept_at_opt_out = false
+//! # Days a consent request made of a user stays pending (default 30).
+//! consent_request_days = 30
 //! ```
 //!
 //! A named file the hub cannot read, a key it does not know, an empty suite list or a suite the crypto provider does not
@@ -73,6 +84,14 @@ pub struct HubPolicy {
     pub require_nonce_on_key_material: bool,
     pub external_commit_when_unset: ExternalCommitWhenUnset,
     pub untracked_rooms: UntrackedRooms,
+    /// A lane user may decide for every user of a provider, not only for one user (`client_lane_consent.rs`).
+    pub consent_provider_grants: bool,
+    /// A revoke is sent to the requester's provider as `updateConsent`; otherwise only a grant is.
+    pub consent_revoke_notifies: bool,
+    /// A user's consent decisions stay when they opt out; otherwise opting out clears them.
+    pub consent_kept_at_opt_out: bool,
+    /// Days a consent request made of a user stays pending before it is dropped.
+    pub consent_request_days: u32,
 }
 
 impl Default for HubPolicy {
@@ -83,6 +102,10 @@ impl Default for HubPolicy {
             require_nonce_on_key_material: false,
             external_commit_when_unset: ExternalCommitWhenUnset::default(),
             untracked_rooms: UntrackedRooms::default(),
+            consent_provider_grants: false,
+            consent_revoke_notifies: false,
+            consent_kept_at_opt_out: false,
+            consent_request_days: 30,
         }
     }
 }
@@ -108,6 +131,11 @@ impl HubPolicy {
                 "mls_ciphersuites is empty, so nothing from another provider would be accepted"
             );
         }
+        if self.consent_request_days == 0 {
+            anyhow::bail!(
+                "consent_request_days is 0, so every consent request would expire as it arrives"
+            );
+        }
         let implemented = mimi_core::gate::default_mls_ciphersuites();
         if let Some(suite) = self
             .mls_ciphersuites
@@ -129,7 +157,7 @@ impl HubPolicy {
             Discovery::Enrolled => "enrolled",
         };
         format!(
-            "mls_ciphersuites={} identifier_discovery={discovery} require_nonce_on_key_material={} external_commit_when_unset={} untracked_rooms={}",
+            "mls_ciphersuites={} identifier_discovery={discovery} require_nonce_on_key_material={} external_commit_when_unset={} untracked_rooms={} consent_provider_grants={} consent_revoke_notifies={} consent_kept_at_opt_out={} consent_request_days={}",
             hex_list(&self.mls_ciphersuites),
             self.require_nonce_on_key_material,
             match self.external_commit_when_unset {
@@ -139,7 +167,11 @@ impl HubPolicy {
             match self.untracked_rooms {
                 UntrackedRooms::Refuse => "refuse",
                 UntrackedRooms::Accept => "accept",
-            }
+            },
+            self.consent_provider_grants,
+            self.consent_revoke_notifies,
+            self.consent_kept_at_opt_out,
+            self.consent_request_days,
         )
     }
 }

@@ -25,6 +25,10 @@ fn each_field_is_read() {
         require_nonce_on_key_material = true
         external_commit_when_unset = "deny"
         untracked_rooms = "accept"
+        consent_provider_grants = true
+        consent_revoke_notifies = true
+        consent_kept_at_opt_out = true
+        consent_request_days = 7
         "#,
     )
     .unwrap();
@@ -32,6 +36,13 @@ fn each_field_is_read() {
     assert!(!HubPolicy::default().require_nonce_on_key_material);
     assert_eq!(policy.mls_ciphersuites, vec![0x0001]);
     assert_eq!(policy.identifier_discovery, Discovery::Enrolled);
+    assert!(policy.consent_provider_grants && policy.consent_revoke_notifies);
+    assert!(policy.consent_kept_at_opt_out);
+    assert_eq!(policy.consent_request_days, 7);
+    let drafts = HubPolicy::default();
+    assert!(!drafts.consent_provider_grants && !drafts.consent_revoke_notifies);
+    assert!(!drafts.consent_kept_at_opt_out);
+    assert_eq!(drafts.consent_request_days, 30);
     assert_eq!(
         policy.untracked_rooms,
         crate::policy::UntrackedRooms::Accept
@@ -42,7 +53,7 @@ fn each_field_is_read() {
     );
     assert_eq!(
         policy.describe(),
-        "mls_ciphersuites=0x0001 identifier_discovery=enrolled require_nonce_on_key_material=true external_commit_when_unset=deny untracked_rooms=accept"
+        "mls_ciphersuites=0x0001 identifier_discovery=enrolled require_nonce_on_key_material=true external_commit_when_unset=deny untracked_rooms=accept consent_provider_grants=true consent_revoke_notifies=true consent_kept_at_opt_out=true consent_request_days=7"
     );
 }
 
@@ -55,6 +66,7 @@ fn a_policy_that_is_not_what_was_meant_is_refused() {
         "identifier_discovery = \"some\"",
         "environment = \"development\"",
         "mls_ciphersuites = []",
+        "consent_request_days = 0",
         "mls_ciphersuites = [0x0001, 0xbeef]",
         "mls_ciphersuites = \"0x0001\"",
     ] {

@@ -6,6 +6,12 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimi-hubd`: consent on the client lane (protocol-07 §8). A user grants or revokes a requesting user's access to
+  their KeyPackages (`consent`), asks a user for theirs or cancels (`requestConsent`), lists the requests made of them
+  (`consentRequests`) and the grants they hold (`consentReceived`), and opts out (`optOut`: their KeyPackages withdrawn
+  and their consent cleared). A grant to a user of another provider is sent to it as `updateConsent`. Four policy
+  settings cover what the draft leaves to the provider: `consent_provider_grants`, `consent_revoke_notifies`,
+  `consent_kept_at_opt_out` (all off) and `consent_request_days` (30). DIV-19 has the rule.
 - `mimi-hubd`: a room hosted here that the hub keeps no ratchet tree for no longer takes changes the hub cannot
   authorize. Its first Commit, and any participant-list or room-policy change to it, is taken only with a bundle
   carrying a Full GroupInfo and the full ratchet tree, which seed the tree; otherwise it is refused (`notAllowed`, saying

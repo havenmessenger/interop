@@ -350,6 +350,17 @@ external_commit_when_unset = "allow"
 # ratchet tree, so every change is authorized for its proposer. "accept": the hub applies changes it cannot authorize,
 # trusting the members to have checked them, until a bundle gives it the tree (DIVERGENCES DIV-10).
 untracked_rooms = "refuse"
+# Consent on the client lane (protocol-07 §8). Each of these is the deployment's choice and changes without code.
+# Decide for every user of a provider (default false: the draft's scope is one requesting user). A provider grant is
+# read against the requester URI's domain, which any peer naming a room on its own domain can choose (DIVERGENCES
+# DIV-6), so on it admits any authenticated peer: leave it off unless every peer is trusted.
+consent_provider_grants = false
+# Send a revoke to the requester's provider (default false: §8, "typically not communicated").
+consent_revoke_notifies = false
+# Keep a user's consent decisions when they opt out (default false: opting in again starts over).
+consent_kept_at_opt_out = false
+# Days a consent request made of a user stays pending (default 30; 0 stops the start).
+consent_request_days = 30
 ```
 
 A key the hub does not know, an empty suite list, or a suite the crypto provider does not implement stops the start,
@@ -443,6 +454,11 @@ A refused request is a 401 `client-not-authenticated`; past 600 requests a minut
 | `submitMessage` | `{room, message}` → `{}` | An application message into the room, from the user. In a room hosted here: 403 `not-permitted` unless the user is an active participant whose role may send; fanned out as from a peer. In a room on another hub: sent to that hub's `submitMessage` as this provider, naming the user as the sender (protocol-07 §3.4), and answered as it answers (403 for its refusal, 502 `upstream-failed` when it cannot be reached or this hub has no outbound client). |
 | `update` | `{room, update}` → `{answer, ...}` | `update` is the UpdateRequest as the wire carries it (a Commit bundle, or a leave's proposals). The same checks as the provider path's `update`, with the user as the requester: a leave removes only the user, an external Commit joins only the user, a GroupInfo seeding the room's tree is signed by the user. The answer is the wire's: `success` (with the room's `epoch`), `wrongEpoch` (with `current_epoch`), `notAllowed` or `invalidProposal` (with a `description`). For a room on another hub the update is sent to that hub's `update` as this provider, and its answer passed on (`success` with no `epoch`; 502 when it cannot be reached). |
 | `keyMaterial` | `{request}` → `{response}` | `request` is the client's `KeyMaterialRequest` (protocol-07 §5.2) naming the room, signed with the user's MLS key; its `requestingUser` and its credential must be the user and its signature must verify (403 otherwise). The MLS signature shows the request was made with the key it names; that the request is the user's is what the lane signature on it says, as on every lane request. For a room hosted here it is answered as the provider path answers it (a user of another provider's through that provider); for a room on another hub it is sent there, the room's hub (§5.2: "MUST be sent via the hub provider of whatever room"). `response` is the `KeyMaterialResponse`. At most 30 a minute per user, and 5 an hour per user for one target user (429 `client-rate-limited`). |
+| `consent` | `{requester \| provider, room?, decision}` → `{notified}` | The user's consent (protocol-07 §8) to a requesting user fetching their KeyPackages: `decision` is `grant` or `revoke`, for any room or for `room`. It is recorded at this hub, where it gates the user's KeyPackages, replacing a pending request of the same scope; a revoke with no request is a preemptive one. A grant to a user of another provider is sent to that provider as `updateConsent`, a revoke only when the policy's `consent_revoke_notifies` says so; `notified` is whether that provider took it, and the decision stands either way. `provider` (a domain) decides for every user of that provider, for any room, only when the policy's `consent_provider_grants` is on (403 otherwise); a user's own decision is read before it. |
+| `requestConsent` | `{target, room?, cancel?}` → `{delivered}` | Asks `target` for consent to fetch their KeyPackages, or cancels that request. For a user of another provider it is sent there as `requestConsent`; for a user of this provider it is recorded here. `delivered` is whether it was taken. |
+| `consentRequests` | `{after?, limit?}` → `{requests: [{seq, requester, room?, at}]}` | The requests made of the user that are still pending, oldest first, after `seq` `after`, at most 100. A request leaves the list when the user decides, when the requester cancels, or after the policy's `consent_request_days`. |
+| `consentReceived` | `{}` → `{grants: [{target, room?, at}]}` | The grants the user holds from other users, a user of another provider's from its `updateConsent`. A revoke is never listed. |
+| `optOut` | `{}` → `{count, cleared}` | Withdraws the user's KeyPackages, as `withdrawKeyPackages`, and, unless the policy's `consent_kept_at_opt_out`, clears the user's consent decisions and the requests made of them: `count` KeyPackages, `cleared` consent records. |
 
 The operator's routes are served only on the loopback listener `MIMI_ADMIN_BIND_ADDR` names, never to a peer. They are
 not MIMI routes; a peer changes a room's roster or policy through `update`.

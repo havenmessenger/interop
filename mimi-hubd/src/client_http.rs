@@ -54,6 +54,9 @@ impl UserCap {
     }
 }
 
+#[path = "client_http_consent.rs"]
+mod consent;
+
 #[derive(Clone)]
 struct LaneState {
     provider: SharedProvider,
@@ -86,6 +89,20 @@ pub fn build_client_router(
         .route("/mimi/client/v1/submitMessage", post(submit_message))
         .route("/mimi/client/v1/update", post(update))
         .route("/mimi/client/v1/keyMaterial", post(key_material))
+        .route("/mimi/client/v1/consent", post(consent::consent))
+        .route(
+            "/mimi/client/v1/requestConsent",
+            post(consent::request_consent),
+        )
+        .route(
+            "/mimi/client/v1/consentRequests",
+            post(consent::consent_requests),
+        )
+        .route(
+            "/mimi/client/v1/consentReceived",
+            post(consent::consent_received),
+        )
+        .route("/mimi/client/v1/optOut", post(consent::opt_out))
         .layer(middleware::from_fn_with_state(state.clone(), gate))
         .with_state(state)
 }

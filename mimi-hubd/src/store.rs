@@ -773,6 +773,80 @@ impl SqliteStore {
             .optional()?)
     }
 
+    /// The pending requests made of `target` since `cutoff` (unix seconds), after the row `after`, oldest first, at most
+    /// `limit`: (row id, requester, room key, when). A room key of '' is a request for any room.
+    pub fn consent_requests_for(
+        &self,
+        target: &str,
+        after: i64,
+        cutoff: u64,
+        limit: usize,
+    ) -> anyhow::Result<Vec<(i64, String, String, u64)>> {
+        let target = mimi_core::uri::canonical(target);
+        let mut statement = self.conn.prepare(
+            "SELECT rowid, requester, room_key, ts FROM consent \
+             WHERE target = ?1 AND state = 'requested' AND rowid > ?2 AND ts >= ?3 \
+             ORDER BY rowid LIMIT ?4",
+        )?;
+        let rows = statement
+            .query_map(
+                params![
+                    target,
+                    after,
+                    i64::try_from(cutoff).unwrap_or(i64::MAX),
+                    i64::try_from(limit).unwrap_or(i64::MAX)
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        u64::try_from(row.get::<_, i64>(3)?).unwrap_or(0),
+                    ))
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Drop the pending requests made before `cutoff` (unix seconds). A decision is never dropped. Returns how many.
+    pub fn expire_consent_requests(&self, cutoff: u64) -> anyhow::Result<usize> {
+        Ok(self.conn.execute(
+            "DELETE FROM consent WHERE state = 'requested' AND ts < ?1",
+            params![i64::try_from(cutoff).unwrap_or(i64::MAX)],
+        )?)
+    }
+
+    /// The grants `requester` holds from others: (target, room key, when), oldest first.
+    pub fn consent_grants_held_by(
+        &self,
+        requester: &str,
+    ) -> anyhow::Result<Vec<(String, String, u64)>> {
+        let requester = mimi_core::uri::canonical(requester);
+        let mut statement = self.conn.prepare(
+            "SELECT target, room_key, ts FROM consent WHERE requester = ?1 AND state = 'granted' \
+             ORDER BY ts, rowid",
+        )?;
+        let rows = statement
+            .query_map(params![requester], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Delete every consent row whose target is `target`: its decisions and the requests made of it. Returns how many.
+    pub fn clear_consent_as_target(&self, target: &str) -> anyhow::Result<usize> {
+        let target = mimi_core::uri::canonical(target);
+        Ok(self
+            .conn
+            .execute("DELETE FROM consent WHERE target = ?1", params![target])?)
+    }
+
     // ---- abuse reports (§5.9; DIV-8) ----
 
     /// Persist a metadata-only abuse report. Bounded by [`MAX_ABUSE_REPORTS`] (anti-flood) -

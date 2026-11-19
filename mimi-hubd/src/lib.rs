@@ -26,6 +26,7 @@ pub mod activity;
 pub mod admin;
 pub mod client_http;
 pub mod client_lane;
+pub mod client_lane_consent;
 pub mod client_lane_ops;
 pub mod client_lane_relay;
 pub mod client_lane_rooms;
@@ -866,6 +867,8 @@ impl Provider {
                         "a requestConsent is taken only from the requester's provider, for a user of this provider"
                     );
                 }
+                // A request past `consent_request_days` is dropped first, so asking again renews it.
+                self.expire_consent_requests(now_unix)?;
                 if self
                     .store
                     .consent_state(&entry.requester_uri, &entry.target_uri, rk)?
@@ -986,10 +989,21 @@ impl Provider {
             .consent_state(requester_uri, target_uri, "")?
             .as_deref()
         {
-            Some("granted") => Ok(KeyPackageAccess::Allowed),
-            Some("revoked") => Ok(KeyPackageAccess::NoConsent),
-            _ => Ok(KeyPackageAccess::NoConsent), // default-deny: no consent on record ⇒ no access
+            Some("granted") => return Ok(KeyPackageAccess::Allowed),
+            Some("revoked") => return Ok(KeyPackageAccess::NoConsent),
+            _ => {}
         }
+        // A decision for every user of the requester's provider, read after the requester's own
+        // (`consent_provider_grants`, `client_lane_consent.rs`).
+        if self.policy.consent_provider_grants {
+            if let Some(domain) = user_domain(requester_uri) {
+                let scope = crate::client_lane_consent::provider_scope(&domain);
+                if self.store.consent_state(&scope, target_uri, "")?.as_deref() == Some("granted") {
+                    return Ok(KeyPackageAccess::Allowed);
+                }
+            }
+        }
+        Ok(KeyPackageAccess::NoConsent) // default-deny: no consent on record ⇒ no access
     }
 
     /// C3: consent-enforced KeyPackage serve. Returns `Ok(Some(kp))` only when `requester` is consented

@@ -1216,6 +1216,9 @@ mod consent_cancel_tests;
 mod wire_tests;
 
 #[cfg(test)]
+#[path = "http_client_lane_consent_tests.rs"]
+mod client_lane_consent_tests;
+#[cfg(test)]
 #[path = "http_client_lane_relay_peer_tests.rs"]
 mod client_lane_relay_peer_tests;
 #[cfg(test)]
