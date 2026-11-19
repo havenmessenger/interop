@@ -264,9 +264,9 @@ fn a_group_info_not_signed_by_the_committer_is_refused() {
 }
 
 /// A GroupInfo for the group after Alice's Commit, correctly signed by Bob, another member, is refused with her Commit:
-/// it is verified under the committer's key, not the signer it names, so a relayer cannot pass off another member's
-/// GroupInfo as the committer's. Alice's own is taken. Revert check: verify under the key of the leaf the GroupInfo
-/// names, and Bob's passes.
+/// it names Bob's leaf, not the committer's, and it is verified under the committer's key, so a relayer cannot pass off
+/// another member's GroupInfo as the committer's. Alice's own is taken. Revert check: drop the rule that it name the
+/// committer's leaf and verify under the key of the leaf it names, and Bob's passes.
 #[test]
 fn a_group_info_another_member_signed_is_refused() {
     let p = hub();
@@ -317,6 +317,85 @@ fn a_group_info_another_member_signed_is_refused() {
     assert!(p
         .stage_tracked_commit(ROOM, &tracking, &commit, Some(&full(&alices)))
         .is_ok());
+}
+
+/// A GroupInfo the committer signed correctly, but that names another member's leaf as its signer, is refused: every
+/// joiner verifies a GroupInfo under the key of the leaf it names, so the hub would be keeping one nobody can join by.
+/// Built raw, since openmls signs only for its own leaf. Revert check: drop the rule that the named leaf is the
+/// committer's, and it stages.
+#[test]
+fn a_group_info_naming_another_leaf_as_its_signer_is_refused() {
+    use openmls::prelude::tls_codec::VLBytes;
+    use openmls_traits::signatures::Signer as _;
+    let p = hub();
+    let mut room = room(&p);
+    seed(&p, &room, &example_peer());
+    let tracking = p.room_tracking(ROOM).unwrap().unwrap();
+    let carol = Member::new("mimi://example.com/u/carol");
+    let (commit, group_info, _tree) = add_commit(&mut room.group, &room.alice, &[&carol]);
+    // An Ed25519 signature: 64 bytes after a two-byte length. Before it, the signed GroupInfoTBS ends in the signer's
+    // leaf index, a u32; Alice's is 0, Bob's 1.
+    let (signed, signature) = group_info.split_at(group_info.len() - 66);
+    assert_eq!(&signature[..2], &[0x40, 0x40]);
+    let mut renamed = signed.to_vec();
+    let at = renamed.len() - 4;
+    assert_eq!(&renamed[at..], &0u32.to_be_bytes());
+    renamed[at..].copy_from_slice(&1u32.to_be_bytes());
+    let content = SignContent::new("GroupInfoTBS", renamed.clone().into())
+        .tls_serialize_detached()
+        .unwrap();
+    let signature = room.alice.signer.sign(&content).unwrap();
+    let forged = [
+        renamed,
+        VLBytes::new(signature).tls_serialize_detached().unwrap(),
+    ]
+    .concat();
+    assert!(
+        matches!(
+            p.stage_tracked_commit(ROOM, &tracking, &commit, Some(&full(&forged))),
+            Err(UpdateRefusal::Invalid(_))
+        ),
+        "PLANT-GROUP-INFO-SIGNER-LEAF: a GroupInfo naming Bob's leaf passed for Alice's Commit"
+    );
+    assert!(p
+        .stage_tracked_commit(ROOM, &tracking, &commit, Some(&full(&group_info)))
+        .is_ok());
+}
+
+/// Alice commits an update path that replaces her signature key, and signs the GroupInfo after it with the new one: it
+/// is verified under the key her leaf holds after the Commit, and stages. Revert check: verify under her leaf's key
+/// from before the Commit, and her valid GroupInfo is refused.
+#[test]
+fn a_group_info_signed_with_the_committers_new_key_stages() {
+    let p = hub();
+    let mut room = room(&p);
+    seed(&p, &room, &example_peer());
+    let tracking = p.room_tracking(ROOM).unwrap().unwrap();
+    let renewed = Member::new("mimi://example.com/u/alice");
+    let bundle = room
+        .group
+        .self_update_with_new_signer(
+            &room.alice.provider,
+            &room.alice.signer,
+            NewSignerBundle {
+                signer: &renewed.signer,
+                credential_with_key: renewed.credential.clone(),
+            },
+            LeafNodeParameters::builder()
+                .with_credential_with_key(renewed.credential.clone())
+                .build(),
+        )
+        .unwrap();
+    let commit = bundle.commit().tls_serialize_detached().unwrap();
+    room.group
+        .merge_pending_commit(&room.alice.provider)
+        .unwrap();
+    let group_info = group_info_after(&room.group, &renewed);
+    assert!(
+        p.stage_tracked_commit(ROOM, &tracking, &commit, Some(&full(&group_info)))
+            .is_ok(),
+        "PLANT-GROUP-INFO-NEW-KEY: a GroupInfo signed with the committer's new key was refused"
+    );
 }
 
 /// Untracking drops the group and the record, so the next bundle can seed again.

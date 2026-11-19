@@ -79,9 +79,34 @@ pub struct StagedRoomCommit {
     pub(crate) joiner: Option<String>,
 }
 
+/// The committer's leaf after `staged`: a member's own leaf, which its Commit does not move, or the leaf an external
+/// Commit's joiner is added at, the leftmost one no member holds once the Commit's removals are made (RFC 9420 §12.4.1:
+/// "the leftmost blank leaf node in the new ratchet tree", the tree extended as §7.7 says when it has none; trimming
+/// blank leaves off its right does not change which one that is).
+fn committer_leaf_after(
+    group: &PublicGroup,
+    staged: &StagedCommit,
+    committer: Option<LeafNodeIndex>,
+) -> LeafNodeIndex {
+    if let Some(leaf) = committer {
+        return leaf;
+    }
+    let removed: Vec<LeafNodeIndex> = staged
+        .remove_proposals()
+        .map(|proposal| proposal.remove_proposal().removed())
+        .collect();
+    let held: std::collections::BTreeSet<u32> = group
+        .members()
+        .map(|member| member.index)
+        .filter(|leaf| !removed.contains(leaf))
+        .map(|leaf| leaf.u32())
+        .collect();
+    LeafNodeIndex::new((0..).find(|leaf| !held.contains(leaf)).unwrap_or(u32::MAX))
+}
+
 /// The key the committer of `staged` signs a GroupInfo with after it: its leaf in the Commit's update path when there is
-/// one (an external Commit's joiner always has one), else its leaf in the tree. A GroupInfo is verified under this key
-/// whatever leaf it names as its signer, so one another member signed does not verify.
+/// one (an external Commit's joiner always has one), else its leaf in the tree. A GroupInfo is verified under this key, so
+/// one another member signed does not verify, whatever leaf it names.
 fn committer_key(
     group: &PublicGroup,
     staged: &StagedCommit,
@@ -336,9 +361,12 @@ impl Provider {
             // GroupInfo rewritten on its way here cannot make a hub whose group has drifted match it.
             let info =
                 VerifiableGroupInfo::tls_deserialize_exact(group_info.payload.as_slice()).ok();
+            // It must also name the committer's leaf as its signer, or every joiner, which verifies it under the key of
+            // the leaf it names, would fail to.
             let signed = info.as_ref().is_some_and(|info| {
-                committer_key(&group, &staged, committer_leaf)
-                    .is_some_and(|key| info.verify_no_out(crypto.crypto(), &key).is_ok())
+                info.signer() == committer_leaf_after(&group, &staged, committer_leaf)
+                    && committer_key(&group, &staged, committer_leaf)
+                        .is_some_and(|key| info.verify_no_out(crypto.crypto(), &key).is_ok())
             });
             if !signed {
                 return Err(refused(
