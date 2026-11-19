@@ -1,0 +1,19 @@
+name: A conformance row or divergence is wrong
+description: docs/mimi/CONFORMANCE.md, DIVERGENCES.md or docs/reasons.toml says something the code does not do.
+title: "Claim: "
+labels: ["conformance"]
+body:
+  - type: input
+    id: row
+    attributes:
+      label: The row ID, divergence or reason
+      placeholder: "e.g. T2, DIV-16, or the reason id"
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: What the code does instead
+      description: A request and its answer, a test, or the lines of code.
+    validations:
+      required: true

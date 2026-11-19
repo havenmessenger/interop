@@ -1,0 +1,52 @@
+name: Something failed against a hub
+description: A request to mimi-hubd (ours at mimi.havenmessenger.com, or one you run) did not do what the drafts say it should.
+title: "Interop: "
+labels: ["interop"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not paste private keys, tokens, client certificates or anyone's messages. Request and response
+        bodies are fine when they hold test data only. A security problem goes to the address in SECURITY.md, not here.
+  - type: input
+    id: implementation
+    attributes:
+      label: Your implementation and its version or commit
+      placeholder: "e.g. mimid, and the commit you built"
+    validations:
+      required: true
+  - type: input
+    id: hub
+    attributes:
+      label: Which hub
+      description: Ours (mimi.havenmessenger.com), or the mimi-hubd revision you run.
+    validations:
+      required: true
+  - type: input
+    id: endpoint
+    attributes:
+      label: The endpoint
+      placeholder: "e.g. POST /mimi/pl/update/{roomId}"
+    validations:
+      required: true
+  - type: textarea
+    id: sent
+    attributes:
+      label: What you sent
+      description: The request, or a description of it. Hex or base64 for binary bodies.
+    validations:
+      required: true
+  - type: textarea
+    id: got
+    attributes:
+      label: What came back
+      description: The status, and the problem `type` when there is one (the reasons behind each are in docs/reasons.toml).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and where you read it
+      description: The draft or RFC, its revision and section.
+    validations:
+      required: true

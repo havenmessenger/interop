@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security problem privately
+    url: https://github.com/havenmessenger/interop/blob/main/SECURITY.md
+    about: By email, encrypted if it holds exploit detail. Please do not open a public issue for it.

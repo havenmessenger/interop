@@ -6,6 +6,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- Issue forms: something failed against a hub, a different reading of a draft, and a conformance row or divergence
+  that is wrong. Each asks for the implementation and revision, what was sent and what came back, and the section
+  read. Security reports stay private, by the address in `SECURITY.md`.
 - A script, `scripts/render_status_page.py`, renders a deployment's status page when the hub is deployed: the
   revision it runs and the one before, the changelog entries and commits between them, the drafts and per-section
   status from `docs/mimi/CONFORMANCE.md`, the divergences, the problem types, the deployment's own settings files, and

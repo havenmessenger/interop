@@ -1,0 +1,25 @@
+name: We read the draft differently
+description: This code follows one reading of a draft and yours differs.
+title: "Reading: "
+labels: ["spec-reading"]
+body:
+  - type: input
+    id: section
+    attributes:
+      label: The draft or RFC, its revision and section
+      placeholder: "e.g. draft-ietf-mimi-protocol-07 §5.5"
+    validations:
+      required: true
+  - type: textarea
+    id: ours
+    attributes:
+      label: What this code does
+      description: Link the file or the DIVERGENCES.md entry when you can.
+    validations:
+      required: true
+  - type: textarea
+    id: yours
+    attributes:
+      label: What you do, and why you read it that way
+    validations:
+      required: true
