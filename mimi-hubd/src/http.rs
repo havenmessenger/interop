@@ -222,20 +222,33 @@ async fn key_material_wire(
     Path(target_user): Path<String>,
     body: Bytes,
 ) -> Response {
-    use mimi_core::consent::KeyPackageAccess;
-    use mimi_core::protocol_wire::{
-        IdentifierUri, KeyMaterialRequest, KeyMaterialResponse, KeyMaterialUserCode,
-    };
-    let req = match KeyMaterialRequest::decode(&body) {
+    let req = match mimi_core::protocol_wire::KeyMaterialRequest::decode(&body) {
         Ok(r) => r,
         Err(_) => return crate::problem::MALFORMED_REQUEST.response(),
     };
+    match key_material_answer(&p, target_user, &req, body.to_vec()).await {
+        Ok(bytes) => (StatusCode::OK, bytes).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// The answer to a decoded keyMaterial request for `target_user` (the routing key), `body` being the request as
+/// received: the encoded `KeyMaterialResponse` for a `200`, or the problem to answer instead. The peer route and the
+/// client lane (`client_lane_relay.rs`, a room hosted here) both answer through it.
+pub(crate) async fn key_material_answer(
+    p: &SharedProvider,
+    target_user: String,
+    req: &mimi_core::protocol_wire::KeyMaterialRequest,
+    body: Vec<u8>,
+) -> Result<Vec<u8>, Response> {
+    use mimi_core::consent::KeyPackageAccess;
+    use mimi_core::protocol_wire::{IdentifierUri, KeyMaterialResponse, KeyMaterialUserCode};
     log_key_material_identity_claim(&req.requesting_user.0, req.requester_credential_identity());
     let now = now_unix();
     let room_uri = (!req.room_id.0.is_empty()).then_some(req.room_id.0.as_str());
     // A user of another provider, by the request's `targetUser`: forwarded to it, for a room this hub hosts
     // (`key_material_proxy`).
-    let route = lock(&p).key_material_route(&req.requesting_user.0, &req.target_user.0, room_uri);
+    let route = lock(p).key_material_route(&req.requesting_user.0, &req.target_user.0, room_uri);
     match route {
         crate::key_material_proxy::KeyMaterialRoute::Local => {}
         crate::key_material_proxy::KeyMaterialRoute::Refused(why) => {
@@ -244,34 +257,33 @@ async fn key_material_wire(
                 user_uri: IdentifierUri(req.target_user.0.clone()),
                 code: KeyMaterialUserCode::NoConsent,
             };
-            return match answer.encode() {
-                Ok(bytes) => (StatusCode::OK, bytes).into_response(),
-                Err(_) => crate::problem::INTERNAL_ERROR.response(),
-            };
+            return answer
+                .encode()
+                .map_err(|_| crate::problem::INTERNAL_ERROR.response());
         }
         crate::key_material_proxy::KeyMaterialRoute::Unavailable => {
             eprintln!(
                 "[mimi-hubd] keyMaterial: 502 (another provider's user, and no outbound client)"
             );
-            return crate::problem::UPSTREAM_FAILED.response();
+            return Err(crate::problem::UPSTREAM_FAILED.response());
         }
         crate::key_material_proxy::KeyMaterialRoute::Forward { domain, access } => {
             let forwarded = crate::key_material_proxy::forward_key_material(
                 &access,
                 &domain,
                 &req.target_user.0,
-                body.to_vec(),
+                body,
             )
             .await;
             let answer = forwarded.and_then(|bytes| {
-                let accepted = lock(&p).accepted_suites().to_vec();
+                let accepted = lock(p).accepted_suites().to_vec();
                 KeyMaterialResponse::decode(&bytes, &accepted)
                     .map(|decoded| (bytes, decoded))
                     .map_err(|error| format!("the answer does not decode: {error}"))
             });
             return match answer {
                 Ok((bytes, decoded)) => {
-                    match lock(&p).record_forwarded_key_material(&domain, &decoded, now) {
+                    match lock(p).record_forwarded_key_material(&domain, &decoded, now) {
                         Ok(recorded) => eprintln!(
                             "[mimi-hubd] keyMaterial: forwarded to {domain}; {recorded} KeyPackage(s) recorded for its Welcome"
                         ),
@@ -279,20 +291,26 @@ async fn key_material_wire(
                             "[mimi-hubd] keyMaterial: forwarded to {domain}; recording its KeyPackages failed: {error}"
                         ),
                     }
-                    (StatusCode::OK, bytes).into_response()
+                    Ok(bytes)
                 }
                 Err(why) => {
                     eprintln!(
                         "[mimi-hubd] keyMaterial: 502, forwarding to {domain} failed ({why})"
                     );
-                    crate::problem::UPSTREAM_FAILED.response()
+                    Err(crate::problem::UPSTREAM_FAILED.response())
                 }
             };
         }
     }
-    let gated = lock(&p).serve_key_material_for(
+    // The routing key names the user as the path gives it: a peer fills `{targetUser}` with the user's URI, and this
+    // hub keeps a user's KeyPackages under the name they were published for, so a URI of a user here is read as that
+    // name.
+    let stored_as = lock(p)
+        .local_name(&target_user)
+        .unwrap_or_else(|| target_user.clone());
+    let gated = lock(p).serve_key_material_for(
         &req.requesting_user.0,
-        &target_user,
+        &stored_as,
         &req.target_user.0,
         room_uri,
         now,
@@ -333,7 +351,7 @@ async fn key_material_wire(
             }
         }
         Err(_) => {
-            return crate::problem::INTERNAL_ERROR.response();
+            return Err(crate::problem::INTERNAL_ERROR.response());
         }
     };
     // The answer only: which user was asked for is a peer's choice and stays out of the line.
@@ -350,10 +368,9 @@ async fn key_material_wire(
             KeyMaterialResponse::Clients { .. } => "clients",
         }
     );
-    match outcome.encode() {
-        Ok(bytes) => (StatusCode::OK, bytes).into_response(),
-        Err(_) => crate::problem::INTERNAL_ERROR.response(),
-    }
+    outcome
+        .encode()
+        .map_err(|_| crate::problem::INTERNAL_ERROR.response())
 }
 
 /// Checks a `KeyMaterialRequest`'s self-signed `requesterCredential` against the `requestingUser`
@@ -1171,6 +1188,9 @@ mod consent_cancel_tests;
 #[path = "http_wire_tests.rs"]
 mod wire_tests;
 
+#[cfg(test)]
+#[path = "http_client_lane_relay_tests.rs"]
+mod client_lane_relay_tests;
 #[cfg(test)]
 #[path = "http_client_lane_rooms_tests.rs"]
 mod client_lane_rooms_tests;

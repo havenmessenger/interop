@@ -43,6 +43,11 @@ impl Provider {
         self
     }
 
+    /// The outbound client and directory cache, when this hub has one: what a request to another provider goes through.
+    pub fn peer_access(&self) -> Option<Arc<PeerAccess>> {
+        self.peer_access.clone()
+    }
+
     /// Where a keyMaterial request for `target_uri` from `requester_uri`, for `room_uri`, goes.
     pub fn key_material_route(
         &self,

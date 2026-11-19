@@ -31,6 +31,7 @@ pub mod delivery_public;
 pub mod external;
 pub mod gate;
 pub mod group_info_wire;
+pub mod key_material_signature;
 pub mod message_id;
 pub mod operational_parameters;
 pub mod participant_list;

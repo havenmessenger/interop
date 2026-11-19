@@ -27,6 +27,7 @@ pub mod admin;
 pub mod client_http;
 pub mod client_lane;
 pub mod client_lane_ops;
+pub mod client_lane_relay;
 pub mod client_lane_rooms;
 pub mod enroll;
 pub mod external_join;

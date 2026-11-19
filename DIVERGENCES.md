@@ -668,6 +668,14 @@ route or changes one: rooms, Commits, proposals and application messages it carr
 the provider path, with the user as the requester. A peer cannot reach it, and the operator's routes stay on their own
 loopback listener.
 
+For a room on another hub, the lane sends the user's message, update or keyMaterial request to that hub as this
+provider (protocol-07 §3.4, §5.2). The hosting hub judges it as it judges any peer's request, against the room it
+holds; it can tell that the request comes from a user of this provider, not which one. This hub vouches for that: a
+relayed message names the lane user as its sender, and a keyMaterial request must name the lane user as requester, under
+the lane user's credential, with a signature that verifies. A relayed Commit or leave carries the MLS signatures that
+bind it to its sender's leaf, which the hosting hub and the room's members check; this hub holds neither the room's list
+nor its tree (DIV-5), so it does not check what a relayed update changes.
+
 ## DIV-21 - several participant-list updates in one Commit: the order their additions are appended in
 
 protocol-07 §7.5 says every `ParticipantListUpdate` in a Commit indexes the list as it stood before the Commit ("This

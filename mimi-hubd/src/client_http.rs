@@ -60,6 +60,7 @@ struct LaneState {
     auth: Arc<ClientLaneAuth>,
     cap: Arc<UserCap>,
     rooms: Arc<LaneRoomProfile>,
+    key_material: Arc<crate::client_lane_relay::KeyMaterialCap>,
 }
 
 /// The lane's router, with its gate in front of every route. `rooms` is what a room the lane creates starts with.
@@ -73,6 +74,7 @@ pub fn build_client_router(
         auth,
         cap: Arc::new(UserCap::default()),
         rooms: Arc::new(rooms),
+        key_material: Arc::new(crate::client_lane_relay::KeyMaterialCap::default()),
     };
     Router::new()
         .route("/mimi/client/v1/publishKeyPackages", post(publish))
@@ -83,6 +85,7 @@ pub fn build_client_router(
         .route("/mimi/client/v1/createRoom", post(create_room))
         .route("/mimi/client/v1/submitMessage", post(submit_message))
         .route("/mimi/client/v1/update", post(update))
+        .route("/mimi/client/v1/keyMaterial", post(key_material))
         .layer(middleware::from_fn_with_state(state.clone(), gate))
         .with_state(state)
 }
@@ -409,8 +412,8 @@ struct SubmitRequest {
 #[derive(Serialize)]
 struct Empty {}
 
-/// Send an application message into a room hosted here, as the user: the user must be an active participant whose
-/// role may send.
+/// Send an application message into a room as the user. In a room hosted here the user must be an active participant
+/// whose role may send; a room on another hub has it sent there (`client_lane_relay.rs`).
 async fn submit_message(
     State(state): State<LaneState>,
     Extension(user): Extension<LaneUser>,
@@ -422,6 +425,9 @@ async fn submit_message(
     let Ok(message) = STANDARD.decode(&request.message) else {
         return crate::problem::MALFORMED_REQUEST.response();
     };
+    if let Some(hub) = state.other_hub(&request.room) {
+        return relay_submit(&state, &hub, &request.room, &user.user, message).await;
+    }
     match crate::http::lock(&state.provider).accept_application_message(
         &request.room,
         &user.user,
@@ -461,21 +467,22 @@ enum UpdateAnswer {
     },
 }
 
-/// Apply a room update as the user, for a room hosted here: the same checks as the wire lane's `update`, with the
-/// user as the requester (see `requester.rs`).
+/// Apply a room update as the user. For a room hosted here: the same checks as the wire lane's `update`, with the user
+/// as the requester (see `requester.rs`); a room on another hub has it sent there (`client_lane_relay.rs`).
 async fn update(
     State(state): State<LaneState>,
     Extension(user): Extension<LaneUser>,
     body: Bytes,
 ) -> Response {
-    use mimi_core::protocol_wire::UpdateRoomResponse;
-
     let Some(request) = parse::<UpdateRequest>(&body) else {
         return crate::problem::MALFORMED_REQUEST.response();
     };
     let Ok(update) = STANDARD.decode(&request.update) else {
         return crate::problem::MALFORMED_REQUEST.response();
     };
+    if let Some(hub) = state.other_hub(&request.room) {
+        return relay_update(&state, &hub, &request.room, update).await;
+    }
     let provider = crate::http::lock(&state.provider);
     let result = provider.apply_update_request(
         &request.room,
@@ -488,8 +495,18 @@ async fn update(
     };
     let epoch = || provider.store.room_epoch(&request.room).ok().flatten();
     crate::http::log_update_answer(&answer, epoch);
+    let held = epoch();
+    update_answer_json(answer, held)
+}
+
+/// The lane's JSON for a wire `update` answer; `epoch` is the room's epoch as this hub holds it, when it does.
+fn update_answer_json(
+    answer: mimi_core::protocol_wire::UpdateRoomResponse,
+    epoch: Option<u64>,
+) -> Response {
+    use mimi_core::protocol_wire::UpdateRoomResponse;
     Json(match answer {
-        UpdateRoomResponse::Success { .. } => UpdateAnswer::Success { epoch: epoch() },
+        UpdateRoomResponse::Success { .. } => UpdateAnswer::Success { epoch },
         UpdateRoomResponse::WrongEpoch { current_epoch, .. } => {
             UpdateAnswer::WrongEpoch { current_epoch }
         }
@@ -503,4 +520,154 @@ async fn update(
         },
     })
     .into_response()
+}
+
+impl LaneState {
+    /// The domain of the room's hub when it is another provider's.
+    fn other_hub(&self, room: &str) -> Option<String> {
+        let provider = crate::http::lock(&self.provider);
+        crate::client_lane_relay::other_hub(room, provider.domain())
+    }
+
+    fn peer_access(&self) -> Option<Arc<crate::peer_directory::PeerAccess>> {
+        crate::http::lock(&self.provider).peer_access()
+    }
+}
+
+/// Send the user's application message into a room on `hub`, as this provider, naming the user as its sender.
+async fn relay_submit(
+    state: &LaneState,
+    hub: &str,
+    room: &str,
+    user: &str,
+    message: Vec<u8>,
+) -> Response {
+    use mimi_core::protocol_wire::{
+        IdentifierUri, SubmitMessageRequest, SubmitMessageResponse, PROTOCOL_MLS10,
+    };
+    let Some(access) = state.peer_access() else {
+        return crate::problem::UPSTREAM_FAILED.response();
+    };
+    let Ok(body) = (SubmitMessageRequest {
+        protocol: PROTOCOL_MLS10,
+        app_message: message,
+        sending_uri: IdentifierUri(user.to_string()),
+    })
+    .encode() else {
+        return crate::problem::MALFORMED_REQUEST.response();
+    };
+    let answer =
+        crate::client_lane_relay::post_to_peer(&access, hub, "submitMessage", "roomId", room, body)
+            .await;
+    match answer {
+        Ok((200, bytes)) => match SubmitMessageResponse::decode(&bytes) {
+            Ok(SubmitMessageResponse::Accepted { .. }) => Json(Empty {}).into_response(),
+            Ok(_) => crate::problem::NOT_PERMITTED.response(),
+            Err(_) => crate::problem::UPSTREAM_FAILED.response(),
+        },
+        Ok((status, _)) => {
+            eprintln!("[mimi-hubd] client lane submitMessage: the room's hub answered {status}");
+            crate::problem::UPSTREAM_FAILED.response()
+        }
+        Err(why) => {
+            eprintln!(
+                "[mimi-hubd] client lane submitMessage: the room's hub was not reached ({why})"
+            );
+            crate::problem::UPSTREAM_FAILED.response()
+        }
+    }
+}
+
+/// Send the user's update for a room on `hub` there, as this provider, and answer what it answers.
+async fn relay_update(state: &LaneState, hub: &str, room: &str, update: Vec<u8>) -> Response {
+    use mimi_core::protocol_wire::UpdateRoomResponse;
+    let Some(access) = state.peer_access() else {
+        return crate::problem::UPSTREAM_FAILED.response();
+    };
+    let answer =
+        crate::client_lane_relay::post_to_peer(&access, hub, "update", "roomId", room, update)
+            .await;
+    match answer {
+        Ok((200, bytes)) => match UpdateRoomResponse::decode(&bytes) {
+            Ok(answer) => update_answer_json(answer, None),
+            Err(_) => crate::problem::UPSTREAM_FAILED.response(),
+        },
+        Ok((status, _)) => {
+            eprintln!("[mimi-hubd] client lane update: the room's hub answered {status}");
+            crate::problem::UPSTREAM_FAILED.response()
+        }
+        Err(why) => {
+            eprintln!("[mimi-hubd] client lane update: the room's hub was not reached ({why})");
+            crate::problem::UPSTREAM_FAILED.response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeyMaterialLaneRequest {
+    /// The client's `KeyMaterialRequest`, signed with its MLS key.
+    request: String,
+}
+
+#[derive(Serialize)]
+struct KeyMaterialLaneAnswer {
+    /// The `KeyMaterialResponse`, as the room's hub answered it.
+    response: String,
+}
+
+/// KeyPackages for the user to add someone to a room, fetched through the room's hub (protocol-07 §5.2): answered
+/// here for a room hosted here, sent to the room's hub otherwise (`client_lane_relay.rs`).
+async fn key_material(
+    State(state): State<LaneState>,
+    Extension(user): Extension<LaneUser>,
+    body: Bytes,
+) -> Response {
+    use crate::client_lane_relay::{check_key_material_request, KeyMaterialRefusal};
+    let Some(request) = parse::<KeyMaterialLaneRequest>(&body) else {
+        return crate::problem::MALFORMED_REQUEST.response();
+    };
+    let Ok(bytes) = STANDARD.decode(&request.request) else {
+        return crate::problem::MALFORMED_REQUEST.response();
+    };
+    let Ok(decoded) = mimi_core::protocol_wire::KeyMaterialRequest::decode(&bytes) else {
+        return crate::problem::MALFORMED_REQUEST.response();
+    };
+    match check_key_material_request(&decoded, &user.user) {
+        Ok(()) => {}
+        Err(KeyMaterialRefusal::NotTheUser) => return crate::problem::NOT_PERMITTED.response(),
+        Err(KeyMaterialRefusal::NoRoom) => return crate::problem::MALFORMED_REQUEST.response(),
+    }
+    if !state
+        .key_material
+        .admit(&user.user, &decoded.target_user.0, now_seconds())
+    {
+        return crate::problem::CLIENT_RATE_LIMITED.response();
+    }
+    let room = decoded.room_id.0.clone();
+    let target = decoded.target_user.0.clone();
+    let answer = match state.other_hub(&room) {
+        None => crate::http::key_material_answer(&state.provider, target, &decoded, bytes).await,
+        Some(hub) => {
+            let Some(access) = state.peer_access() else {
+                return crate::problem::UPSTREAM_FAILED.response();
+            };
+            match crate::key_material_proxy::forward_key_material(&access, &hub, &target, bytes)
+                .await
+            {
+                Ok(bytes) => Ok(bytes),
+                Err(why) => {
+                    eprintln!("[mimi-hubd] client lane keyMaterial: the room's hub was not reached ({why})");
+                    Err(crate::problem::UPSTREAM_FAILED.response())
+                }
+            }
+        }
+    };
+    match answer {
+        Ok(bytes) => Json(KeyMaterialLaneAnswer {
+            response: STANDARD.encode(bytes),
+        })
+        .into_response(),
+        Err(response) => response,
+    }
 }

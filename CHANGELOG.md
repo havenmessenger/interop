@@ -6,6 +6,13 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimi-hubd`: the client lane serves `keyMaterial` (a client's signed `KeyMaterialRequest`, checked to be the user's
+  own) and acts on rooms on another hub: `submitMessage`, `update` and `keyMaterial` for such a room are sent to the
+  room's hub as this provider, as protocol-07 §3.4 and §5.2 have a member provider do. keyMaterial on the lane is
+  limited per user and per user and target. On the provider path, a keyMaterial request whose `{targetUser}` is the URI
+  of a user here (as this hub's own forwarding sends it) now finds the KeyPackages published for that user.
+- `mimi-core`: `KeyMaterialRequest::sign` and `signature_verifies`, for its §5.2 signature over
+  `KeyMaterialRequestTBS`.
 - `mimi-hubd`: a user of this provider has one KeyPackage pool, whether published for or claimed by name or by URI;
   a store that kept some under the URI joins them to the name when it opens.
 - `mimi-hubd`: `updateConsent` is recorded only from the provider of its target user and for a requester of this
