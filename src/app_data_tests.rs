@@ -192,3 +192,25 @@ fn another_components_last_update_is_its_value() {
         Err(AppDataError::Shape(OTHER))
     ));
 }
+
+/// room-policy-04's join_links component (suggested 0x002A) takes a `JoinLinksUpdate` of removals and additions, not
+/// its new value, and this crate does not read it: an update to it, or to any component this crate does not know, is
+/// refused rather than stored as the value. Revert check: take any component's last update as its value, and the
+/// join-links update is stored.
+#[test]
+fn a_component_this_crate_does_not_read_is_refused() {
+    const JOIN_LINKS: u16 = 0x002A;
+    for component in [JOIN_LINKS, 0x0026, 0xF000] {
+        assert!(
+            matches!(
+                resolve_component(component, None, &[ComponentChange::Update(b"diff")]),
+                Err(AppDataError::Unknown(refused)) if refused == component
+            ),
+            "PLANT-MIMI-UNKNOWN-COMPONENT: component {component:#06x}"
+        );
+        assert!(matches!(
+            resolve_component(component, Some(b"old"), &[ComponentChange::Remove]),
+            Err(AppDataError::Unknown(_))
+        ));
+    }
+}

@@ -112,6 +112,15 @@ divergence = ""
 reason = "Two participant-list updates in one Commit, which all index the list before it, add, remove or change the role of the same user."
 
 [[reason]]
+id = "app-data-component-not-read"
+surfaces_as = "update answer invalidProposal; reported by a client in the room"
+spec = "local"
+section = ""
+quote = ""
+divergence = "DIV-15"
+reason = "A Commit changes an app data component this implementation does not read, such as join_links, whose update is a list of changes rather than its new value, so it is refused rather than stored as the value."
+
+[[reason]]
 id = "roles-change-with-participant-change"
 surfaces_as = "update answer notAllowed; reported by a client in the room"
 spec = "draft-ietf-mimi-room-policy-04"

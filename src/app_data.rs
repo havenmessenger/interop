@@ -3,8 +3,11 @@
 //!
 //! The extensions draft hands an application every update to one component in the Commit's order and lets the
 //! component say what they mean together. For the participant list, protocol-07 §7.5 says every update indexes the
-//! list as it stood before the Commit ([`crate::participant_list::apply_updates`]). For any other component this
-//! crate reads, an update carries the component's new value, so the last one is the value.
+//! list as it stood before the Commit ([`crate::participant_list::apply_updates`]). For the room metadata, the
+//! operational parameters, the roles list and the base room policy, an update has the same format as the component's
+//! data (protocol-07 §7.6 `RoomMetaUpdate`; room-policy-04 `OperationalParametersUpdate`, `RoleUpdate`,
+//! `BaseRoomUpdate`), so the last one is the value. Any other component is refused until this crate reads it: an update
+//! to one is not always its new value (room-policy-04 `JoinLinksUpdate` is a list of removals and additions).
 
 use crate::participant_list::{
     apply_updates, decode_participant_list_data, decode_participant_list_update,
@@ -41,7 +44,18 @@ pub enum AppDataError {
     /// The Commit removes the component and changes it too, or carries no change for it.
     #[error("component {0:#06x}: a removal is a component's only change")]
     Shape(u16),
+    /// A component this crate does not read.
+    #[error("component {0:#06x} is not one this implementation reads")]
+    Unknown(u16),
 }
+
+/// The components whose update is their new value.
+const WHOLE_VALUE_COMPONENTS: [u16; 4] = [
+    crate::room_metadata::ROOM_METADATA_COMPONENT_ID,
+    crate::operational_parameters::OPERATIONAL_POLICY_COMPONENT_ID,
+    crate::room_policy_wire::ROLES_LIST_COMPONENT_ID,
+    crate::room_policy_wire::BASE_ROOM_POLICY_COMPONENT_ID,
+];
 
 /// The value `component` has after a Commit's `changes` to it, in the Commit's order, given its value before the
 /// Commit: none when the Commit removes it.
@@ -57,6 +71,9 @@ pub fn resolve_component(
         return Err(AppDataError::Shape(component));
     }
     if component != PARTICIPANT_LIST_COMPONENT {
+        if !WHOLE_VALUE_COMPONENTS.contains(&component) {
+            return Err(AppDataError::Unknown(component));
+        }
         return Ok(match changes.last() {
             Some(ComponentChange::Update(value)) => Some(value.to_vec()),
             _ => None,

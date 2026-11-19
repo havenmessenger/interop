@@ -72,6 +72,22 @@ pub struct StagedRoomCommit {
     pub(crate) joiner: Option<String>,
 }
 
+/// The refusal for a Commit whose AppDataUpdates the shared resolver refuses.
+fn app_data_refusal(error: AppDataError) -> UpdateRefusal {
+    const DOES_NOT_APPLY: &str = "the participant list update does not apply to the room's list";
+    const NOT_READ: &str = "the Commit changes an app data component this hub does not read";
+    match error {
+        AppDataError::Malformed(_) => {
+            UpdateRefusal::Invalid("the participant list update is malformed")
+        }
+        AppDataError::StoredList(_) => UpdateRefusal::Store,
+        AppDataError::DoesNotApply(_) | AppDataError::ListRemoved | AppDataError::Shape(_) => {
+            UpdateRefusal::Invalid(DOES_NOT_APPLY)
+        }
+        AppDataError::Unknown(_) => UpdateRefusal::Invalid(NOT_READ),
+    }
+}
+
 /// One component of a GroupContext's app data dictionary.
 fn app_data(context: &openmls::group::GroupContext, component: u16) -> Option<&[u8]> {
     context
@@ -254,19 +270,9 @@ impl Provider {
                 }
                 let mut updater = group.app_data_dictionary_updater();
                 for (component, changes) in &by_component {
+                    let before = updater.old_value(*component);
                     let value =
-                        resolve_component(*component, updater.old_value(*component), changes)
-                            .map_err(|error| match error {
-                                AppDataError::Malformed(_) => UpdateRefusal::Invalid(
-                                    "the participant list update is malformed",
-                                ),
-                                AppDataError::StoredList(_) => UpdateRefusal::Store,
-                                AppDataError::DoesNotApply(_)
-                                | AppDataError::ListRemoved
-                                | AppDataError::Shape(_) => UpdateRefusal::Invalid(
-                                    "the participant list update does not apply to the room's list",
-                                ),
-                            })?;
+                        resolve_component(*component, before, changes).map_err(app_data_refusal)?;
                     match value {
                         Some(value) => updater.set(openmls::component::ComponentData::from_parts(
                             *component,
