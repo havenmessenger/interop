@@ -398,6 +398,32 @@ fn a_group_info_signed_with_the_committers_new_key_stages() {
     );
 }
 
+/// Bob, at leaf 1, rejoins by an external Commit with his own key, so openmls removes his old leaf in it, and puts him
+/// back at that freed leaf: the leftmost blank once the Commit's removals are made, not the next leaf after the tree.
+/// His GroupInfo names that leaf, and it stages. Revert check: compute the joiner's leaf before the removals, and his
+/// GroupInfo is refused.
+#[test]
+fn a_rejoining_members_group_info_names_the_leaf_it_freed() {
+    let p = hub();
+    let room = room(&p);
+    seed(&p, &room, &example_peer());
+    let tracking = p.room_tracking(ROOM).unwrap().unwrap();
+    let tree: RatchetTreeIn = RatchetTreeIn::tls_deserialize_exact(room.tree.as_slice()).unwrap();
+    let (commit, bob_group) =
+        crate::mls_fixtures::external_commit(&room.group_info, tree, &room.bob);
+    assert_eq!(
+        bob_group.own_leaf_index(),
+        LeafNodeIndex::new(1),
+        "openmls puts the rejoining member at the leaf its Commit freed"
+    );
+    let group_info = group_info_after(&bob_group, &room.bob);
+    assert!(
+        p.stage_tracked_commit(ROOM, &tracking, &commit, Some(&full(&group_info)))
+            .is_ok(),
+        "PLANT-GROUP-INFO-REJOIN-LEAF: a rejoining member's GroupInfo, naming the leaf it freed, was refused"
+    );
+}
+
 /// Untracking drops the group and the record, so the next bundle can seed again.
 #[test]
 fn untracking_drops_the_tree() {
