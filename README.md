@@ -45,9 +45,9 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 
 ## See it run
 - [mimi.havenmessenger.com](https://mimi.havenmessenger.com) - Haven's running hub, built from
-  this repository. The directory is public; the protocol endpoints need a client certificate. No
-  other provider has connected to it yet. To test against it, or to report what failed, open an issue: the forms
-  ask for what a fix needs. Security problems go to the address in [`SECURITY.md`](SECURITY.md).
+  this repository. The directory is public; the protocol endpoints need provider authentication, a client
+  certificate or a DNS-key request signature. To report what failed against it, open an issue: the forms ask for
+  what a fix needs. Security problems go to the address in [`SECURITY.md`](SECURITY.md).
 - [`mimi-hubd/README.md`](mimi-hubd/README.md) - quickstart for the reference hub daemon: mTLS
   server, a live directory endpoint, and both the JSON and TLS-PL wire lanes.
 - [`docs/vc-01-vector-report.md`](docs/vc-01-vector-report.md) - a cross-implementation test
