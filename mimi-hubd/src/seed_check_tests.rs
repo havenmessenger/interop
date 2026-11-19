@@ -142,6 +142,17 @@ fn a_creator_raising_its_own_role_is_refused() {
     );
 }
 
+/// A group carrying the profile but no participant list, for a room whose hub lists its creator, is refused: the hub's
+/// table and the group would disagree from then on. Revert check: let a seed with no list through and it seeds.
+#[test]
+fn a_group_without_a_participant_list_is_refused() {
+    let profile = LaneRoomProfile::neutral();
+    assert!(
+        matches!(check(&profile, &profile.components()), Err(UpdateRefusal::Policy(why)) if why.contains("participants or roles")),
+        "PLANT-SEED-NEEDS-LIST: a seed without the room's participant list is refused"
+    );
+}
+
 /// createRoom's components are the profile's: they decode back to its room policy and its external-Commit setting.
 #[test]
 fn the_profiles_components_decode_to_the_profile() {

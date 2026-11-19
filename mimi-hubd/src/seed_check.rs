@@ -10,7 +10,7 @@
 //! So before such a Commit is accepted, the GroupInfo's GroupContext must hold exactly what the hub will hold after
 //! the Commit: the room policy (roles_list and base policy) and the operational policy, as the hub holds them or as
 //! this Commit changes them by value, and the participant list as the hub's list after this Commit's own
-//! participant-list updates. Anything else is refused and nothing changes. A room the hub holds no policy for seeds as
+//! participant-list updates (a room with participants needs one). Anything else is refused and nothing changes. A room the hub holds no policy for seeds as
 //! before. The GroupInfo's signature is checked when the seed is made; this check only refuses.
 
 use mimi_core::commit_wire::DecodedCommit;
@@ -128,12 +128,17 @@ impl Provider {
             }
         }
 
-        if let Some(list) = app_data(context, crate::room_tree::PARTICIPANT_LIST_COMPONENT) {
+        let rows = self
+            .store
+            .list_participant_rows(room_uri)
+            .map_err(|_| UpdateRefusal::Store)?;
+        let list = app_data(context, crate::room_tree::PARTICIPANT_LIST_COMPONENT);
+        // A room with participants keeps a list: a group with none would leave the hub's table and the group apart.
+        if list.is_none() && !rows.is_empty() {
+            return Err(LIST_DIFFERS);
+        }
+        if let Some(list) = list {
             let got = decode_participant_list_data(list).map_err(|_| LIST_DIFFERS)?;
-            let rows = self
-                .store
-                .list_participant_rows(room_uri)
-                .map_err(|_| UpdateRefusal::Store)?;
             let before = ParticipantListData {
                 participants: rows
                     .iter()
