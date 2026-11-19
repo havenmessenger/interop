@@ -1297,6 +1297,15 @@ mod tests {
         (build_router(p.clone()), p)
     }
 
+    /// As [`app`], for a hub that applies changes to rooms whose tree it does not keep (`untracked_rooms = "accept"`).
+    /// The tests of what a change does to a room send hand-built Commits that no tree could take, so they use it; what
+    /// a hub on the default refuses is in `hosted_untracked_tests.rs`.
+    pub(super) fn app_accepting_untracked_rooms() -> (Router, SharedProvider) {
+        let (router, p) = app();
+        p.lock().unwrap().policy.untracked_rooms = crate::policy::UntrackedRooms::Accept;
+        (router, p)
+    }
+
     #[test]
     fn key_material_identity_claim_matches_when_credential_equals_requesting_user() {
         assert!(log_key_material_identity_claim(
@@ -2314,7 +2323,7 @@ mod tests {
             MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE,
         };
 
-        let (router, p) = app();
+        let (router, p) = app_accepting_untracked_rooms();
         let room = "mimi://havenmessenger.com/r/x";
         p.lock()
             .unwrap()

@@ -14,6 +14,10 @@
 //! # An external Commit to a room whose operational policy says nothing (no mls_operational_policy component):
 //! # "allow" (default, as MLS: subject to who may join) or "deny".
 //! external_commit_when_unset = "allow"
+//! # A room hosted here whose ratchet tree the hub does not keep: "refuse" (default) takes its first Commit, and any
+//! # participant-list or room-policy change to it, only with a bundle that gives the hub the tree; "accept" applies
+//! # changes the hub cannot authorize, trusting the members to have checked them.
+//! untracked_rooms = "refuse"
 //! ```
 //!
 //! A named file the hub cannot read, a key it does not know, an empty suite list or a suite the crypto provider does not
@@ -45,6 +49,19 @@ pub enum ExternalCommitWhenUnset {
     Deny,
 }
 
+/// What a room hosted here whose ratchet tree the hub does not keep meets (`hosted_untracked.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UntrackedRooms {
+    /// The hub refuses what it cannot authorize: the room's first Commit, and a participant-list or room-policy change,
+    /// need a bundle that gives the hub the tree (protocol-07 §9: the hub enforces the room's policy).
+    #[default]
+    Refuse,
+    /// The hub applies changes it cannot authorize, trusting the members to have checked them (RFC 9420's delivery
+    /// service is not required to), until a bundle gives it the tree.
+    Accept,
+}
+
 /// The deployment's choices; [`Default`] is the drafts' behaviour.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -55,6 +72,7 @@ pub struct HubPolicy {
     /// Refuse a signed keyMaterial request with no `nonce`: a replayed one would take another KeyPackage.
     pub require_nonce_on_key_material: bool,
     pub external_commit_when_unset: ExternalCommitWhenUnset,
+    pub untracked_rooms: UntrackedRooms,
 }
 
 impl Default for HubPolicy {
@@ -64,6 +82,7 @@ impl Default for HubPolicy {
             identifier_discovery: Discovery::default(),
             require_nonce_on_key_material: false,
             external_commit_when_unset: ExternalCommitWhenUnset::default(),
+            untracked_rooms: UntrackedRooms::default(),
         }
     }
 }
@@ -110,12 +129,16 @@ impl HubPolicy {
             Discovery::Enrolled => "enrolled",
         };
         format!(
-            "mls_ciphersuites={} identifier_discovery={discovery} require_nonce_on_key_material={} external_commit_when_unset={}",
+            "mls_ciphersuites={} identifier_discovery={discovery} require_nonce_on_key_material={} external_commit_when_unset={} untracked_rooms={}",
             hex_list(&self.mls_ciphersuites),
             self.require_nonce_on_key_material,
             match self.external_commit_when_unset {
                 ExternalCommitWhenUnset::Allow => "allow",
                 ExternalCommitWhenUnset::Deny => "deny",
+            },
+            match self.untracked_rooms {
+                UntrackedRooms::Refuse => "refuse",
+                UntrackedRooms::Accept => "accept",
             }
         )
     }

@@ -131,6 +131,8 @@ async fn a_participant_sends_and_a_non_participant_is_refused() {
 #[tokio::test]
 async fn an_update_from_the_lane_applies_and_answers_like_the_wire() {
     let l = lane("update");
+    // Alice's Commits here are hand-built: no tree could take them.
+    l.provider.lock().unwrap().policy.untracked_rooms = crate::policy::UntrackedRooms::Accept;
     let room = alices_room(&l).await;
     let commit = bundle_of(commit_of(0, &[by_value_change(&list_change(&[BOB], &[]))]));
     let update = |bytes: &[u8]| {
@@ -169,6 +171,8 @@ async fn an_update_from_the_lane_applies_and_answers_like_the_wire() {
 #[tokio::test]
 async fn a_leave_on_the_lane_is_its_senders_own() {
     let l = lane("leave");
+    // Alice's Commits here are hand-built: no tree could take them.
+    l.provider.lock().unwrap().policy.untracked_rooms = crate::policy::UntrackedRooms::Accept;
     let room = alices_room(&l).await;
     let update = |bytes: &[u8]| {
         format!(

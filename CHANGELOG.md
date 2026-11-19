@@ -6,6 +6,16 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimi-hubd`: a room hosted here that the hub keeps no ratchet tree for no longer takes changes the hub cannot
+  authorize. Its first Commit, and any participant-list or room-policy change to it, is taken only with a bundle
+  carrying a Full GroupInfo and the full ratchet tree, which seed the tree; otherwise it is refused (`notAllowed`, saying
+  what is needed). A seed such a Commit needs is checked before anything changes, and the Commit's changes are
+  authorized for its committer, the GroupInfo's signer, which must be the member that sent it. Before, such a room
+  applied every change with no check of who made it. The policy's new `untracked_rooms` setting keeps that behaviour
+  as `"accept"`; the default is `"refuse"`. DIV-10 has the rule.
+- `mimi-hubd`: a room created by another provider's client could not be seeded: the group lists its creator from its
+  creation, which no Commit carries, so the hub's list and the group's never matched and the Commit carrying the tree
+  was refused. The list before a new room's first Commit is now its creator.
 - `mimi-hubd`: `keyMaterial` on the provider path is taken only from a peer whose proof authenticates the requester's
   provider, or the provider hosting the room the request names (the room's hub, protocol-07 §5.2); otherwise `403
   not-permitted`. Before, any peer could name any requester, and a request passed the consent gate for any requester

@@ -24,6 +24,7 @@ fn each_field_is_read() {
         identifier_discovery = "enrolled"
         require_nonce_on_key_material = true
         external_commit_when_unset = "deny"
+        untracked_rooms = "accept"
         "#,
     )
     .unwrap();
@@ -32,8 +33,16 @@ fn each_field_is_read() {
     assert_eq!(policy.mls_ciphersuites, vec![0x0001]);
     assert_eq!(policy.identifier_discovery, Discovery::Enrolled);
     assert_eq!(
+        policy.untracked_rooms,
+        crate::policy::UntrackedRooms::Accept
+    );
+    assert_eq!(
+        HubPolicy::default().untracked_rooms,
+        crate::policy::UntrackedRooms::Refuse
+    );
+    assert_eq!(
         policy.describe(),
-        "mls_ciphersuites=0x0001 identifier_discovery=enrolled require_nonce_on_key_material=true external_commit_when_unset=deny"
+        "mls_ciphersuites=0x0001 identifier_discovery=enrolled require_nonce_on_key_material=true external_commit_when_unset=deny untracked_rooms=accept"
     );
 }
 

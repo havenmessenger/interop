@@ -91,6 +91,8 @@ async fn deliver_outbox(a: &Lane, b_peer: &Router) -> (usize, usize) {
 #[tokio::test]
 async fn a_user_of_another_hub_is_welcomed_and_reads_the_room_through_their_lane() {
     let a = lane_at("two-hubs-a", HUB_A, LaneRoomProfile::neutral());
+    // The room's Commits here are hand-built: no tree could take them.
+    a.provider.lock().unwrap().policy.untracked_rooms = crate::policy::UntrackedRooms::Accept;
     let b = lane_at("two-hubs-b", HUB_B, LaneRoomProfile::neutral());
     let b_peer = crate::http::build_router(b.provider.clone());
 

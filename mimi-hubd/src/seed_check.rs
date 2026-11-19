@@ -11,7 +11,8 @@
 //! the Commit: the room policy (roles_list and base policy) and the operational policy, as the hub holds them or as
 //! this Commit changes them by value, and the participant list as the hub's list after this Commit's own
 //! participant-list updates (a room with participants needs one). Anything else is refused and nothing changes. A room the hub holds no policy for seeds as
-//! before. The GroupInfo's signature is checked when the seed is made; this check only refuses.
+//! before. A room's creator is in its group's list from its creation, so a room the hub lists no one for before its
+//! first Commit has the creator alone before it. The GroupInfo's signature is checked when the seed is made; this check only refuses.
 
 use mimi_core::commit_wire::DecodedCommit;
 use mimi_core::participant_list::{
@@ -43,13 +44,17 @@ const LIST_DIFFERS: UpdateRefusal = UpdateRefusal::Policy(
 
 impl Provider {
     /// Refuse a seeding Commit whose GroupInfo's GroupContext differs from what the hub holds for the room after it.
-    /// `group_info` and `ratchet_tree` are the Commit's bundle; a bundle that would not seed is not checked.
+    /// `group_info` and `ratchet_tree` are the Commit's bundle; a bundle that would not seed is not checked. `creator` is
+    /// the user that created the group, for a room whose first Commit this is and that the hub lists no one for: the
+    /// group lists its creator from its creation, which no Commit carries, so the list before the Commit is the creator
+    /// alone, in whatever role the group gives it.
     pub(crate) fn check_seed_keeps_room_state(
         &self,
         room_uri: &str,
         commit: &DecodedCommit,
         group_info: &GroupInfoOption,
         ratchet_tree: &[u8],
+        creator: Option<&str>,
     ) -> Result<(), UpdateRefusal> {
         if group_info.representation != GroupInfoRepresentation::Full
             || full_ratchet_tree(ratchet_tree).is_none()
@@ -128,10 +133,17 @@ impl Provider {
             }
         }
 
-        let rows = self
+        let mut rows = self
             .store
             .list_participant_rows(room_uri)
             .map_err(|_| UpdateRefusal::Store)?;
+        if let (Some(creator), true) = (creator, rows.is_empty()) {
+            rows.push(crate::store::ParticipantRow {
+                member_uri: mimi_core::uri::canonical(creator),
+                authority: String::new(),
+                role_index: None,
+            });
+        }
         let list = app_data(context, crate::room_tree::PARTICIPANT_LIST_COMPONENT);
         // A room with participants keeps a list: a group with none would leave the hub's table and the group apart.
         if list.is_none() && !rows.is_empty() {

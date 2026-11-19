@@ -7,7 +7,7 @@
 //!
 //! A room is tracked from the first Commit whose bundle carries a Full GroupInfo and a full ratchet tree
 //! (ratchet-tree-options `full`), after that Commit is otherwise accepted. Protocol-07 §5.3 lets the client choose what
-//! the bundle carries, so a room stays untracked until such a bundle arrives, and behaves as before meanwhile. Seeding is
+//! the bundle carries; what a room hosted here meets until such a bundle arrives is `hosted_untracked.rs`. Seeding is
 //! trust on first use, narrowed: the GroupInfo must be for the epoch after the Commit, signed by a member of the tree it
 //! comes with, that member's provider must be the peer that sent the bundle, and every participant the hub lists for the
 //! room must be a member of the tree. The hub records the group's id and which provider seeded the room.
@@ -80,6 +80,37 @@ pub struct StagedRoomCommit {
     pub(crate) had_roles_list: bool,
     /// For an external Commit, the joiner's user, by the credential of the leaf its update path adds.
     pub(crate) joiner: Option<String>,
+}
+
+/// A seeding bundle that passed every check, not written yet: what `write_seed` stores for the room.
+pub(crate) struct SeedCandidate {
+    tree: RatchetTreeIn,
+    info: VerifiableGroupInfo,
+    group_id: Vec<u8>,
+    /// The provider of the GroupInfo's signer: the peer that sent the bundle.
+    provider: String,
+    /// The GroupInfo's signer's user, and its leaf.
+    pub(crate) signer: String,
+    pub(crate) signer_leaf: u32,
+    /// The room policy, participant list and operational policy of the group's GroupContext.
+    pub(crate) policy: Option<mimi_core::room_policy::RoomPolicy>,
+    pub(crate) list: Option<mimi_core::participant_list::ParticipantListData>,
+    operational: Option<Vec<u8>>,
+}
+
+/// The leaf a member-sent Commit's `PublicMessage` names as its sender, read without a group.
+pub(crate) fn commit_sender_leaf(commit: &[u8]) -> Option<u32> {
+    let message = MlsMessageIn::tls_deserialize_exact(commit)
+        .ok()?
+        .try_into_protocol_message()
+        .ok()?;
+    match message {
+        ProtocolMessage::PublicMessage(public) => match public.sender() {
+            Sender::Member(leaf) => Some(leaf.u32()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The committer's leaf after `staged`: a member's own leaf, which its Commit does not move, or the leaf an external
@@ -652,6 +683,35 @@ impl Provider {
         group_info: &GroupInfoOption,
         ratchet_tree_option: &[u8],
     ) -> Result<(), Option<&'static str>> {
+        let listed: Vec<String> = self
+            .store
+            .list_participant_rows(room_uri)
+            .map_err(|_| Some("the room's participants could not be read"))?
+            .into_iter()
+            .map(|row| row.member_uri)
+            .collect();
+        let seed = self.verify_seed(
+            commit_epoch,
+            requester,
+            group_info,
+            ratchet_tree_option,
+            &listed,
+        )?;
+        self.write_seed(room_uri, commit_epoch, seed, group_info)
+            .map_err(Some)
+    }
+
+    /// Check a seeding bundle against every rule in the module doc without writing anything. `listed` is the room's
+    /// participants as the hub will list them after the Commit; each must be a member of the tree. `Err(None)`: the
+    /// bundle does not carry what seeding needs; `Err(Some)`: it does, and a check refused it.
+    pub(crate) fn verify_seed(
+        &self,
+        commit_epoch: u64,
+        requester: crate::requester::Requester<'_>,
+        group_info: &GroupInfoOption,
+        ratchet_tree_option: &[u8],
+        listed: &[String],
+    ) -> Result<SeedCandidate, Option<&'static str>> {
         if group_info.representation != GroupInfoRepresentation::Full {
             return Err(None);
         }
@@ -684,11 +744,10 @@ impl Provider {
             .members()
             .filter_map(|member| credential_uri(&member.credential))
             .collect();
-        let listed = self
-            .store
-            .list_participant_rows(room_uri)
-            .map_err(|_| Some("the room's participants could not be read"))?;
-        if listed.iter().any(|row| !members.contains(&row.member_uri)) {
+        if listed
+            .iter()
+            .any(|user| !members.contains(&mimi_core::uri::canonical(user)))
+        {
             return Err(Some("a participant the hub lists is not in its tree"));
         }
         // The room's policy and list are its GroupContext's from here (room-policy PR #52: a roles_list is set when the
@@ -739,7 +798,39 @@ impl Provider {
                 ));
             }
         }
-        let group_id = candidate.group_id().as_slice().to_vec();
+        let signer_leaf = info.signer().u32();
+        Ok(SeedCandidate {
+            group_id: candidate.group_id().as_slice().to_vec(),
+            tree,
+            info,
+            provider,
+            signer,
+            signer_leaf,
+            policy,
+            list,
+            operational,
+        })
+    }
+
+    /// Store a verified seed: the room is tracked from the epoch after the Commit, and its policy, participant list and
+    /// operational policy are its group's from here.
+    pub(crate) fn write_seed(
+        &self,
+        room_uri: &str,
+        commit_epoch: u64,
+        seed: SeedCandidate,
+        group_info: &GroupInfoOption,
+    ) -> Result<(), &'static str> {
+        let SeedCandidate {
+            tree,
+            info,
+            group_id,
+            provider,
+            policy,
+            list,
+            operational,
+            ..
+        } = seed;
         let crypto = OpenMlsRustCrypto::default();
         PublicGroup::from_external(
             crypto.crypto(),
@@ -748,21 +839,21 @@ impl Provider {
             info,
             ProposalStore::new(),
         )
-        .map_err(|_| Some("its group could not be stored"))?;
+        .map_err(|_| "its group could not be stored")?;
         self.store
             .set_room_tree(room_uri, &group_id, &provider, commit_epoch + 1)
-            .map_err(|_| Some("its tracking record could not be stored"))?;
+            .map_err(|_| "its tracking record could not be stored")?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs());
         match &policy {
             Some(policy) => self
                 .set_room_policy(room_uri, policy, now)
-                .map_err(|_| Some("its room policy could not be stored"))?,
+                .map_err(|_| "its room policy could not be stored")?,
             None => self
                 .store
                 .clear_room_policy(room_uri)
-                .map_err(|_| Some("its room policy could not be cleared"))?,
+                .map_err(|_| "its room policy could not be cleared")?,
         }
         if let Some(list) = list {
             let rows: Vec<crate::store::ParticipantRow> = list
@@ -776,13 +867,13 @@ impl Provider {
                 .collect();
             self.store
                 .replace_participants(room_uri, &rows, now)
-                .map_err(|_| Some("its participant list could not be stored"))?;
+                .map_err(|_| "its participant list could not be stored")?;
         }
         match &operational {
             Some(data) => self.store.set_operational_policy(room_uri, data),
             None => self.store.clear_operational_policy(room_uri),
         }
-        .map_err(|_| Some("its operational policy could not be stored"))?;
+        .map_err(|_| "its operational policy could not be stored")?;
         self.keep_group_info_after(room_uri, commit_epoch + 1, Some(group_info));
         eprintln!(
             "[mimi-hubd] {room_uri} is tracked from epoch {}, seeded by {provider}",

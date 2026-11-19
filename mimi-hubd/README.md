@@ -35,8 +35,13 @@ group and epoch, and it must apply to the tree; one that does not is refused and
 A room is tracked from the first accepted Commit whose bundle carries a Full GroupInfo and a full
 ratchet tree, after checks on who sent it (`../DIVERGENCES.md`, DIV-10), and takes its policy
 and participant list from the group's GroupContext; each change to a tracked room is then authorized
-for the member who proposed it (DIV-15). `untrackRoom` on the operator's listener drops a room's tree. An untracked room's Commit is read without verifying its
-signature, as RFC 9420's delivery-service model allows.
+for the member who proposed it (DIV-15). `untrackRoom` on the operator's listener drops a room's tree. A room hosted
+here that the hub keeps no tree for takes no change the hub cannot authorize: its first Commit, and any participant-list
+or room-policy change to it, is taken only with a bundle carrying a Full GroupInfo and the full ratchet tree that seed
+the tree, and is otherwise refused (`notAllowed`, saying so); the seeding Commit's changes are authorized for its
+committer (DIV-10). The policy's `untracked_rooms = "accept"` is the other choice: the hub applies changes it cannot
+authorize, reading an untracked room's Commit without verifying its signature, as RFC 9420's delivery-service model
+allows.
 `success` means that change was applied. The hub does not store or relay the Commit; another epoch
 than the room's is `wrongEpoch`. A Commit mixing that proposal with a standard MLS proposal (Add/Remove/Update,
 ...) in the same proposal list is refused - full general Commit processing is out of scope for this
@@ -340,6 +345,11 @@ require_nonce_on_key_material = true
 # An external Commit to a room whose operational policy says nothing: "allow" (default, as MLS: subject to who may
 # join) or "deny".
 external_commit_when_unset = "allow"
+# A room hosted here whose ratchet tree the hub does not keep. "refuse" (default): its first Commit, and any
+# participant-list or room-policy change to it, is taken only with a bundle carrying a Full GroupInfo and the full
+# ratchet tree, so every change is authorized for its proposer. "accept": the hub applies changes it cannot authorize,
+# trusting the members to have checked them, until a bundle gives it the tree (DIVERGENCES DIV-10).
+untracked_rooms = "refuse"
 ```
 
 A key the hub does not know, an empty suite list, or a suite the crypto provider does not implement stops the start,

@@ -238,20 +238,35 @@ are what an `update` does.
 the rewrite below, any `Add` and `Remove` proposals beside them). `mimi_core::commit_wire::decode_commit_proposals` reads
 each change's type and payload and the Adds and Removes - independent of openmls's own (crate-private) `Commit` type,
 hand-coded the same way every other MIMI-specific structure in this codebase is. For a room whose ratchet tree the hub
-keeps (the tracked rooms, below) the Commit is also verified against the tree with openmls before anything changes; for
-an untracked room it is not, matching RFC 9420's own delivery-service trust model (the DS is not required to; that is
-the receiving member's job). Commits on this hub's groups travel as `PublicMessage`, so the proposal bytes are visible
+keeps (the tracked rooms, below) the Commit is also verified against the tree with openmls before anything changes. A
+room hosted here that the hub keeps no tree for takes no change the hub cannot authorize, by default (below). Commits on this hub's groups travel as `PublicMessage`, so the proposal bytes are visible
 on the wire.
 
 - **Tracked rooms: the hub keeps the room's ratchet tree once a bundle gives it one.** A room is tracked from the first
-  accepted Commit whose bundle carries a Full GroupInfo and a full ratchet tree (ratchet-tree-options `full`). Protocol-07
-  §5.3 lets the client choose what the bundle carries (`full` or `partial` GroupInfo, and any tree representation) and
-  gives the hub no way to ask for these, so a room stays untracked, and behaves as an untracked room, until such a bundle
-  arrives. Seeding is trust on first use: a member that already holds the room's next epoch can seed a tree of its own
+  accepted Commit whose bundle carries a Full GroupInfo and a full ratchet tree (ratchet-tree-options `full`). From then
+  on the hub moves the tree on from every Commit it accepts, so any `RatchetTreeOption` will do (a `distributionService`
+  hub, from the room's second Commit). Seeding is trust on first use: a member that already holds the room's next epoch can seed a tree of its own
   making. It is narrowed by what the hub checks first: the GroupInfo is for the epoch after the Commit, signed by a
   member of the tree it comes with; that member's provider is the peer that sent the bundle; and every participant the
   hub lists for the room is a member of the tree. The hub records the group's id and which provider seeded the room,
-  and logs it.
+  and logs it. A room's creator is in its group's participant list from the group's creation, which no Commit carries,
+  so for a room the hub has seen no Commit or participant for (one another provider's client made here), the list
+  before its first Commit is the creator alone, the GroupInfo's signer.
+- **A room the hub hosts but keeps no tree for takes no change it cannot authorize** (`untracked_rooms = "refuse"` in
+  the hub's policy, the default). Protocol-07 §5.3 lets the client choose what the bundle carries and gives the hub no
+  way to ask, but the hub is the one that enforces the room's policy (§9), and without the tree it cannot tell who
+  proposed a change. So the room's first Commit is taken only when its bundle seeds the tree, and a room with Commits
+  but no tree (one from before the hub kept trees, or after `untrackRoom`) takes a participant-list or room-policy change
+  by value only when its bundle seeds the tree: without the GroupContext the hub cannot tell whether the group has a
+  `roles_list`, so every such change is one that needs it. Anything else is refused `notAllowed`, saying a Full
+  GroupInfo and the full tree are needed, and logged with the room. A seed this needs is checked before anything
+  changes, and a bundle that fails a check refuses the Commit. The seeding Commit's changes are authorized for its
+  committer like a tracked room's (DIV-15): the GroupInfo's signer, which must be the leaf that sent the Commit, against
+  the room's policy before the Commit (the hub's; for a room it holds none for, the group's, and then a room-policy
+  change in that Commit is refused) and its list before it. A Commit that commits only held leaves (bound to the
+  requester when held, below) or changes only room metadata is taken as before. `untracked_rooms = "accept"` is the
+  other choice: **the hub applies changes it cannot authorize**, trusting the members to have checked them (RFC 9420's
+  delivery service is not required to), until a bundle gives it the tree.
 - **A tracked room's Commit the tree cannot take is refused, not relayed.** Its sender must be a member whose signature
   verifies, it must be for the room's group and epoch (`wrongEpoch` naming the room's otherwise), its proposals must
   apply to the tree, and a GroupInfo beside it (a Partial one rebuilt first, DIV-12) must describe the group after it. A refused Commit changes nothing
@@ -498,7 +513,7 @@ role 1 is refused while the list does not define role 1. A room with no policy i
 `canChangeRoleDefinitions` (`0x0503`), to the `base_room_policy` `canChangeRoomMembershipStyle` (`0x0502`), and to the
 operational policy `canChangeMlsOperationalPolicies` (`0x0600`, DIV-18) (room-policy-04 §8.6). These changes arrive by
 value, so the proposer is the committer. A room with no roles has no role checks, and its first `roles_list` by Commit
-is refused (room-policy PR #52: "A Commit that adds a `roles_list` to a group that has none is invalid.", below). On an untracked room the proposer is not known, so none of this is checked.
+is refused (room-policy PR #52: "A Commit that adds a `roles_list` to a group that has none is invalid.", below). On an untracked room the proposer is not known: by default such a change is taken only in the Commit that gives the hub the tree, and authorized there (DIV-10); on `untracked_rooms = "accept"` none of this is checked.
 
 **Who made a change is checked for a tracked room only** (one whose ratchet tree the hub keeps, DIV-10). There the
 sender's leaf maps to a member, and room-policy-04 §8.1 authorizes each change for its proposer: the committer for a
@@ -511,7 +526,8 @@ Commit. A change to another user needs the capability its transition needs (`can
 which works through the Preauthorized users component this hub does not read yet: such a change is refused until that
 is built. Not checked yet: the participant-count constraints, a Remove with no participant-list change (`canKick`,
 `canRemoveOwnClient`), and `canAddOwnClient`. An untracked room's Commit sender is a leaf index the hub cannot map to
-a member, so for it none of this is checked.
+a member: by default its changes that need a proposer are taken only in the Commit that gives the hub the tree, whose
+committer is the GroupInfo's signer (DIV-10); on `untracked_rooms = "accept"` none of this is checked.
 
 A tracked room's policy and list are its group's. When the room is seeded, the GroupContext's `roles_list`,
 `base_room_policy` and `participant_list` replace what the hub stored (a GroupContext with no `roles_list` leaves the
@@ -521,7 +537,7 @@ created, in its change "Set the roles_list at group creation" (its title and des
 the `base_room_policy` one in DIV-15): a Commit that adds a `roles_list` to a group that has none is invalid, and a room with no `roles_list` has no
 role-based restrictions. Room-policy-04 as written does not say whether a first `roles_list` may arrive by Commit;
 this reading is the PR's, not -04's. The hub follows it for tracked rooms and refuses such a Commit; an untracked room
-still takes its first role list by Commit, as below. The operator's `roomPolicy`, `memberRole` and `addParticipant` answer 409 for
+takes its first role list by Commit only on `untracked_rooms = "accept"`. The operator's `roomPolicy`, `memberRole` and `addParticipant` answer 409 for
 a tracked room.
 `canSendMessage` is enforced where the hub sees the sender, on `submitMessage`, by the sender's role (§8.3). The other capability values (uploads, calls, room attributes
 and the rest of the registry, which is open to additions) are read for their shape and not carried, so a

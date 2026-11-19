@@ -9,7 +9,10 @@ use mimi_core::protocol_wire::UpdateRoomResponse;
 use mimi_core::room_policy::{BaseRoomPolicy, Role, RoomPolicy};
 
 use super::room_policy_tests::roles;
-use super::tests::{app, bundle_of, real_single_custom_proposal_commit, update_answer};
+use super::tests::{
+    app_accepting_untracked_rooms as app, bundle_of, real_single_custom_proposal_commit,
+    update_answer,
+};
 use super::update_tests::{post, ROOM};
 use crate::http::SharedProvider;
 

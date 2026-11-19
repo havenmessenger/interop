@@ -9,7 +9,8 @@ use mimi_core::participant_list::{
 use mimi_core::protocol_wire::UpdateRoomResponse;
 
 use super::tests::{
-    app, bundle_of, real_keypackage_for, real_single_custom_proposal_commit, update_answer,
+    app_accepting_untracked_rooms as app, bundle_of, real_keypackage_for,
+    real_single_custom_proposal_commit, update_answer,
 };
 use super::update_tests::{as_app_data_update, post, ROOM};
 use crate::http::SharedProvider;

@@ -19,8 +19,8 @@ use tls_codec::Serialize as _;
 use tower::ServiceExt;
 
 use super::tests::{
-    app, bundle_of, real_custom_proposal_and_commit, real_single_custom_proposal_commit,
-    update_answer,
+    app_accepting_untracked_rooms as app, bundle_of, real_custom_proposal_and_commit,
+    real_single_custom_proposal_commit, update_answer,
 };
 use crate::http::SharedProvider;
 
@@ -427,7 +427,12 @@ async fn every_joint_update_request_vector_gets_havens_recorded_answer() {
         let id = vector["id"].as_str().unwrap();
         let room = vector["room"].as_str().unwrap();
         let p: SharedProvider = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::Provider::in_memory(vectors["setup"]["hub_domain"].as_str().unwrap()).unwrap(),
+            crate::Provider::in_memory(vectors["setup"]["hub_domain"].as_str().unwrap())
+                .unwrap()
+                .with_policy(crate::policy::HubPolicy {
+                    untracked_rooms: crate::policy::UntrackedRooms::Accept,
+                    ..crate::policy::HubPolicy::default()
+                }),
         ));
         let router = crate::http::build_router(p.clone());
         let setup = &vectors["setup"];

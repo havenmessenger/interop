@@ -9,7 +9,10 @@ use mimi_core::room_policy_wire::{
     ROLES_LIST_COMPONENT_ID,
 };
 
-use super::tests::{app, bundle_of, real_single_custom_proposal_commit, update_answer};
+use super::tests::{
+    app_accepting_untracked_rooms as app, bundle_of, real_single_custom_proposal_commit,
+    update_answer,
+};
 use super::update_tests::{as_app_data_update, post, ROOM};
 use crate::http::SharedProvider;
 

@@ -35,6 +35,7 @@ pub mod fanout;
 pub mod follower;
 pub mod group_info_endpoint;
 pub mod group_store;
+mod hosted_untracked;
 pub mod http;
 pub mod identifier_search;
 pub mod key_material_proxy;
@@ -1193,8 +1194,9 @@ impl Provider {
     /// [`Self::apply_update_commit`] with the rest of the Commit's bundle: its `GroupInfoOption` and `RatchetTreeOption`,
     /// and the peer that sent it. For a room whose tree the hub keeps, the Commit is verified against the tree and staged
     /// before anything changes, and merged once the hub's tables are written; one the tree refuses changes nothing. For
-    /// a room it does not keep yet, an accepted Commit whose bundle carries a Full GroupInfo and a full tree seeds it
-    /// (`room_tree`).
+    /// a room it does not keep yet, a Commit whose bundle carries a Full GroupInfo and a full tree seeds it
+    /// (`room_tree`); by default the room's first Commit and any change that needs its proposer must seed it, checked
+    /// before anything changes (`hosted_untracked`).
     fn apply_commit_bundle<'r>(
         &self,
         room_uri: &str,
@@ -1267,15 +1269,49 @@ impl Provider {
                 ));
             }
         }
+        // An untracked room hosted here takes its first Commit, or one carrying a participant-list or room-policy change,
+        // only with a bundle that seeds its tree (`hosted_untracked.rs`).
+        let needs_seed = tracked.is_none()
+            && self.policy.untracked_rooms == policy::UntrackedRooms::Refuse
+            && self.untracked_needs_seed(room_uri, &commit)?;
+        let by_value = commit.updates.clone();
         // A tracked room's changes carried by value are the committer's to make (room-policy-04 §8.1); a change named
         // by reference was authorized for its own proposer when it was held.
         if let Some(staged) = &tracked {
             self.authorize_tracked_commit(room_uri, staged, &commit, now_unix)?;
         }
         self.include_held_proposals(room_uri, &mut commit, now_unix)?;
+        let seed = if needs_seed {
+            let seed = self
+                .required_seed(room_uri, commit_bytes, &commit, &by_value, bundle, requester)
+                .inspect_err(|why| {
+                    eprintln!(
+                        "[mimi-hubd] {room_uri}: refused a Commit to a room whose tree this hub does not keep: {why:?}"
+                    );
+                })?;
+            Some(seed)
+        } else {
+            None
+        };
         // A Commit that will seed the room's tree may not replace the room's state with the group's (`seed_check.rs`).
         if let (None, Some((group_info, ratchet_tree))) = (&tracked, bundle) {
-            self.check_seed_keeps_room_state(room_uri, &commit, group_info, ratchet_tree)?;
+            let creator = match &seed {
+                Some((_, creator)) => creator.clone(),
+                None => self.new_room_creator(
+                    room_uri,
+                    commit.epoch,
+                    group_info,
+                    ratchet_tree,
+                    requester,
+                )?,
+            };
+            self.check_seed_keeps_room_state(
+                room_uri,
+                &commit,
+                group_info,
+                ratchet_tree,
+                creator.as_deref(),
+            )?;
         }
         let epoch = commit.epoch;
         let joiner = tracked.as_ref().and_then(|staged| staged.joiner.clone());
@@ -1283,50 +1319,23 @@ impl Provider {
         self.store
             .commit_accepted_at(room_uri, epoch)
             .map_err(|_| UpdateRefusal::Store)?;
-        match (tracked, bundle) {
-            (Some(staged), _) => {
+        match (tracked, bundle, seed) {
+            (Some(staged), _, _) => {
                 self.merge_tracked_commit(staged)?;
                 self.keep_group_info_after(room_uri, epoch + 1, bundle.map(|(info, _)| info));
                 Ok(())
             }
-            (None, Some((group_info, ratchet_tree))) => {
+            (None, Some((group_info, _)), Some((seed, _))) => {
+                if let Err(why) = self.write_seed(room_uri, epoch, seed, group_info) {
+                    eprintln!("[mimi-hubd] {room_uri} stays untracked: {why}");
+                }
+                Ok(())
+            }
+            (None, Some((group_info, ratchet_tree)), None) => {
                 self.seed_room_tree(room_uri, epoch, requester, group_info, ratchet_tree);
                 Ok(())
             }
-            (None, None) => Ok(()),
-        }
-    }
-
-    /// Whether the committer's role holds `capability`, in a room that has roles; a room with none has no role checks.
-    fn committer_role_holds(
-        &self,
-        room_uri: &str,
-        staged: &crate::room_tree::StagedRoomCommit,
-        capability: mimi_core::room_policy::Capability,
-        refusal: &'static str,
-    ) -> Result<(), UpdateRefusal> {
-        let Some(policy) = self
-            .room_policy(room_uri)
-            .map_err(|_| UpdateRefusal::Store)?
-            .filter(|policy| !policy.roles.is_empty())
-        else {
-            return Ok(());
-        };
-        let committer = staged.sender.clone().ok_or(UpdateRefusal::NotAllowed)?;
-        let role = self
-            .store
-            .list_participant_rows(room_uri)
-            .map_err(|_| UpdateRefusal::Store)?
-            .into_iter()
-            .find(|row| row.member_uri == committer)
-            .and_then(|row| row.role_index);
-        if role
-            .and_then(|role| policy.role(role))
-            .is_some_and(|role| role.has(capability))
-        {
-            Ok(())
-        } else {
-            Err(UpdateRefusal::Policy(refusal))
+            (None, None, _) => Ok(()),
         }
     }
 
@@ -1388,34 +1397,8 @@ impl Provider {
         // A change to a room-policy component needs its capability in the committer's role (room-policy-04 §8.6, the
         // proposer of a change carried by value), in a room that has roles: `canChangeRoleDefinitions` for the
         // roles_list, `canChangeRoomMembershipStyle` for the base policy, and `canChangeMlsOperationalPolicies` (listed
-        // "(reserved)" in -04, read as the draft's own capability) for the operational policy.
-        for (kind, capability, refusal) in POLICY_CHANGE_CAPABILITIES {
-            if commit
-                .updates
-                .iter()
-                .any(|change| change.proposal_type == kind)
-            {
-                self.committer_role_holds(room_uri, staged, capability, refusal)?;
-            }
-        }
-        let changes: Vec<ParticipantListUpdate> = commit
-            .updates
-            .iter()
-            .filter(|change| change.proposal_type == MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE)
-            .map(|change| {
-                decode_participant_list_update(&change.payload).map(|mut update| {
-                    for added in &mut update.added_participants {
-                        added.user_uri = mimi_core::uri::canonical(&added.user_uri);
-                    }
-                    update
-                })
-            })
-            .collect::<Result<_, _>>()
-            .map_err(|_| UpdateRefusal::Invalid("the participant list update is malformed"))?;
-        if changes.is_empty() {
-            return Ok(());
-        }
-        let committer = staged.sender.clone().ok_or(UpdateRefusal::NotAllowed)?;
+        // "(reserved)" in -04, read as the draft's own capability) for the operational policy. Each participant-list
+        // change is authorized for the committer against the room's policy and list as they stand.
         let policy = self
             .room_policy(room_uri)
             .map_err(|_| UpdateRefusal::Store)?;
@@ -1423,10 +1406,12 @@ impl Provider {
             .store
             .list_participant_rows(room_uri)
             .map_err(|_| UpdateRefusal::Store)?;
-        for change in &changes {
-            crate::role_checks::authorize_change(policy.as_ref(), &rows, &committer, change)?;
-        }
-        Ok(())
+        crate::role_checks::authorize_by_value(
+            policy.as_ref(),
+            &rows,
+            staged.sender.as_deref(),
+            &commit.updates,
+        )
     }
 
     /// Read the proposals `commit` names by reference into it, from what this hub holds for the room at the Commit's
@@ -2047,6 +2032,10 @@ mod identifier_discovery_tests;
 #[cfg(test)]
 #[path = "key_package_user_tests.rs"]
 mod key_package_user_tests;
+
+#[cfg(test)]
+#[path = "hosted_untracked_tests.rs"]
+mod hosted_untracked_tests;
 
 #[cfg(test)]
 mod tests {

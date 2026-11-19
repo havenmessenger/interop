@@ -80,7 +80,7 @@ fn with_profile(profile: &LaneRoomProfile, alice_role: u32) -> Vec<(u16, Vec<u8>
 fn check(profile: &LaneRoomProfile, components: &[(u16, Vec<u8>)]) -> Result<(), UpdateRefusal> {
     let (p, room, alice, group) = lane_room(profile, components);
     let (info, tree) = full(&group, &alice);
-    p.check_seed_keeps_room_state(&room, &no_changes(), &info, &tree)
+    p.check_seed_keeps_room_state(&room, &no_changes(), &info, &tree, None)
 }
 
 /// A group that starts with the profile's components and lists its creator in the creator role seeds the room.
@@ -195,7 +195,10 @@ fn a_seed_dropping_the_profile_is_refused_through_the_lane() {
         } else {
             vec![(PARTICIPANT_LIST_COMPONENT, list(&[(ALICE, ROLE_ADMIN)]))]
         };
-        let (p, room, alice, mut group) = lane_room(&profile, &components);
+        let (mut p, room, alice, mut group) = lane_room(&profile, &components);
+        // Bob is listed with no client of his added, so this Commit cannot seed; on the default it would be refused for
+        // that alone, and the state comparison is what this test is about.
+        p.policy.untracked_rooms = crate::policy::UntrackedRooms::Accept;
         let update = ParticipantListUpdate {
             added_participants: vec![UserRolePair {
                 user_uri: BOB.to_string(),

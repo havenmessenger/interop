@@ -16,7 +16,10 @@ use mimi_core::participant_list::{
 use mimi_core::protocol_wire::{HandshakeBundle, UpdateRoomResponse};
 use tower::ServiceExt;
 
-use super::tests::{app, bundle_of, real_single_custom_proposal_commit, update_answer};
+use super::tests::{
+    app_accepting_untracked_rooms as app, bundle_of, real_single_custom_proposal_commit,
+    update_answer,
+};
 use super::update_tests::{as_app_data_update, ROOM};
 use crate::http::SharedProvider;
 use crate::peer::{PeerCert, PeerIdentity};

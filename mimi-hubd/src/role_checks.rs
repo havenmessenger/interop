@@ -14,7 +14,10 @@
 //! A room with no `roles_list` has no role checks (room-policy PR #52). The participant-count constraints are not
 //! checked here (DIVERGENCES, DIV-15).
 
-use mimi_core::participant_list::ParticipantListUpdate;
+use mimi_core::commit_wire::DecodedCustomProposal;
+use mimi_core::participant_list::{
+    decode_participant_list_update, ParticipantListUpdate, MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE,
+};
 use mimi_core::room_policy::RoomPolicy;
 
 use crate::store::ParticipantRow;
@@ -75,6 +78,58 @@ pub fn authorize_change(
         policy
             .authorize_role_change(proposer_role, 0, added.role_index)
             .map_err(|_| NOT_AUTHORIZED)?;
+    }
+    Ok(())
+}
+
+/// Authorize what a Commit carries by value for its proposer (`proposer`, a canonical user URI; `None` when the sender
+/// names no user), against `policy` and the room's list before the Commit (`rows`): a change to a room-policy component
+/// needs its capability in the proposer's role (room-policy-04 §8.6), and each participant-list change is authorized as
+/// [`authorize_change`] does. A room with no roles has no role checks; the proposer is needed only for a change it has to
+/// authorize.
+pub fn authorize_by_value(
+    policy: Option<&RoomPolicy>,
+    rows: &[ParticipantRow],
+    proposer: Option<&str>,
+    changes: &[DecodedCustomProposal],
+) -> Result<(), UpdateRefusal> {
+    if let Some(roled) = policy.filter(|policy| !policy.roles.is_empty()) {
+        for (kind, capability, refusal) in crate::POLICY_CHANGE_CAPABILITIES {
+            if !changes.iter().any(|change| change.proposal_type == kind) {
+                continue;
+            }
+            let proposer = proposer.ok_or(UpdateRefusal::NotAllowed)?;
+            let role = rows
+                .iter()
+                .find(|row| row.member_uri == proposer)
+                .and_then(|row| row.role_index);
+            if !role
+                .and_then(|role| roled.role(role))
+                .is_some_and(|role| role.has(capability))
+            {
+                return Err(UpdateRefusal::Policy(refusal));
+            }
+        }
+    }
+    let updates: Vec<ParticipantListUpdate> = changes
+        .iter()
+        .filter(|change| change.proposal_type == MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE)
+        .map(|change| {
+            decode_participant_list_update(&change.payload).map(|mut update| {
+                for added in &mut update.added_participants {
+                    added.user_uri = mimi_core::uri::canonical(&added.user_uri);
+                }
+                update
+            })
+        })
+        .collect::<Result<_, _>>()
+        .map_err(|_| UpdateRefusal::Invalid("the participant list update is malformed"))?;
+    if updates.is_empty() {
+        return Ok(());
+    }
+    let proposer = proposer.ok_or(UpdateRefusal::NotAllowed)?;
+    for update in &updates {
+        authorize_change(policy, rows, proposer, update)?;
     }
     Ok(())
 }
