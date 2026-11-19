@@ -170,9 +170,9 @@ reason = "A notify for a room from a provider that is not that room's hub."
 [[reason]]
 id = "no-local-member"
 surfaces_as = "problem no-local-member, 404"
-spec = "draft-ietf-mimi-protocol-07"
-section = "5.5"
-quote = "The HTTP response code indicates if the messages in the request were accepted (201 response code), or if there was an error."
+spec = "local"
+section = ""
+quote = ""
 divergence = "DIV-5"
 reason = "A notify for a room hosted elsewhere when no user of this provider is a member of it; nothing is recorded, so a retry gets the same answer."
 
