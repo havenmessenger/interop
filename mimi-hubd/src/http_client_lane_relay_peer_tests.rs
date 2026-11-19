@@ -25,7 +25,7 @@ const ROOM: &str = "mimi://peer.example/r/room";
 const CAROL: &str = "mimi://third.example/u/carol";
 
 /// A peer at `PEER` serving its directory, and answering submitMessage accepted, update wrongEpoch 7, keyMaterial with a
-/// KeyPackage; and the lane of a hub that reaches it, and only it.
+/// KeyPackage, and requestConsent and updateConsent 202; and the lane of a hub that reaches it, and only it.
 async fn lane_and_peer(test: &str) -> (Lane, Arc<Mutex<Vec<Seen>>>) {
     let pki = Pki::new();
     let key_package = Member::new(CAROL)
@@ -41,7 +41,9 @@ async fn lane_and_peer(test: &str) -> (Lane, Arc<Mutex<Vec<Seen>>>) {
             let body = format!(
                 r#"{{"submitMessage": "https://{PEER}:{port}/v1/submitMessage/{{roomId}}",
                     "update": "https://{PEER}:{port}/v1/update/{{roomId}}",
-                    "keyMaterial": "https://{PEER}:{port}/v1/keyMaterial/{{targetUser}}"}}"#
+                    "keyMaterial": "https://{PEER}:{port}/v1/keyMaterial/{{targetUser}}",
+                    "requestConsent": "https://{PEER}:{port}/v1/requestConsent/{{targetDomain}}",
+                    "updateConsent": "https://{PEER}:{port}/v1/updateConsent/{{requesterDomain}}"}}"#
             );
             return answer("200 OK", "", body.as_bytes());
         }
@@ -61,6 +63,10 @@ async fn lane_and_peer(test: &str) -> (Lane, Arc<Mutex<Vec<Seen>>>) {
                 current_epoch: 7,
             };
             return answer("200 OK", "", &wrong.encode().unwrap());
+        }
+        // A consent route answers 202 whatever it does with the entry (protocol-07 §5.7: receipt only).
+        if head.starts_with("POST /v1/requestConsent/") || head.starts_with("POST /v1/updateConsent/") {
+            return answer("202 Accepted", "", b"");
         }
         if head.starts_with("POST /v1/keyMaterial/") && head.contains("garbled") {
             return answer("200 OK", "", b"not a KeyMaterialResponse");
@@ -202,5 +208,49 @@ async fn an_undecodable_key_material_answer_is_not_passed_on() {
         status,
         StatusCode::BAD_GATEWAY,
         "PLANT-LANE-RELAY-KM-DECODE: a garbled answer is a 502"
+    );
+}
+
+/// A grant to a user of the peer goes to the peer's updateConsent, and a request of one to its requestConsent, each as
+/// the TLS ConsentEntry; the peer answers 202, as a consent route does, and the lane says the peer took it. Revert
+/// check: count only 201 as taken, and both answers say false.
+#[tokio::test]
+async fn consent_sent_to_another_provider_is_taken_on_its_202() {
+    use mimi_core::consent::ConsentOperation;
+    use mimi_core::protocol_wire::decode_consent_entry;
+    const PAT: &str = "mimi://peer.example/u/pat";
+    let (l, seen) = lane_and_peer("relay-peer-consent").await;
+    let grant = format!(r#"{{"requester":"{PAT}","decision":"grant"}}"#);
+    let (status, answer) = call(&l.router, signed(&l.key, "consent", ALICE, &grant)).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(
+        answer["notified"], true,
+        "PLANT-LANE-CONSENT-202: the peer's 202 to updateConsent was not counted as taken"
+    );
+    let ask = format!(r#"{{"target":"{PAT}"}}"#);
+    let (status, answer) = call(&l.router, signed(&l.key, "requestConsent", ALICE, &ask)).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(
+        answer["delivered"], true,
+        "the peer's 202 to requestConsent"
+    );
+
+    let seen = seen.lock().unwrap();
+    let update = posted(&seen, "updateConsent");
+    assert_eq!(update.len(), 1);
+    assert!(update[0].head.contains("/v1/updateConsent/peer.example "));
+    let entry = decode_consent_entry(&update[0].body, &[0x0001]).unwrap();
+    assert_eq!(entry.operation, ConsentOperation::Grant);
+    assert_eq!(
+        (entry.requester_uri.as_str(), entry.target_uri.as_str()),
+        (PAT, ALICE)
+    );
+    let request = posted(&seen, "requestConsent");
+    assert_eq!(request.len(), 1);
+    let entry = decode_consent_entry(&request[0].body, &[0x0001]).unwrap();
+    assert_eq!(entry.operation, ConsentOperation::Request);
+    assert_eq!(
+        (entry.requester_uri.as_str(), entry.target_uri.as_str()),
+        (ALICE, PAT)
     );
 }
