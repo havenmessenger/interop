@@ -25,8 +25,8 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 - `mimi-core`: `KeyMaterialRequest::sign` and `signature_verifies`, for its §5.2 signature over
   `KeyMaterialRequestTBS`.
 - `mimi-hubd`: a last-resort KeyPackage (draft-ietf-mls-extensions §6.4, marked by its client) is handed out only when
-  no one-time KeyPackage is left, and by default once, then deleted like any other, as protocol-07 §5.2 has key
-  material ("may not be reused"). `MIMI_LAST_RESORT_REUSE=true` keeps it to be handed out again, with its
+  no one-time KeyPackage is left, and by default once, then deleted like any other, as protocol-07 §5.2 has it ("Keying
+  material provided from one response MUST NOT be provided in any other response"). `MIMI_LAST_RESORT_REUSE=true` keeps it to be handed out again, with its
   `KeyPackageRef` still routing every Welcome sent for it (DIV-23). A user has one, the newest replacing the one before,
   and the per-user cap never evicts it. The client lane's `keyPackageCount` says how many one-time KeyPackages are left
   and whether a last-resort one is.

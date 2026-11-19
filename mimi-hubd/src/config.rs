@@ -73,7 +73,8 @@ pub struct ConfigFile {
     /// `1` turns on the activity line (see `activity.rs`). Anything else, or no value, leaves it off.
     pub activity_log: Option<String>,
     /// `true` keeps a claimed last-resort KeyPackage to hand out again (DIVERGENCES DIV-23); `false` or no value hands it
-    /// out once, as protocol-07 §5.2 has key material. Any other value stops the start.
+    /// out once, as protocol-07 §5.2 has key material ("MUST NOT be provided in any other response"). Any other value
+    /// stops the start.
     pub last_resort_reuse: Option<String>,
     /// The OpenTelemetry collector's base URL (see `telemetry.rs`). Unset means no export.
     pub otlp_endpoint: Option<String>,

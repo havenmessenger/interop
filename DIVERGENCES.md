@@ -702,10 +702,12 @@ another admin (the entry 2 → 3); the room's last admin cannot. A deployment th
 ## DIV-23 - with `MIMI_LAST_RESORT_REUSE=true`, a last-resort KeyPackage is handed out more than once
 
 protocol-07 §5.2 says of the key material a `keyMaterial` request claims: "The keying material is designed for use in a
-single room and may not be reused." By default this hub follows it: a last-resort KeyPackage is handed out once and
-deleted, like any other. A deployment may set `MIMI_LAST_RESORT_REUSE=true` (off by default), and then the hub hands a
-user's last-resort KeyPackage out more than once, so two `keyMaterial` responses, for two rooms or two requesters, can
-carry the same KeyPackage. That departs from the letter of §5.2, which does not mention last-resort KeyPackages.
+single room and may not be reused", and, normatively, "Keying material provided from one response MUST NOT be provided in
+any other response." By default this hub follows it: a last-resort KeyPackage is handed out once and deleted, like any
+other. A deployment may set `MIMI_LAST_RESORT_REUSE=true` (off by default), and then the hub hands a user's last-resort
+KeyPackage out more than once, so two `keyMaterial` responses, for two rooms or two requesters, carry the same
+KeyPackage. That breaks §5.2's MUST NOT, which makes no exception for a last-resort KeyPackage; the setting is a
+deployment's choice of RFC 9420 §16.8's MAY over it.
 
 What reuse rests on. RFC 9420 §16.8: "KeyPackages are intended to be used only once", and "An application MAY allow
 for reuse of a 'last resort' KeyPackage in order to prevent denial-of-service attacks. Since a KeyPackage is needed to
