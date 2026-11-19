@@ -211,21 +211,40 @@ async fn key_material(State(p): State<SharedProvider>, Query(q): Query<UserQuery
 /// `requestConsent` populate) instead of the ungated `serve_key_material` the JSON lane still uses
 /// for its own compat/admin purposes. A denial maps to `KeyMaterialResponse::Denied` carrying the
 /// draft's own NoConsent/NoConsentForThisRoom userStatus code (5/6), not a generic failure.
-/// DISCLOSURE (see DIVERGENCES.md): `requesting_user` here is CLIENT-ASSERTED from the
-/// request body, not derived from an authenticated channel (mTLS peer identity) - this reference
-/// hub has no such binding anywhere yet. The consent gate is real, but nothing stops a client from
-/// asserting someone else's URI as `requesting_user`. [`log_key_material_identity_claim`] checks
-/// the request's self-signed credential against that claim and logs the outcome; this is
-/// diagnostic only and never changes the response, per DIVERGENCES.md's testing-phase note.
+/// The request's `requestingUser` is taken only from a peer that speaks for it: its proof authenticates the
+/// requester's provider, or the provider of the room the request names, the room's hub, which protocol-07 §5.2 has
+/// every keyMaterial request go through (`Provider::peer_may_request_key_material`); otherwise `not-permitted`. The
+/// path's user and the body's `targetUser` must be the same user, since the consent gate reads the one and the claim
+/// the other; otherwise `malformed-request`. Both are checked before the request is counted, so a refused one spends
+/// no requester's budget. [`log_key_material_identity_claim`] checks the request's self-signed credential against the
+/// requester it names and logs the outcome; that is diagnostic only and never changes the response.
 async fn key_material_wire(
     State(p): State<SharedProvider>,
     Path(target_user): Path<String>,
+    peer: Option<Extension<PeerCert>>,
     body: Bytes,
 ) -> Response {
     let req = match mimi_core::protocol_wire::KeyMaterialRequest::decode(&body) {
         Ok(r) => r,
         Err(_) => return crate::problem::MALFORMED_REQUEST.response(),
     };
+    let peer = peer
+        .as_ref()
+        .and_then(|Extension(PeerCert(identity))| identity.as_ref());
+    let room = (!req.room_id.0.is_empty()).then_some(req.room_id.0.as_str());
+    {
+        let provider = lock(&p);
+        if !provider.peer_may_request_key_material(&req.requesting_user.0, room, peer) {
+            eprintln!(
+                "[mimi-hubd] keyMaterial: not-permitted, the peer speaks neither for the requester nor as the room's hub"
+            );
+            return crate::problem::NOT_PERMITTED.response();
+        }
+        let same_user = |user: &str| mimi_core::uri::canonical(&provider.key_package_user(user));
+        if same_user(&target_user) != same_user(&req.target_user.0) {
+            return crate::problem::MALFORMED_REQUEST.response();
+        }
+    }
     // At most so many a requester for one target in an hour, as on the client lane: a target's KeyPackages are spent by
     // being claimed, and a last-resort one, when reused (DIVERGENCES DIV-23), is the same one each time.
     let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
@@ -1208,6 +1227,9 @@ mod client_lane_tests;
 #[cfg(test)]
 #[path = "http_client_lane_two_hubs_tests.rs"]
 mod client_lane_two_hubs_tests;
+#[cfg(test)]
+#[path = "http_key_material_binding_tests.rs"]
+mod key_material_binding_tests;
 #[cfg(test)]
 #[path = "http_key_material_tests.rs"]
 mod key_material_tests;
@@ -2421,6 +2443,9 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
+                    .extension(crate::peer::PeerCert(Some(
+                        crate::peer::PeerIdentity::signed("a.example"),
+                    )))
                     .uri("/mimi/pl/keyMaterial/bob")
                     .body(Body::from(req_body.clone()))
                     .unwrap(),
@@ -2448,6 +2473,9 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
+                    .extension(crate::peer::PeerCert(Some(
+                        crate::peer::PeerIdentity::signed("a.example"),
+                    )))
                     .uri("/mimi/pl/keyMaterial/bob")
                     .body(Body::from(req_body))
                     .unwrap(),
@@ -2489,6 +2517,9 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
+                    .extension(crate::peer::PeerCert(Some(
+                        crate::peer::PeerIdentity::signed("a.example"),
+                    )))
                     .uri("/mimi/pl/keyMaterial/carol")
                     .body(Body::from(req_body))
                     .unwrap(),

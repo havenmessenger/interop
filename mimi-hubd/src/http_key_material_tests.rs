@@ -43,6 +43,9 @@ async fn ask(router: Router, required: RequiredCapabilitiesExtension) -> KeyMate
         .oneshot(
             Request::builder()
                 .method("POST")
+                .extension(crate::peer::PeerCert(Some(
+                    crate::peer::PeerIdentity::signed("a.example"),
+                )))
                 .uri("/mimi/pl/keyMaterial/bob")
                 .body(Body::from(request.encode().unwrap()))
                 .unwrap(),
@@ -112,6 +115,9 @@ async fn another_spelling_of_the_target_finds_its_consent() {
         .oneshot(
             Request::builder()
                 .method("POST")
+                .extension(crate::peer::PeerCert(Some(
+                    crate::peer::PeerIdentity::signed("a.example"),
+                )))
                 .uri("/mimi/pl/keyMaterial/bob")
                 .body(Body::from(request.encode().unwrap()))
                 .unwrap(),
@@ -133,7 +139,7 @@ async fn another_spelling_of_the_target_finds_its_consent() {
 async fn a_requester_past_the_per_target_limit_is_told_to_wait() {
     let (router, p) = app();
     granted(&p);
-    let status_for = |target: &'static str| {
+    let status_for = |target: &'static str, path: &'static str| {
         let router = router.clone();
         async move {
             let request = KeyMaterialRequest::minimal(REQUESTER, target).unwrap();
@@ -141,7 +147,10 @@ async fn a_requester_past_the_per_target_limit_is_told_to_wait() {
                 .oneshot(
                     Request::builder()
                         .method("POST")
-                        .uri("/mimi/pl/keyMaterial/bob")
+                        .extension(crate::peer::PeerCert(Some(
+                            crate::peer::PeerIdentity::signed("a.example"),
+                        )))
+                        .uri(format!("/mimi/pl/keyMaterial/{path}"))
                         .body(Body::from(request.encode().unwrap()))
                         .unwrap(),
                 )
@@ -153,9 +162,9 @@ async fn a_requester_past_the_per_target_limit_is_told_to_wait() {
         }
     };
     for _ in 0..crate::client_lane_relay::KEY_MATERIAL_PER_TARGET_PER_HOUR {
-        assert_eq!(status_for(TARGET).await.0, StatusCode::OK);
+        assert_eq!(status_for(TARGET, "bob").await.0, StatusCode::OK);
     }
-    let (status, body) = status_for(TARGET).await;
+    let (status, body) = status_for(TARGET, "bob").await;
     assert_eq!(
         status,
         StatusCode::TOO_MANY_REQUESTS,
@@ -163,7 +172,9 @@ async fn a_requester_past_the_per_target_limit_is_told_to_wait() {
     );
     assert!(body.contains("key-material-rate-limited"), "{body}");
     assert_eq!(
-        status_for("mimi://havenmessenger.com/u/carol").await.0,
+        status_for("mimi://havenmessenger.com/u/carol", "carol")
+            .await
+            .0,
         StatusCode::OK
     );
 }

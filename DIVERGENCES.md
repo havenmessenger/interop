@@ -162,8 +162,15 @@ identity have different answers, not one shared gap:
   state - that is the receiving member's responsibility, checked against the sender's leaf
   credential inside the actual MLS group. This hub relaying an unverified `sendingUri` claim matches
   the spec's own DS posture rather than diverging from it.
-- **`keyMaterial`**: unlike `submitMessage`, the draft's own `KeyMaterialRequest` (§5.2) carries a
-  self-signed identity claim (`requesterSignatureKey`/`requesterCredential`/
+- **`keyMaterial`**: the requester is bound to the peer. The provider path takes a `KeyMaterialRequest` only from a
+  peer whose proof authenticates the provider of its `requestingUser` (never this provider: a peer does not speak for
+  this provider's users), or the provider hosting the room the request names, the room's hub, through which §5.2 sends
+  every request ("MUST be sent via the hub provider of whatever room they will be used in"); otherwise `403
+  not-permitted`. The path's user and the body's `targetUser` must be the same user, since the KeyPackage is taken for
+  the one and consent is read for the other; otherwise `400 malformed-request`. What stays open is the hub's own word:
+  a peer that hosts a room can name any requester for it, as §5.2 has the target's provider hear the request from the
+  hub, and nothing this hub holds ties the request's signature to the requester. Unlike `submitMessage`, the draft's
+  own `KeyMaterialRequest` (§5.2) carries a self-signed identity claim (`requesterSignatureKey`/`requesterCredential`/
   `keyMaterialRequestSignature`) - a real mechanism, not an invented one. This hub checks the
   credential's embedded identity against the claimed `requestingUser` and logs the outcome, but
   never refuses a request over a mismatch, and does not verify the signature itself (the exact
@@ -744,6 +751,7 @@ system "rate-limit KeyPackage requests, especially if not authenticated". Every 
 client is authenticated (the peer's proof on the provider path, the user's signature on the client lane) and passes the
 consent gate, and both paths take at most 5 requests an hour from one requester for one target user (429
 `key-material-rate-limited` on the provider path, `client-rate-limited` on the lane, which also limits each user to 30
-a minute). The requester on the provider path is the user the request names, so a peer that names many of its users
-can make that many sets of requests. The operator's loopback route that serves a KeyPackage (DIV-16, "The operator's
+a minute). On the provider path the requester is one the asking peer speaks for (DIV-6): a user of its provider or, as the
+room's hub, any requester for a room it hosts. A peer that names many can make that many sets of requests; a request
+refused for its requester or its target is not counted. The operator's loopback route that serves a KeyPackage (DIV-16, "The operator's
 routes") is the operator's, and is neither gated nor limited.

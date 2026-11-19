@@ -22,8 +22,8 @@ use crate::peer_directory::{Directories, PeerAccess, PeerBases};
 use crate::Provider;
 
 const ROOM: &str = "mimi://hub.example/r/room";
-const ALICE: &str = "mimi://hub.example/u/alice";
-const DAVE: &str = "mimi://hub.example/u/dave";
+const ALICE: &str = "mimi://member.example/u/alice";
+const DAVE: &str = "mimi://member.example/u/dave";
 const CAROL: &str = "mimi://peer.example/u/carol";
 
 fn role(index: u32, capabilities: Vec<Capability>) -> Role {
@@ -77,8 +77,8 @@ async fn peer(
     (key_package, addr, seen)
 }
 
-/// A hub hosting `ROOM` with Alice (a role that may add participants) and Dave (one that may not), reaching `PEER` at
-/// `addr`.
+/// A hub hosting `ROOM` with Alice (a role that may add participants) and Dave (one that may not), both users of
+/// `member.example`, whose requests come through it, reaching `PEER` at `addr`.
 fn hub(pki: &Pki, addr: std::net::SocketAddr) -> SharedProvider {
     let access = PeerAccess {
         client: Arc::new(pki.client(loopback_allowed(), None, resolver(PEER, &[addr]))),
@@ -120,7 +120,10 @@ async fn ask(p: &SharedProvider, body: Vec<u8>) -> (StatusCode, Vec<u8>) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/mimi/pl/keyMaterial/carol")
+                .extension(crate::peer::PeerCert(Some(
+                    crate::peer::PeerIdentity::signed("member.example"),
+                )))
+                .uri("/mimi/pl/keyMaterial/mimi%3A%2F%2Fpeer.example%2Fu%2Fcarol")
                 .body(Body::from(body))
                 .unwrap(),
         )
@@ -199,7 +202,7 @@ async fn a_request_the_hub_does_not_forward_is_no_consent() {
         ),
         (
             "a non-participant",
-            request("mimi://hub.example/u/eve", ROOM),
+            request("mimi://member.example/u/eve", ROOM),
         ),
         ("a role without canAddParticipant", request(DAVE, ROOM)),
     ] {

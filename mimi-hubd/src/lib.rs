@@ -92,8 +92,14 @@ fn peer_speaks_for(peer: Option<&crate::peer::PeerIdentity>, user_uri: &str) -> 
 /// The provider domain of a user URI: its authority, lowercased, with a port taken off. `None` for a URI that is not a
 /// user URI.
 fn user_domain(user_uri: &str) -> Option<String> {
-    let uri = MimiUri::parse(user_uri).ok()?;
-    if uri.kind != Some(MimiKind::User) {
+    uri_domain(user_uri, MimiKind::User)
+}
+
+/// The provider domain of a URI of `kind`: its authority, lowercased, with a port taken off. `None` for a URI that is
+/// not of that kind.
+fn uri_domain(uri: &str, kind: MimiKind) -> Option<String> {
+    let uri = MimiUri::parse(uri).ok()?;
+    if uri.kind != Some(kind) {
         return None;
     }
     let host = match uri.authority.rsplit_once(':') {
@@ -486,6 +492,32 @@ impl Provider {
         match MimiUri::parse(user) {
             Ok(uri) if uri.kind == Some(MimiKind::User) && !uri.is_local_to(&self.domain) => {
                 user_domain(user)
+                    .is_some_and(|domain| peer.is_some_and(|peer| peer.authenticates(&domain)))
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `peer` may ask, on the provider path, for KeyPackages on behalf of `requester`: when its proof
+    /// authenticates the requester's provider (never for a user of this provider, see [`Self::peer_serves_user`]), or
+    /// when the request names a room on another provider and the peer's proof authenticates that provider, the room's
+    /// hub. protocol-07 §5.2 has every keyMaterial request go through the room's hub ("MUST be sent via the hub
+    /// provider of whatever room they will be used in"), so a user's provider hears most of them from the hub.
+    pub fn peer_may_request_key_material(
+        &self,
+        requester: &str,
+        room: Option<&str>,
+        peer: Option<&crate::peer::PeerIdentity>,
+    ) -> bool {
+        if self.peer_serves_user(requester, peer) {
+            return true;
+        }
+        let Some(room) = room else {
+            return false;
+        };
+        match MimiUri::parse(room) {
+            Ok(uri) if uri.kind == Some(MimiKind::Room) && !uri.is_local_to(&self.domain) => {
+                uri_domain(room, MimiKind::Room)
                     .is_some_and(|domain| peer.is_some_and(|peer| peer.authenticates(&domain)))
             }
             _ => false,
