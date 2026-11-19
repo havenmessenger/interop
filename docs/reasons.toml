@@ -114,11 +114,11 @@ reason = "Two participant-list updates in one Commit, which all index the list b
 [[reason]]
 id = "app-data-component-not-read"
 surfaces_as = "update answer invalidProposal; reported by a client in the room"
-spec = "local"
-section = ""
-quote = ""
+spec = "draft-ietf-mls-extensions-10"
+section = "4.7"
+quote = "An AppDataUpdate proposal is invalid if its component_id references a component that is not known to the application, or if it specifies the removal of state for a component_id that has no state present."
 divergence = "DIV-15"
-reason = "A Commit changes an app data component this implementation does not read, such as join_links, whose update is a list of changes rather than its new value, so it is refused rather than stored as the value."
+reason = "A Commit changes an app data component this implementation does not know; DIV-15 lists the ones it does. join_links is among those it refuses: its update is a list of removals and additions, and how one applies is an open question upstream (mimi-room-policy issue 30)."
 
 [[reason]]
 id = "roles-change-with-participant-change"
