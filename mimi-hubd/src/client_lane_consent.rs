@@ -6,13 +6,15 @@
 //! requester of this provider). A decision's scope is the draft's `ConsentScope`: one requesting user, optionally one
 //! room. With the policy's `consent_provider_grants` a user may also decide for every user of a provider, read after
 //! the user's own decisions. It is read against the requester URI's domain, which any peer naming a room on its own
-//! domain can choose (DIVERGENCES DIV-6), so on it admits any authenticated peer. A grant to a user of another provider is sent to that provider as `updateConsent`, so the
-//! requester's client knows it may add the user; a revoke is not, unless `consent_revoke_notifies` (§8: "a consent
-//! revocation/rejection is typically not communicated"). Either way the decision stands: it is the gate.
+//! domain can choose (DIVERGENCES DIV-6), so on it admits any authenticated peer. A grant to a user of another provider
+//! is sent to that provider as `updateConsent`, so the requester's client knows it may add the user; a revoke is not,
+//! unless `consent_revoke_notifies` (§8: "a consent revocation/rejection is typically not communicated"). Either way
+//! the decision stands: it is the gate.
 //!
 //! A request made of a user stays pending for `consent_request_days`, then is dropped; ignoring one leaves it pending,
 //! and a revoke with no request is a preemptive one ("block"). Opting out withdraws the user's KeyPackages and, unless
-//! `consent_kept_at_opt_out`, clears the user's decisions and the requests made of them, so opting in again starts over.
+//! `consent_kept_at_opt_out`, clears the user's decisions and the requests made of them, so opting in again starts
+//! over.
 
 use mimi_core::consent::{validate_consent_entry, ConsentEntry, ConsentOperation};
 use mimi_core::protocol_wire::encode_consent_entry;

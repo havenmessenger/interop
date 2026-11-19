@@ -46,7 +46,8 @@ fn refused(refusal: LaneConsentRefusal) -> Response {
     }
 }
 
-/// Send `message` to its provider as this provider; true when it answered `201`, as a consent route always does.
+/// Send `message` to its provider as this provider; true when it took it. A peer's consent routes answer `202
+/// Accepted` whatever they did with it (protocol-07 §5.7 says nothing back), so any 2xx is taken, and anything else not.
 async fn send(state: &LaneState, message: ConsentMessage) -> bool {
     let Some(access) = state.peer_access() else {
         eprintln!(
@@ -65,7 +66,7 @@ async fn send(state: &LaneState, message: ConsentMessage) -> bool {
     )
     .await
     {
-        Ok((201, _)) => true,
+        Ok((200..=299, _)) => true,
         Ok((status, _)) => {
             eprintln!(
                 "[mimi-hubd] client lane consent: {} answered {status} to {}",

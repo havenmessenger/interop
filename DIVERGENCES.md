@@ -706,14 +706,14 @@ bind it to its sender's leaf, which the hosting hub and the room's members check
 nor its tree (DIV-5), so it does not check what a relayed update changes.
 
 The lane's consent routes (`consent`, `requestConsent`, `consentRequests`, `consentReceived`, `optOut`) let a user of
-this provider make the decisions §8 leaves to the target user, and only that user makes them: a decision gating a
-user's KeyPackages is recorded only from that user's lane, never from a peer (`updateConsent` is taken only for a
-requester of this provider). A decision's scope is §8's `ConsentScope`, one requesting user and optionally one room. What
-the draft leaves to the provider is a policy setting: deciding for every user of a provider (`consent_provider_grants`,
-off; a provider grant is read against the requester URI's domain, which any peer naming a room on its own domain can
-choose (DIV-6), so on it admits any authenticated peer, and it is for a deployment where every peer is trusted), telling the requester of a revoke (`consent_revoke_notifies`, off: "typically not communicated"), keeping
-decisions when a user opts out (`consent_kept_at_opt_out`, off), and how long a request stays pending
-(`consent_request_days`, 30).
+this provider make the decisions §8 leaves to the target user, and only that user makes them: a decision gating a user's
+KeyPackages is recorded only from that user's lane, never from a peer (`updateConsent` is taken only for a requester of
+this provider). A decision's scope is §8's `ConsentScope`, one requesting user and optionally one room. What the draft
+leaves to the provider is a policy setting: deciding for every user of a provider (`consent_provider_grants`, off; a
+provider grant is read against the requester URI's domain, which any peer naming a room on its own domain can choose
+(DIV-6), so on it admits any authenticated peer, and it is for a deployment where every peer is trusted), telling the
+requester of a revoke (`consent_revoke_notifies`, off: "typically not communicated"), keeping decisions when a user opts
+out (`consent_kept_at_opt_out`, off), and how long a request stays pending (`consent_request_days`, 30).
 
 ## DIV-21 - several participant-list updates in one Commit: the order their additions are appended in
 
