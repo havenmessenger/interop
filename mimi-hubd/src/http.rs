@@ -247,16 +247,14 @@ async fn key_material_wire(
         }
         domain
     };
-    // At most so many from one requesting provider, and from one requester, for one target in an hour: a target's
-    // KeyPackages are spent by being claimed, and a last-resort one, when reused (DIVERGENCES DIV-23), is the same one
-    // each time. The provider is the domain the peer proved; the requester is only a name it chose.
+    // At most so many from one requesting provider for one target in an hour: a target's KeyPackages are spent by being
+    // claimed, and a last-resort one, when reused (DIVERGENCES DIV-23), is the same one each time. The provider is the
+    // domain the peer proved; the requester is only a name it chose, so it is not counted.
     let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
-    if !lock(&p).key_material_cap.admit_peer(
-        &domain,
-        &req.requesting_user.0,
-        &req.target_user.0,
-        now,
-    ) {
+    if !lock(&p)
+        .key_material_cap
+        .admit(&domain, &req.target_user.0, now)
+    {
         return crate::problem::KEY_MATERIAL_RATE_LIMITED.response();
     }
     match key_material_answer(&p, target_user, &req, body.to_vec()).await {

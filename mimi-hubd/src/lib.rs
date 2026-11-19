@@ -224,8 +224,8 @@ pub struct Provider {
     /// Whether a claimed last-resort KeyPackage stays to be handed out again (`MIMI_LAST_RESORT_REUSE`; off by default,
     /// so it is handed out once, as protocol-07 §5.2 has key material; DIVERGENCES DIV-23).
     last_resort_reuse: bool,
-    /// keyMaterial requests on the provider path, per requester and target (`key_material_wire`).
-    pub(crate) key_material_cap: client_lane_relay::KeyMaterialCap,
+    /// keyMaterial requests on the provider path, per requesting provider and target (`key_material_wire`).
+    pub(crate) key_material_cap: client_lane_relay::PeerKeyMaterialCap,
 }
 
 /// The capability each room-policy component's change needs (room-policy-04 §8.6), with the refusal that names it.
@@ -294,7 +294,7 @@ impl Provider {
             peer_access: None,
             hub_signer: None,
             last_resort_reuse: false,
-            key_material_cap: client_lane_relay::KeyMaterialCap::default(),
+            key_material_cap: client_lane_relay::PeerKeyMaterialCap::default(),
         })
     }
 
@@ -309,7 +309,7 @@ impl Provider {
             peer_access: None,
             hub_signer: None,
             last_resort_reuse: false,
-            key_material_cap: client_lane_relay::KeyMaterialCap::default(),
+            key_material_cap: client_lane_relay::PeerKeyMaterialCap::default(),
         })
     }
 

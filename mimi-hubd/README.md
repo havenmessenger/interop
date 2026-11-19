@@ -387,8 +387,8 @@ this hub hosts and from a participant who may add participants, is forwarded to 
 returns is recorded so the Welcome that uses it goes there; any other such request is answered `noConsent`. The
 provider path takes a `keyMaterial` request only from the provider of the user it names as requester, or from the hub
 of the room it names (403 `not-permitted` otherwise), and only when its path and its `targetUser` name the same user
-(400 `malformed-request` otherwise; `../DIVERGENCES.md`, DIV-6). One requesting provider, and one requester, may make
-at most 5 `keyMaterial` requests an hour for one target user; past that the hub answers 429
+(400 `malformed-request` otherwise; `../DIVERGENCES.md`, DIV-6). One requesting provider (the domain the peer proved; the
+requester it names is not counted) may make at most 5 `keyMaterial` requests an hour for one target user; past that the hub answers 429
 `key-material-rate-limited` (`../docs/problems.md`).
 
 ## Endpoints

@@ -178,7 +178,7 @@ pub const KEY_MATERIAL_RATE_LIMITED: ProblemType = ProblemType {
     anchor: "key-material-rate-limited",
     title: "Too many keyMaterial requests for this target",
     status: StatusCode::TOO_MANY_REQUESTS,
-    detail: "The hub takes a bounded number of keyMaterial requests from one requesting provider, and from one requester, for one target user in an hour. Retry after an hour.",
+    detail: "The hub takes a bounded number of keyMaterial requests from one requesting provider for one target user in an hour. Retry after an hour.",
 };
 
 /// Every problem type, for the page check and the fallback.

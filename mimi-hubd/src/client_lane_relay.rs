@@ -28,17 +28,23 @@ use crate::peer_directory::PeerAccess;
 // LIMIT-REASON: quota: adding a room's members takes one request per member; this bounds a user fetching for many
 pub const KEY_MATERIAL_PER_MINUTE: u32 = 30;
 
-/// keyMaterial requests one requester may make for one target user in an hour, on the client lane and on the provider
-/// path, where one requesting provider may also make no more than this for one target user.
+/// keyMaterial requests one lane user may make for one target user in an hour, and one requesting provider on the
+/// provider path.
 // LIMIT-REASON: quota: a target's KeyPackages are single-use; this bounds one user spending another's
 pub const KEY_MATERIAL_PER_TARGET_PER_HOUR: u32 = 5;
 
-/// keyMaterial requests per user (this minute), per user and target (this hour), and on the provider path per
-/// requesting provider and target (this hour), in memory.
+/// The client lane's keyMaterial requests per user (this minute) and per user and target (this hour), in memory.
 #[derive(Default)]
 pub struct KeyMaterialCap {
     per_user: Mutex<HashMap<String, (i64, u32)>>,
     per_target: Mutex<HashMap<(String, String), (i64, u32)>>,
+}
+
+/// The provider path's keyMaterial requests per requesting provider and target (this hour), in memory. The provider is
+/// the domain the peer proved; the requester a request names is the peer's choice (DIV-6), so it is not counted: a
+/// count on it would let one peer spend the budget of whatever requester it names.
+#[derive(Default)]
+pub struct PeerKeyMaterialCap {
     per_provider_target: Mutex<HashMap<(String, String), (i64, u32)>>,
 }
 
@@ -74,42 +80,27 @@ impl KeyMaterialCap {
         );
         user_ok && target_ok
     }
+}
 
-    /// Count one provider-path request at `now` (seconds) from the peer whose proof authenticated `provider`, naming
-    /// `requester`, for `target`; false when either hourly limit is passed. The per-provider limit is the one that holds:
-    /// requester names cost a peer nothing, the domain it proved does. The per-user minute limit is the requesting
-    /// provider's to keep. A refused request is counted against neither limit: the requester is only a name the peer
-    /// chose, so a request past the peer's own limit must not spend the budget of the requester it names.
-    pub fn admit_peer(&self, provider: &str, requester: &str, target: &str, now: i64) -> bool {
+impl PeerKeyMaterialCap {
+    /// Count one provider-path request at `now` (seconds) from the peer whose proof authenticated `provider`, for
+    /// `target`; false when the hourly limit is passed. A refused request is not counted.
+    pub fn admit(&self, provider: &str, target: &str, now: i64) -> bool {
         let window = now / 3600;
-        let target = mimi_core::uri::canonical(target);
-        let provider_key = (provider.to_ascii_lowercase(), target.clone());
-        let requester_key = (mimi_core::uri::canonical(requester), target);
-        // Both maps are held together, the provider's first, so the check and the count are one step.
-        let mut per_provider = self
+        let key = (
+            provider.to_ascii_lowercase(),
+            mimi_core::uri::canonical(target),
+        );
+        let mut counts = self
             .per_provider_target
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut per_requester = self
-            .per_target
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        per_provider.retain(|_, (at, _)| *at == window);
-        per_requester.retain(|_, (at, _)| *at == window);
-        let spent = |counts: &HashMap<(String, String), (i64, u32)>, key: &(String, String)| {
-            counts.get(key).map_or(0, |(_, n)| *n)
-        };
-        if spent(&per_provider, &provider_key) >= KEY_MATERIAL_PER_TARGET_PER_HOUR
-            || spent(&per_requester, &requester_key) >= KEY_MATERIAL_PER_TARGET_PER_HOUR
-        {
+        counts.retain(|_, (at, _)| *at == window);
+        let spent = counts.entry(key).or_insert((window, 0));
+        if spent.1 >= KEY_MATERIAL_PER_TARGET_PER_HOUR {
             return false;
         }
-        for (counts, key) in [
-            (&mut *per_provider, provider_key),
-            (&mut *per_requester, requester_key),
-        ] {
-            counts.entry(key).or_insert((window, 0)).1 += 1;
-        }
+        spent.1 += 1;
         true
     }
 }

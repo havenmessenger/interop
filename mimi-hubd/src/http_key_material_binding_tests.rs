@@ -212,7 +212,7 @@ async fn a_refused_request_spends_no_budget() {
 
 /// A peer that names a new requester each time, through a room on its own domain, is still held to the hourly limit for
 /// one target: the count is on the domain it proved, not only on the names it chose. Another provider is counted on its
-/// own. Revert check: count per requester alone, and the request past the limit is answered.
+/// own. Revert check: drop the per-provider limit, and the request past it is answered.
 #[tokio::test]
 async fn a_peer_naming_new_requesters_is_held_to_its_providers_limit() {
     let (router, _p) = app();
@@ -263,5 +263,23 @@ async fn a_request_refused_for_its_providers_limit_spends_no_requesters_budget()
         status,
         StatusCode::OK,
         "PLANT-KM-REFUSED-SPENDS-NOTHING: a peer past its limit spent the budget of a requester it named"
+    );
+}
+
+/// A requester another peer names keeps its own provider's budget: only the domain a peer proved is counted, so a peer
+/// naming zed spends nothing of third.example's, zed's own provider. Revert check: count per requester as well, and
+/// third.example gets a 429 for bob after another peer named zed five times.
+#[tokio::test]
+async fn a_requester_another_peer_names_keeps_its_own_providers_budget() {
+    let (router, _p) = app();
+    for n in 0..crate::client_lane_relay::KEY_MATERIAL_PER_TARGET_PER_HOUR {
+        let (status, _) = ask(&router, "hub.example", "bob", ZED, BOB, HUB_ROOM).await;
+        assert_eq!(status, StatusCode::OK, "request {n}");
+    }
+    let (status, _) = ask(&router, "third.example", "bob", ZED, BOB, "").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "PLANT-KM-NAMED-REQUESTER-FREE: another peer naming zed spent zed's provider's budget"
     );
 }

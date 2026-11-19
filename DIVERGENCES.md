@@ -755,8 +755,7 @@ system "rate-limit KeyPackage requests, especially if not authenticated". Every 
 client is authenticated (the peer's proof on the provider path, the user's signature on the client lane) and passes the
 consent gate. The client lane takes at most 5 requests an hour from one user for one target user, and 30 a minute from
 one user (429 `client-rate-limited`). The provider path takes at most 5 an hour per requesting provider and target user,
-the provider being the domain the peer proved, and 5 per requester and target (429 `key-material-rate-limited`): a
-peer can name any requester by naming a room on its own domain (DIV-6), so the per-provider count is the bound that
-holds. A request refused for its requester, its target or either limit is not counted, so a peer past its own limit
-spends no budget of the requesters it names. The operator's loopback route that serves a KeyPackage (DIV-16, "The operator's
+the provider being the domain the peer proved (429 `key-material-rate-limited`). The requester a request names is not
+counted: a peer can name any requester by naming a room on its own domain (DIV-6), so a count on it would let one peer
+spend the budget of another provider's users. A refused request is not counted. The operator's loopback route that serves a KeyPackage (DIV-16, "The operator's
 routes") is the operator's, and is neither gated nor limited.
