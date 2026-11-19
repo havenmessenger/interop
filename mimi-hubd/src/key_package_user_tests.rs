@@ -85,3 +85,26 @@ fn opening_joins_a_uri_pool_to_the_name() {
         .is_some());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The operator takes a user's Welcome by name or by URI, whichever key it was queued under. Revert check: take by the
+/// spelling given only, and the Welcome for a KeyPackage published by URI (queued under the name) is not found by URI.
+#[test]
+fn a_welcome_is_taken_by_name_or_by_uri() {
+    let p = Provider::in_memory(DOMAIN).unwrap();
+    // A KeyPackage published by URI routes its Welcome to the name.
+    p.store
+        .enqueue_welcome("erin", b"for-the-name", NOW)
+        .unwrap();
+    assert_eq!(
+        p.take_local_welcome(ERIN).unwrap().as_deref(),
+        Some(&b"for-the-name"[..]),
+        "PLANT-KP-TAKE-BY-URI: a Welcome queued under the name is taken by URI"
+    );
+    // One queued under the URI before keys were joined is still taken, by either spelling, and once.
+    p.store.enqueue_welcome(ERIN, b"for-the-uri", NOW).unwrap();
+    assert_eq!(
+        p.take_local_welcome("erin").unwrap().as_deref(),
+        Some(&b"for-the-uri"[..])
+    );
+    assert_eq!(p.take_local_welcome(ERIN).unwrap(), None);
+}

@@ -608,6 +608,21 @@ impl Provider {
         self.store.fetch_welcome(recipient)
     }
 
+    /// Take one Welcome queued for a user of this provider, named by name or by URI: a Welcome for a KeyPackage is
+    /// queued under the key the KeyPackage was kept under (its name), and one queued earlier may sit under the URI, so
+    /// both are read, the name first, whichever spelling the user is named by.
+    pub fn take_local_welcome(&self, user: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        let name = self.key_package_user(user);
+        if let Some(welcome) = self.store.fetch_welcome(&name)? {
+            return Ok(Some(welcome));
+        }
+        let uri = format!("mimi://{}/u/{name}", self.domain);
+        if !self.is_local_user(&uri) || name.contains('/') {
+            return Ok(None);
+        }
+        self.store.fetch_welcome(&uri)
+    }
+
     /// Submit an application message (opaque MLS PrivateMessage) for `recipient`. NOT suite-gated - it
     /// is end-to-end ciphertext the provider never inspects; the store bounds size.
     pub fn submit_message(

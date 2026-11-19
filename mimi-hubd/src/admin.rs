@@ -143,7 +143,7 @@ async fn take_welcome(
     if !g.is_local_user(&q.user) {
         return crate::problem::NOT_PERMITTED.response();
     }
-    taken(g.fetch_welcome(&q.user))
+    taken(g.take_local_welcome(&q.user))
 }
 
 /// Take one queued message for a user of this provider: 200 + bytes, 404 when none.
