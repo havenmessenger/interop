@@ -128,7 +128,8 @@ async fn a_user_of_another_hub_is_welcomed_and_reads_the_room_through_their_lane
         welcome: Some(bare),
         group_info_option: GroupInfoOption {
             representation: GroupInfoRepresentation::Partial,
-            payload: Vec::new(),
+            // The least PartialGroupInfo: no tree, no extensions, an empty signature.
+            payload: vec![0, 0, 0],
         },
         ratchet_tree_option: Vec::new(),
     }

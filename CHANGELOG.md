@@ -13,6 +13,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   rebuilds the GroupInfo from its group after the Commit (with the tree after it, when the Partial says the GroupInfo
   carries one) and refuses the Commit (`invalidProposal`) unless the committer signed it. Before, a Partial GroupInfo
   was taken unchecked. DIV-12 has where the rebuild departs from the draft's letter.
+- `mimi-core`: a `Partial` `GroupInfoOption` payload is written and read raw, as protocol-07 §5.3 writes it, its end found
+  by decoding the `PartialGroupInfo`; it no longer carries a `<V>` length prefix, and one that does not decode is
+  refused. This changes the wire: a bundle written with the prefix does not decode. The `hb-03-partial-group-info`
+  vector now carries the `PartialGroupInfo` of `hb-01`'s GroupInfo.
 - `mimi-hubd`: the client lane serves `keyMaterial` (a client's signed `KeyMaterialRequest`, checked to be the user's
   own) and acts on rooms on another hub: `submitMessage`, `update` and `keyMaterial` for such a room are sent to the
   room's hub as this provider, as protocol-07 §3.4 and §5.2 have a member provider do. keyMaterial on the lane is

@@ -178,7 +178,8 @@ async fn a_welcome_under_another_ciphersuite_is_refused_with_no_state_change() {
         welcome: Some(foreign_welcome),
         group_info_option: GroupInfoOption {
             representation: GroupInfoRepresentation::Partial,
-            payload: Vec::new(),
+            // The least PartialGroupInfo: no tree, no extensions, an empty signature.
+            payload: vec![0, 0, 0],
         },
         ratchet_tree_option: Vec::new(),
     }

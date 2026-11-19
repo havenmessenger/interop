@@ -335,8 +335,10 @@ fn main() {
     let (commit, welcome, group_info) = add_commit();
     let wrapped_welcome = [vec![0x00, 0x01, 0x00, 0x03], welcome.clone()].concat();
     let foreign_welcome = [vec![0x00, 0x03], vec![0xFF; 16]].concat();
-    let partial = VLBytes::new(vec![0xAB; 40])
-        .tls_serialize_detached()
+    // The PartialGroupInfo (ratchet-tree-options §4) the committer sends for that GroupInfo, written raw.
+    let partial = mimi_core::partial_group_info::PartialGroupInfo::split(&group_info, false)
+        .unwrap()
+        .encode()
         .unwrap();
 
     let add_carol = encode_participant_list_update(&ParticipantListUpdate {
@@ -464,7 +466,7 @@ fn main() {
             &bundle(&commit, Some(&welcome), 1, &group_info, &TREE_FROM_DS), "ok", Some("Commit")),
         vector("hb-02-commit-without-welcome", hb, "a Commit with no Welcome and a raw Full GroupInfo",
             &bundle(&commit, None, 1, &group_info, &TREE_FROM_DS), "ok", Some("Commit")),
-        vector("hb-03-partial-group-info", hb, "a Partial GroupInfoOption, written with a length prefix; it decodes only against this codec (DIVERGENCES.md DIV-12)",
+        vector("hb-03-partial-group-info", hb, "a Partial GroupInfoOption: the PartialGroupInfo (draft-ietf-mls-ratchet-tree-options section 4) for hb-01's GroupInfo, raw",
             &bundle(&commit, Some(&welcome), 2, &partial, &TREE_FROM_DS), "ok", Some("Commit")),
         vector("hb-x1-welcome-in-mls-message", hb, "the Welcome wrapped in an MLSMessage instead of bare",
             &bundle(&commit, Some(&wrapped_welcome), 1, &group_info, &TREE_FROM_DS), "refused", None),

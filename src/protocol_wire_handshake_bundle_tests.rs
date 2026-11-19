@@ -118,35 +118,56 @@ fn a_full_group_info_is_never_read_through_a_length_prefix() {
     }
 }
 
+/// A Partial GroupInfo is carried raw, as the draft writes it, its end found by decoding it: the ratchet tree option
+/// after it is read whole, and the bundle encodes back to the same bytes. Revert check: keep the length prefix, and the
+/// raw bundle does not decode.
 #[test]
-fn a_partial_group_info_keeps_its_length_prefix() {
+fn a_partial_group_info_is_carried_raw() {
     let AddCommit {
-        commit, welcome, ..
+        commit,
+        welcome,
+        group_info,
     } = add_commit();
-    let payload = [0xAB; 40];
-    let wire = bundle(
-        &commit,
-        Some(&welcome),
-        PARTIAL,
-        &length_prefixed(&payload),
-        &[0xEE],
-    );
-    let decoded = HandshakeBundle::decode(&wire, ONLY_AES).unwrap();
-    let HandshakeBundle::Commit {
+    let payload = crate::partial_group_info::PartialGroupInfo::split(&group_info, true)
+        .unwrap()
+        .encode()
+        .unwrap();
+    let wire = bundle(&commit, Some(&welcome), PARTIAL, &payload, &[0xEE]);
+    let decoded = HandshakeBundle::decode(&wire, ONLY_AES);
+    let Ok(HandshakeBundle::Commit {
         group_info_option,
         ratchet_tree_option,
         ..
-    } = &decoded
+    }) = &decoded
     else {
-        panic!("Commit");
+        panic!("PLANT-PARTIAL-RAW: a raw Partial GroupInfo did not decode: {decoded:?}");
     };
     assert_eq!(
         group_info_option.representation,
         GroupInfoRepresentation::Partial
     );
-    assert_eq!(group_info_option.payload, payload);
+    assert_eq!(
+        group_info_option.payload, payload,
+        "PLANT-PARTIAL-RAW: a raw Partial GroupInfo was not read as one"
+    );
     assert_eq!(ratchet_tree_option, &[0xEE]);
-    assert_eq!(decoded.encode().unwrap(), wire);
+    assert_eq!(decoded.unwrap().encode().unwrap(), wire);
+}
+
+/// A Partial GroupInfo that is not one (here, a length-prefixed blob) is refused rather than taken as opaque bytes.
+#[test]
+fn a_partial_group_info_that_does_not_decode_is_refused() {
+    let AddCommit {
+        commit, welcome, ..
+    } = add_commit();
+    let wire = bundle(
+        &commit,
+        Some(&welcome),
+        PARTIAL,
+        &length_prefixed(&[0xAB; 40]),
+        &[0xEE],
+    );
+    assert!(HandshakeBundle::decode(&wire, ONLY_AES).is_err());
 }
 
 #[test]

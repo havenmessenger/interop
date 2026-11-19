@@ -2244,8 +2244,8 @@ mod tests {
         )
     }
 
-    /// The `UpdateRequest` body for a Commit: a `HandshakeBundle` with no Welcome, a `Partial` group info (the one
-    /// representation that does not need a GroupInfo) and no ratchet tree.
+    /// The `UpdateRequest` body for a Commit: a `HandshakeBundle` with no Welcome, an empty `Partial` group info (checked
+    /// only in a tracked room) and no ratchet tree.
     pub(super) fn bundle_of(commit: Vec<u8>) -> Vec<u8> {
         use mimi_core::protocol_wire::{GroupInfoOption, GroupInfoRepresentation, HandshakeBundle};
         HandshakeBundle::Commit {
@@ -2253,7 +2253,8 @@ mod tests {
             welcome: None,
             group_info_option: GroupInfoOption {
                 representation: GroupInfoRepresentation::Partial,
-                payload: Vec::new(),
+                // The least PartialGroupInfo: no tree, no extensions, an empty signature.
+                payload: vec![0, 0, 0],
             },
             ratchet_tree_option: Vec::new(),
         }

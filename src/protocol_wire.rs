@@ -1494,9 +1494,8 @@ impl GroupInfoRepresentation {
 /// §5.3 `GroupInfoOption`. The draft carries `payload` raw, self-delimited by its own TLS structure, not
 /// `<V>`-length-prefixed. A `Full` payload (`GroupInfo`) is written and read that way: its end is found by decoding it as an
 /// `openmls::messages::group_info::VerifiableGroupInfo` (absent from `openmls::prelude` but public), and it is suite-gated at
-/// decode via `crate::gate::mimi_gate_group_info`. A `Partial` payload (`PartialGroupInfo`, read by
-/// `crate::partial_group_info`) keeps a length-prefix wrap here, and is not suite-gated. That is a disclosed departure for the
-/// `Partial` representation alone (DIVERGENCES.md DIV-12).
+/// decode via `crate::gate::mimi_gate_group_info`. A `Partial` payload (`PartialGroupInfo`) is written and read raw too: its
+/// end is found by decoding it with `crate::partial_group_info`. It carries no ciphersuite, so it is not suite-gated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupInfoOption {
     pub representation: GroupInfoRepresentation,
@@ -1557,18 +1556,8 @@ impl HandshakeBundle {
                     None => out.push(0),
                 }
                 out.push(group_info_option.representation.to_u8());
-                match group_info_option.representation {
-                    // A GroupInfo is self-delimiting TLS: raw, as the draft writes it.
-                    GroupInfoRepresentation::Full => {
-                        out.extend_from_slice(&group_info_option.payload)
-                    }
-                    // A PartialGroupInfo has no decoder here, so it keeps a length wrap (see the type's own doc).
-                    GroupInfoRepresentation::Partial => {
-                        VLBytes::new(group_info_option.payload.clone())
-                            .tls_serialize(&mut out)
-                            .map_err(|e| codec_err("groupInfoOption.payload", e))?;
-                    }
-                }
+                // A GroupInfo and a PartialGroupInfo are each self-delimiting TLS: raw, as the draft writes them.
+                out.extend_from_slice(&group_info_option.payload);
                 // ratchetTreeOption is the trailing field of the commit case -- no length prefix
                 // needed at all, raw bytes to the end.
                 out.extend_from_slice(ratchet_tree_option);
@@ -1701,15 +1690,26 @@ impl HandshakeBundle {
                         (payload, &rest[used..])
                     }
                     GroupInfoRepresentation::Partial => {
-                        // Bound before decoding, same short-read panic class as any other scalar VLBytes field.
-                        let (bounded, rest) = bounded_run_input(
-                            rest,
+                        // `ratchet_tree_presence`, then two `<V>` fields, each bounded before it is read (the same
+                        // short-read class as any other scalar VLBytes field); the PartialGroupInfo then decodes whole.
+                        let after_presence = rest.get(1..).ok_or_else(|| WireError::Codec {
+                            what: "groupInfoOption.payload",
+                            detail: "no PartialGroupInfo".into(),
+                        })?;
+                        let (extensions, after_extensions) = bounded_run_input(
+                            after_presence,
                             "groupInfoOption.payload",
                             MAX_RUN_AGGREGATE_BYTES,
                         )?;
-                        let (payload, _tail) = VLBytes::tls_deserialize_bytes(bounded)
-                            .map_err(|e| codec_err("groupInfoOption.payload", e))?;
-                        (payload.as_slice().to_vec(), rest)
+                        let (signature, _) = bounded_run_input(
+                            after_extensions,
+                            "groupInfoOption.payload",
+                            MAX_RUN_AGGREGATE_BYTES,
+                        )?;
+                        let used = 1 + extensions.len() + signature.len();
+                        let payload = rest[..used].to_vec();
+                        crate::partial_group_info::PartialGroupInfo::decode(&payload)?;
+                        (payload, &rest[used..])
                     }
                 };
                 // ratchetTreeOption is the trailing field -- everything left, raw, no wrap.

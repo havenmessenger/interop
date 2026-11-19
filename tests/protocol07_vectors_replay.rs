@@ -124,3 +124,29 @@ fn the_set_covers_each_shape_the_draft_defines() {
         assert!(ids.iter().any(|id| id == wanted), "missing vector {wanted}");
     }
 }
+
+/// hb-03 carries the PartialGroupInfo of hb-01's GroupInfo, raw: decoded from both vectors, the one is the other split.
+#[test]
+fn the_partial_vector_is_the_full_vectors_group_info_split() {
+    let group_info = |id: &str| {
+        let vector = vectors()
+            .into_iter()
+            .find(|vector| vector.id == id)
+            .unwrap();
+        match HandshakeBundle::decode(&hex::decode(&vector.hex).unwrap(), ONLY_AES).unwrap() {
+            HandshakeBundle::Commit {
+                group_info_option, ..
+            } => group_info_option.payload,
+            HandshakeBundle::Proposal { .. } => panic!("{id}: not a Commit"),
+        }
+    };
+    let full = group_info("hb-01-commit-bare-welcome-full-group-info");
+    let partial = group_info("hb-03-partial-group-info");
+    assert_eq!(
+        partial,
+        mimi_core::partial_group_info::PartialGroupInfo::split(&full, false)
+            .unwrap()
+            .encode()
+            .unwrap()
+    );
+}

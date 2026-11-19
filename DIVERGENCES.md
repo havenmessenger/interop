@@ -380,7 +380,7 @@ produces or consumes those specific fields.
 `update`'s `RatchetTreeOption` field (§5.3) also stays opaque, for the same reason as the rest
 of `update`'s codec: no live accept-path exists yet. The wire vectors fill it with a real option
 (see DIV-12), not filler bytes, so a decoder that reads it is not thrown by them. A `Full` `GroupInfoOption` is read raw and
-suite-gated; a `Partial` one stays an opaque length-prefixed blob (DIV-12).
+suite-gated; a `Partial` one is read raw too (DIV-12).
 
 ## DIV-18 - the operational policy component: kept, two flags enforced
 
@@ -397,22 +397,17 @@ kept and not enforced. A change to the component needs the proposer's role to ho
 (`0x0600`), which -04 lists as reserved: this hub reads it as the draft's own capability for the change, pending the
 draft's answer, and a room with no roles has no role checks (room-policy PR #52: "A room that has no `roles_list` has no role-based restrictions.").
 
-## DIV-12 - a `Partial` `GroupInfoOption` payload carries a length prefix
+## DIV-12 - a `Partial` GroupInfo is rebuilt at the hub, its tree tried at either end
 
 §5.3 writes the `GroupInfoOption` payload raw: a `GroupInfo` for `full`, a `PartialGroupInfo`
-for `partial`, each ending where its own structure ends, with `ratchetTreeOption` following.
-A `Full` payload is written and read that way here: its end is found by decoding it as an
-openmls `VerifiableGroupInfo`, and it is suite-gated at decode.
-
-A `Partial` payload is written with a `<V>` length prefix, and it is not suite-gated (it carries no ciphersuite). The
-prefix was the only way to keep `ratchetTreeOption` (the trailing field) findable while nothing here read a
-`PartialGroupInfo`; `mimi_core::partial_group_info` now reads one, which is self-delimiting, so the prefix could go, at
-the cost of changing the `hb-03-partial-group-info` vector. A peer that sends a raw `Partial` payload does not decode
-against this codec meanwhile.
+for `partial`, each ending where its own structure ends, with `ratchetTreeOption` following. Both are written and read
+that way here. A `Full` payload's end is found by decoding it as an openmls `VerifiableGroupInfo`, and it is
+suite-gated at decode; a `Partial` payload's by decoding it with `mimi_core::partial_group_info`
+(draft-ietf-mls-ratchet-tree-options §4), and it is not suite-gated, since it carries no ciphersuite.
 
 A tracked room's Commit with a `Partial` GroupInfo is checked as one with a `Full` GroupInfo is: the hub rebuilds the
-GroupInfo from its group after the Commit (ratchet-tree-options §4) and checks its signature, signer and GroupContext.
-Two departures from the draft's letter:
+GroupInfo from its group after the Commit and checks its signature, signer and GroupContext. Two departures from the
+draft's letter:
 
 - The draft has a GroupInfo sent as a Partial put its `ratchet_tree` extension last. openmls writes it first, before
   the `external_pub` every GroupInfo it exports carries, so a Partial split from an openmls GroupInfo was signed with
@@ -423,8 +418,7 @@ Two departures from the draft's letter:
 The protocol-07 wire vectors (`tests/vectors/protocol07-vectors.json`) are written so another implementation can decode
 them: every `HandshakeBundle` carries a one-byte `RatchetTreeOption` naming `distributionService`
 (draft-ietf-mls-ratchet-tree-options §3), and every `UpdateRequest` carries a `Full` GroupInfoOption with the committing
-group's GroupInfo. The one exception is `hb-03-partial-group-info`, which carries this divergence's length-prefixed
-`Partial` payload and decodes only against this codec.
+group's GroupInfo, except `hb-03-partial-group-info`, which carries the `PartialGroupInfo` of `hb-01`'s GroupInfo.
 
 ## DIV-13 - an exhausted client is answered with `partialSuccess`
 
@@ -663,7 +657,7 @@ is no new vector to add and every one still reads and writes byte for byte.
 Divergences are revisited as the drafts move and as the accept-path work (DIV-6, DIV-9, DIV-10)
 lands. DIV-1 through DIV-4 do not block interoperating with another provider on the supported
 surface. DIV-5, DIV-7, and DIV-11 are closed or mostly closed (see above); DIV-6, DIV-8, DIV-9,
-DIV-10, DIV-12, DIV-13, DIV-15, and DIV-16 still do, for the endpoints they touch, until closed.
+DIV-10, DIV-13, DIV-15, and DIV-16 still do, for the endpoints they touch, until closed.
 
 ## DIV-19 - the client lane is a local extension
 
