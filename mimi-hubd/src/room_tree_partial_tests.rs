@@ -1,7 +1,7 @@
 //! A tracked room's Commit that carries a Partial GroupInfo (ratchet-tree-options §4): the hub rebuilds the GroupInfo
 //! from its group after the Commit and checks it as it checks a Full one.
 
-use mimi_core::partial_group_info::{PartialGroupInfo, RatchetTreePresence};
+use mimi_core::partial_group_info::{PartialGroupInfo, RatchetTreePresence, TreeAt};
 use mimi_core::protocol_wire::{GroupInfoOption, GroupInfoRepresentation};
 use openmls::prelude::tls_codec::{Deserialize as _, Serialize as _, VLBytes};
 use openmls::prelude::*;
@@ -267,6 +267,7 @@ fn a_rebuild_the_hub_cannot_make_is_the_hubs_failure() {
         seeded_by: tracking.seeded_by.clone(),
     };
     let tag = [0u8; 33];
+    // How many GroupInfos each rebuild would try, or why it fails.
     let rebuild = |tracking: &RoomTracking, partial: &[u8], tag: Option<&[u8]>| {
         p.rebuilt_group_infos(
             tracking,
@@ -276,6 +277,7 @@ fn a_rebuild_the_hub_cannot_make_is_the_hubs_failure() {
             tag,
             LeafNodeIndex::new(0),
         )
+        .map(Iterator::count)
     };
     assert_eq!(
         rebuild(&elsewhere, &with_tree, Some(&tag)),
@@ -290,8 +292,66 @@ fn a_rebuild_the_hub_cannot_make_is_the_hubs_failure() {
         rebuild(&tracking, &with_tree, None),
         Err(RebuildError::NoConfirmationTag)
     );
+    // external_pub is its one extension: the tree after it, or before it.
+    assert_eq!(rebuild(&tracking, &with_tree, Some(&tag)), Ok(2));
+}
+
+/// A list of `count` extensions besides the tree, as the hub would be asked to place the tree among: external_pub, then
+/// extensions of types this implementation does not read (0xf000 on), each with no data.
+fn padded_with(exported: &[u8], tree_before: usize, count: usize, by: &Member) -> Vec<u8> {
+    let extensions = extensions_of(exported);
     assert_eq!(
-        rebuild(&tracking, &with_tree, Some(&tag)).map(|v| v.len()),
-        Ok(2)
+        extensions.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+        [0x0002, 0x0004]
     );
+    let mut list = vec![extensions[1].1.clone()];
+    for index in 1..count {
+        let extension_type = 0xf000u16 + u16::try_from(index).unwrap();
+        list.push([extension_type.to_be_bytes().as_slice(), &[0]].concat());
+    }
+    list.insert(tree_before, extensions[0].1.clone());
+    resigned(exported, &list, by)
+}
+
+/// The tree is tried at every place among up to 16 extensions and at the two ends only past that, as
+/// MAX_TREE_PLACES_EXTENSIONS says: the number of GroupInfos tried, and what that means for a real Commit. With 16
+/// extensions and the tree at place 8 the Partial stages; with 17 and the tree at place 8 it is refused, while with 17
+/// and the tree last it still stages. Revert check: drop the cap, and the 17-extension Partial with the tree in the
+/// middle stages.
+#[test]
+fn the_tree_is_tried_at_every_place_only_up_to_the_cap() {
+    assert_eq!(super::MAX_TREE_PLACES_EXTENSIONS, 16);
+    assert_eq!(super::tree_places(0), [TreeAt::Last]);
+    assert_eq!(super::tree_places(1), [TreeAt::Last, TreeAt::First]);
+    assert_eq!(
+        super::tree_places(3),
+        [
+            TreeAt::Last,
+            TreeAt::First,
+            TreeAt::Before(1),
+            TreeAt::Before(2)
+        ]
+    );
+    assert_eq!(super::tree_places(16).len(), 17);
+    assert_eq!(
+        super::tree_places(17),
+        [TreeAt::Last, TreeAt::First],
+        "PLANT-PARTIAL-GI-TREE-CAP: past 16 extensions more than the two ends are tried"
+    );
+
+    let (p, tracking, mut group, alice) = tracked();
+    let carol = Member::new("mimi://example.com/u/carol");
+    let (commit, _group_info, _tree) = add_commit(&mut group, &alice, &[&carol]);
+    let exported = group_info_with_tree(&group, &alice);
+    let stages = |group_info: &[u8]| {
+        let split = PartialGroupInfo::split(group_info, true).unwrap();
+        p.stage_tracked_commit(ROOM, &tracking, &commit, Some(&partial(&split)))
+            .is_ok()
+    };
+    assert!(stages(&padded_with(&exported, 8, 16, &alice)));
+    assert!(
+        !stages(&padded_with(&exported, 8, 17, &alice)),
+        "PLANT-PARTIAL-GI-TREE-CAP: the tree was tried in the middle of 17 extensions"
+    );
+    assert!(stages(&padded_with(&exported, 17, 17, &alice)));
 }

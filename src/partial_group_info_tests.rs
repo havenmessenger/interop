@@ -175,6 +175,46 @@ fn a_group_info_with_the_tree_is_rebuilt_from_its_partial_at_either_end() {
     assert!(rebuild(TreeAt::Last) == reordered(&parts, &[1, 0]));
 }
 
+/// The tree can be put back before any extension of the Partial's list: with external_pub and two GREASE extensions
+/// (mls-rs's shape has one after the tree), each place gives the list with the tree there, the two ends are
+/// `TreeAt::First` and `TreeAt::Last`, and a place past the end is refused. Revert check: ignore the index and put the
+/// tree last, and the middle places differ.
+#[test]
+fn the_tree_is_put_back_at_any_place_in_the_list() {
+    let group_info = crate::test_fixtures::add_commit().group_info;
+    let mut parts = parts(&group_info);
+    parts.extensions.push((0x0a0a, Vec::new()));
+    parts.extensions.push((0x1a1a, Vec::new()));
+    let partial = partial(&parts, RatchetTreePresence::Present);
+    assert_eq!(partial.extension_count().unwrap(), 3);
+    let rebuild = |at| {
+        partial.group_info(
+            &parts.group_context,
+            Some((tree(&parts).unwrap(), at)),
+            &parts.confirmation_tag,
+            parts.signer,
+        )
+    };
+    // parts.extensions is [tree, external_pub, grease, grease]: the tree is index 0, the others 1 to 3 in order.
+    for place in 0..=3 {
+        let mut order = vec![1, 2, 3];
+        order.insert(place, 0);
+        assert!(
+            rebuild(TreeAt::Before(place)).unwrap() == reordered(&parts, &order),
+            "PLANT-PARTIAL-GI-TREE-ANY-PLACE: the tree put back at place {place} is not there"
+        );
+    }
+    assert_eq!(
+        rebuild(TreeAt::First).unwrap(),
+        rebuild(TreeAt::Before(0)).unwrap()
+    );
+    assert_eq!(
+        rebuild(TreeAt::Last).unwrap(),
+        rebuild(TreeAt::Before(3)).unwrap()
+    );
+    assert!(rebuild(TreeAt::Before(4)).is_err());
+}
+
 /// A GroupInfo without the tree (external_pub only) is rebuilt from its Partial with nothing appended.
 #[test]
 fn a_group_info_without_the_tree_is_rebuilt_from_its_partial() {

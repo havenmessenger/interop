@@ -423,7 +423,7 @@ kept and not enforced. A change to the component needs the proposer's role to ho
 (`0x0600`), which -04 lists as reserved: this hub reads it as the draft's own capability for the change, pending the
 draft's answer, and a room with no roles has no role checks (room-policy PR #52: "A room that has no `roles_list` has no role-based restrictions.").
 
-## DIV-12 - a `Partial` GroupInfo is rebuilt at the hub, its tree tried at either end
+## DIV-12 - a `Partial` GroupInfo is rebuilt at the hub, its tree tried at each place in the list
 
 §5.3 writes the `GroupInfoOption` payload raw: a `GroupInfo` for `full`, a `PartialGroupInfo`
 for `partial`, each ending where its own structure ends, with `ratchetTreeOption` following. Both are written and read
@@ -435,9 +435,15 @@ A tracked room's Commit with a `Partial` GroupInfo is checked as one with a `Ful
 GroupInfo from its group after the Commit and checks its signature, signer and GroupContext. Two departures from the
 draft's letter:
 
-- The draft has a GroupInfo sent as a Partial put its `ratchet_tree` extension last. openmls writes it first, before
-  the `external_pub` every GroupInfo it exports carries, so a Partial split from an openmls GroupInfo was signed with
-  the tree first. The hub tries the tree last, then first; the signature decides which, if either, was signed.
+- The draft has a GroupInfo sent as a Partial put its `ratchet_tree` extension last. Implementations differ: openmls
+  writes it first, before `external_pub`; mls-rs writes it after `external_pub`, and with its GREASE feature puts a
+  GREASE extension after it, so the tree is neither first nor last. A Partial is the signed list with the tree taken
+  out and the rest in order, so the hub puts its own tree after the Commit back at each place in that list, last first
+  and then first, then the places between, and the committer's signature decides which, if any, was signed. Each place
+  is one GroupInfo built and one signature checked, made one at a time and stopped at the first that verifies, so a
+  GroupInfo with the tree at either end costs what it did before. Past 16 extensions only the two ends are tried
+  (`MAX_TREE_PLACES_EXTENSIONS`), so one Commit costs at most 17 checks. The work comes after the Commit itself has
+  staged: only a member of the room, with a Commit for the current epoch, reaches it.
 - `ratchet_tree_presence` says whether the GroupInfo before the Commit carried the tree, too (`removed`, `added`). The
   hub does not keep whether the last GroupInfo did, so it reads only whether this one does.
 

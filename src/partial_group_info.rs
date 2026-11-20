@@ -12,9 +12,11 @@
 //!
 //! The signature is the committer's over the full `GroupInfoTBS` (RFC 9420 §12.4.3): the GroupContext after the Commit,
 //! the extensions, the Commit's confirmation tag and the committer's leaf index. When the full GroupInfo carries a
-//! `ratchet_tree` extension it is the last in the list (§4: "it MUST be the last element in the extension list"), so a
-//! receiver that holds the tree after the Commit appends it to `group_info_extensions` and has the list that was signed.
-//! A `PartialGroupInfo` that itself carries a `ratchet_tree` extension is rejected (§4).
+//! `ratchet_tree` extension the draft has it last in the list (§4: "it MUST be the last element in the extension list"),
+//! so a receiver that holds the tree after the Commit appends it to `group_info_extensions` and has the list that was
+//! signed. Implementations put it elsewhere too (openmls first; mls-rs with GREASE before a GREASE extension), so the
+//! receiver can put it back at any place in the list ([`TreeAt`]) and let the signature say which was signed. A
+//! `PartialGroupInfo` that itself carries a `ratchet_tree` extension is rejected (§4).
 //!
 //! This module is the codec: it reads a `PartialGroupInfo` and writes the `GroupInfo` it stands for, from the fields
 //! the receiver supplies. Checking that GroupInfo's signature is the receiver's job, as for any GroupInfo.
@@ -73,6 +75,10 @@ pub enum TreeAt {
     /// First, where openmls writes it (before `external_pub`, which every GroupInfo it exports carries): a
     /// `PartialGroupInfo` split from such a GroupInfo was signed with the tree there.
     First,
+    /// Before the extension at this index of the `PartialGroupInfo`'s list, 0 being [`TreeAt::First`] and the list's
+    /// length [`TreeAt::Last`]: where an implementation that writes extensions after the tree put it (mls-rs, with its
+    /// GREASE extension after the tree).
+    Before(usize),
 }
 
 /// A decoded `PartialGroupInfo`. `extensions` is the content of `group_info_extensions<V>`: each `Extension` as it was
@@ -91,19 +97,21 @@ fn wire(what: &'static str, detail: impl std::fmt::Display) -> WireError {
     }
 }
 
-/// The extension types in `list`, the content of an `Extension extensions<V>` (each a `uint16` type then `opaque
-/// extension_data<V>`), or why it does not read as one.
-fn extension_types(mut list: &[u8]) -> Result<Vec<u16>, WireError> {
-    let mut types = Vec::new();
-    while !list.is_empty() {
-        let (extension_type, rest) = u16::tls_deserialize_bytes(list)
+/// Each extension in `list`, the content of an `Extension extensions<V>` (each a `uint16` type then `opaque
+/// extension_data<V>`), as its type and the offset where it starts, or why it does not read as one.
+fn extension_starts(list: &[u8]) -> Result<Vec<(u16, usize)>, WireError> {
+    let mut extensions = Vec::new();
+    let mut rest = list;
+    while !rest.is_empty() {
+        let start = list.len() - rest.len();
+        let (extension_type, after) = u16::tls_deserialize_bytes(rest)
             .map_err(|error| wire("PartialGroupInfo.group_info_extensions", error))?;
-        let (_data, rest) = VLBytes::tls_deserialize_bytes(rest)
+        let (_data, after) = VLBytes::tls_deserialize_bytes(after)
             .map_err(|error| wire("PartialGroupInfo.group_info_extensions", error))?;
-        types.push(extension_type);
-        list = rest;
+        extensions.push((extension_type, start));
+        rest = after;
     }
-    Ok(types)
+    Ok(extensions)
 }
 
 impl PartialGroupInfo {
@@ -130,7 +138,10 @@ impl PartialGroupInfo {
             ));
         }
         let extensions = extensions.as_slice().to_vec();
-        if extension_types(&extensions)?.contains(&RATCHET_TREE_EXTENSION) {
+        if extension_starts(&extensions)?
+            .iter()
+            .any(|(extension_type, _)| *extension_type == RATCHET_TREE_EXTENSION)
+        {
             return Err(wire(
                 "PartialGroupInfo.group_info_extensions",
                 "carries a ratchet_tree extension",
@@ -193,6 +204,11 @@ impl PartialGroupInfo {
         })
     }
 
+    /// How many extensions `group_info_extensions` holds: the tree can stand at one more place than that.
+    pub fn extension_count(&self) -> Result<usize, WireError> {
+        Ok(extension_starts(&self.extensions)?.len())
+    }
+
     /// The `PartialGroupInfo`'s bytes.
     pub fn encode(&self) -> Result<Vec<u8>, WireError> {
         let mut out = vec![self.ratchet_tree_presence.to_u8()];
@@ -210,7 +226,8 @@ impl PartialGroupInfo {
     /// The `GroupInfo` this stands for: `group_context` (the encoded GroupContext after the Commit), the extensions with
     /// `ratchet_tree` (the encoded tree after the Commit, the extension's content) put at `tree_at` when the presence
     /// says the GroupInfo carries one, `confirmation_tag` (the Commit's, encoded), `signer` (the committer's leaf index
-    /// after the Commit), then the signature. Refuses a tree the presence does not call for, and a missing one it does.
+    /// after the Commit), then the signature. Refuses a tree the presence does not call for, a missing one it does, and
+    /// a [`TreeAt::Before`] past the end of the list.
     pub fn group_info(
         &self,
         group_context: &[u8],
@@ -227,10 +244,26 @@ impl PartialGroupInfo {
                 VLBytes::new(tree.to_vec())
                     .tls_serialize(&mut extension)
                     .map_err(|error| wire("GroupInfo.extensions", error))?;
-                match at {
-                    TreeAt::Last => [self.extensions.as_slice(), &extension].concat(),
-                    TreeAt::First => [extension.as_slice(), &self.extensions].concat(),
-                }
+                let starts = extension_starts(&self.extensions)?;
+                let split = match at {
+                    TreeAt::First => 0,
+                    TreeAt::Last => self.extensions.len(),
+                    TreeAt::Before(index) if index == starts.len() => self.extensions.len(),
+                    TreeAt::Before(index) => match starts.get(index) {
+                        Some((_, start)) => *start,
+                        None => {
+                            return Err(wire(
+                                "GroupInfo.extensions",
+                                format!(
+                                    "no place {index} in a list of {} extensions",
+                                    starts.len()
+                                ),
+                            ))
+                        }
+                    },
+                };
+                let (before, after) = self.extensions.split_at(split);
+                [before, &extension, after].concat()
             }
             (false, None) => self.extensions.clone(),
             (true, None) => {

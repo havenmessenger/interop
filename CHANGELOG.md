@@ -6,6 +6,11 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimi-hubd`: a Partial GroupInfo whose GroupInfo had the ratchet tree between two other extensions is rebuilt and
+  checked. mls-rs with its GREASE feature signs `external_pub`, the tree, then a GREASE extension, and the hub tried
+  the tree only at the two ends, so such a Commit was refused. The hub now tries every place in the list, the ends
+  first, one at a time, up to 16 extensions (only the ends past that). `mimi-core`: `TreeAt::Before(index)` and
+  `PartialGroupInfo::extension_count`. DIV-12 has the rule.
 - `mimi-hubd`: consent on the client lane (protocol-07 §8). A user grants or revokes a requesting user's access to
   their KeyPackages (`consent`), asks a user for theirs or cancels (`requestConsent`), lists the requests made of them
   (`consentRequests`) and the grants they hold (`consentReceived`), and opts out (`optOut`: their KeyPackages withdrawn

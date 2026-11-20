@@ -220,9 +220,57 @@ fn stage_commit(
     Ok((sender, staged))
 }
 
+/// The most extensions a Partial GroupInfo may hold for the hub to try its tree at every place among them; past this,
+/// only at the two ends. Each place tried is one GroupInfo built and one signature checked.
+// LIMIT-REASON: input: implementations put a handful of extensions in a GroupInfo; this bounds the tries one Commit costs
+pub const MAX_TREE_PLACES_EXTENSIONS: usize = 16;
+
+/// The places a Partial GroupInfo's tree is tried at, for a list of `count` extensions, in order: last (the draft's),
+/// first (openmls's), then each place between them, those only up to [`MAX_TREE_PLACES_EXTENSIONS`].
+fn tree_places(count: usize) -> Vec<TreeAt> {
+    let mut places = vec![TreeAt::Last];
+    if count > 0 {
+        places.push(TreeAt::First);
+    }
+    if count <= MAX_TREE_PLACES_EXTENSIONS {
+        places.extend((1..count).map(TreeAt::Before));
+    }
+    places
+}
+
+/// The GroupInfos a Partial GroupInfo stands for, each built only when asked for, in the order [`tree_places`] gives.
+pub(crate) struct Rebuilds {
+    partial: PartialGroupInfo,
+    group_context: Vec<u8>,
+    tree: Option<Vec<u8>>,
+    confirmation_tag: Vec<u8>,
+    signer: u32,
+    places: std::vec::IntoIter<Option<TreeAt>>,
+}
+
+impl Iterator for Rebuilds {
+    type Item = Result<Vec<u8>, RebuildError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let at = self.places.next()?;
+        let tree = self.tree.as_deref().zip(at);
+        // The tree is given exactly when the presence calls for one, so a rebuild fails only in encoding.
+        Some(
+            self.partial
+                .group_info(
+                    &self.group_context,
+                    tree,
+                    &self.confirmation_tag,
+                    self.signer,
+                )
+                .map_err(|_| RebuildError::Hub),
+        )
+    }
+}
+
 /// Why a Partial GroupInfo could not be rebuilt: on the sender's side, or on the hub's.
 #[derive(Debug, PartialEq, Eq)]
-enum RebuildError {
+pub(crate) enum RebuildError {
     /// The Partial GroupInfo does not decode.
     DoesNotDecode,
     /// The Commit has no confirmation tag.
@@ -439,10 +487,12 @@ impl Provider {
         if let Some(group_info) = group_info {
             let signer = committer_leaf_after(&group, &staged, committer_leaf);
             // A Full GroupInfo as sent; a Partial one rebuilt from the group after the Commit, in each place its tree
-            // may stand (ratchet-tree-options §4), and taken if one of them is signed.
-            let candidates = match group_info.representation {
-                GroupInfoRepresentation::Full => vec![group_info.payload.clone()],
-                GroupInfoRepresentation::Partial => self
+            // may stand (ratchet-tree-options §4), one at a time, and taken if one of them is signed.
+            let candidates: Box<dyn Iterator<Item = Result<Vec<u8>, RebuildError>>> = match group_info
+                .representation
+            {
+                GroupInfoRepresentation::Full => Box::new(std::iter::once(Ok(group_info.payload.clone()))),
+                GroupInfoRepresentation::Partial => Box::new(self
                     .rebuilt_group_infos(
                         tracking,
                         commit,
@@ -467,23 +517,34 @@ impl Provider {
                             sender_provider.clone(),
                             UpdateRefusal::Store,
                         ),
-                    })?,
+                    })?),
             };
             // Signed by the committer, with the key it holds after the Commit, before its GroupContext is compared: a
             // GroupInfo rewritten on its way here cannot make a hub whose group has drifted match it. It must also name
             // the committer's leaf as its signer, or every joiner, which verifies it under the key of the leaf it names,
             // would fail to.
             let key = committer_key(&group, &staged, committer_leaf);
-            let info = candidates.iter().find_map(|bytes| {
-                VerifiableGroupInfo::tls_deserialize_exact(bytes.as_slice())
+            let mut info = None;
+            for candidate in candidates {
+                let bytes = candidate.map_err(|_| {
+                    refused(
+                        "the hub could not encode a GroupInfo rebuilt from its Partial GroupInfo",
+                        sender_provider.clone(),
+                        UpdateRefusal::Store,
+                    )
+                })?;
+                info = VerifiableGroupInfo::tls_deserialize_exact(bytes.as_slice())
                     .ok()
                     .filter(|info| {
                         info.signer() == signer
                             && key
                                 .as_ref()
                                 .is_some_and(|key| info.verify_no_out(crypto.crypto(), key).is_ok())
-                    })
-            });
+                    });
+                if info.is_some() {
+                    break;
+                }
+            }
             let Some(info) = info else {
                 return Err(refused(
                     "its GroupInfo is not signed by the committer",
@@ -526,8 +587,9 @@ impl Provider {
 
     /// The GroupInfos a Partial GroupInfo (ratchet-tree-options §4) stands for after `staged`: the GroupContext after the
     /// Commit, its extensions, the Commit's `confirmation_tag`, `signer` and its signature, with the tree after the
-    /// Commit last (as the draft has it) and first (as openmls writes it) when its presence says the GroupInfo carries
-    /// one. Fails on the sender's side when it does not decode (a ratchet_tree in it included) or the Commit has no
+    /// Commit, when its presence says the GroupInfo carries one, at each place it may have stood ([`tree_places`]). They
+    /// are built one at a time as the caller asks, so a GroupInfo whose tree is last or first costs what it did before.
+    /// Fails on the sender's side when it does not decode (a ratchet_tree in it included) or the Commit has no
     /// confirmation tag, and on the hub's when the hub cannot rebuild the tree after the Commit.
     fn rebuilt_group_infos(
         &self,
@@ -537,27 +599,34 @@ impl Provider {
         staged: &StagedCommit,
         confirmation_tag: Option<&[u8]>,
         signer: LeafNodeIndex,
-    ) -> Result<Vec<Vec<u8>>, RebuildError> {
+    ) -> Result<Rebuilds, RebuildError> {
         let partial = PartialGroupInfo::decode(partial).map_err(|_| RebuildError::DoesNotDecode)?;
         let confirmation_tag = confirmation_tag.ok_or(RebuildError::NoConfirmationTag)?;
         let group_context = staged
             .group_context()
             .tls_serialize_detached()
             .map_err(|_| RebuildError::Hub)?;
-        // The tree is given exactly when the presence calls for one, so a rebuild fails only in encoding.
-        let rebuild = |tree| {
-            partial
-                .group_info(&group_context, tree, confirmation_tag, signer.u32())
-                .map_err(|_| RebuildError::Hub)
+        let (tree, places) = if partial.ratchet_tree_presence.in_current_epoch() {
+            let tree = self.tree_after(tracking, commit).ok_or(RebuildError::Hub)?;
+            // The list decoded once already, so it counts.
+            let count = partial
+                .extension_count()
+                .map_err(|_| RebuildError::DoesNotDecode)?;
+            (
+                Some(tree),
+                tree_places(count).into_iter().map(Some).collect(),
+            )
+        } else {
+            (None, vec![None])
         };
-        if !partial.ratchet_tree_presence.in_current_epoch() {
-            return Ok(vec![rebuild(None)?]);
-        }
-        let tree = self.tree_after(tracking, commit).ok_or(RebuildError::Hub)?;
-        Ok(vec![
-            rebuild(Some((&tree, TreeAt::Last)))?,
-            rebuild(Some((&tree, TreeAt::First)))?,
-        ])
+        Ok(Rebuilds {
+            partial,
+            group_context,
+            tree,
+            confirmation_tag: confirmation_tag.to_vec(),
+            signer: signer.u32(),
+            places: Vec::into_iter(places),
+        })
     }
 
     /// The room's ratchet tree after `commit`, encoded. A PublicGroup's staged Commit exports no tree, so the Commit is
