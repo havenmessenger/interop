@@ -760,6 +760,7 @@ impl Provider {
             .map(|row| row.member_uri)
             .collect();
         let seed = self.verify_seed(
+            room_uri,
             commit_epoch,
             requester,
             group_info,
@@ -770,11 +771,12 @@ impl Provider {
             .map_err(Some)
     }
 
-    /// Check a seeding bundle against every rule in the module doc without writing anything. `listed` is the room's
-    /// participants as the hub will list them after the Commit; each must be a member of the tree. `Err(None)`: the
-    /// bundle does not carry what seeding needs; `Err(Some)`: it does, and a check refused it.
+    /// Check a seeding bundle for `room_uri` against every rule in the module doc without writing anything. `listed` is
+    /// the room's participants as the hub will list them after the Commit; each must be a member of the tree.
+    /// `Err(None)`: the bundle does not carry what seeding needs; `Err(Some)`: it does, and a check refused it.
     pub(crate) fn verify_seed(
         &self,
+        room_uri: &str,
         commit_epoch: u64,
         requester: crate::requester::Requester<'_>,
         group_info: &GroupInfoOption,
@@ -853,6 +855,19 @@ impl Provider {
         })
         .transpose()
         .map_err(|_| Some("its GroupContext's operational policy does not decode"))?;
+        // Display data the hub enforces nothing from, but it names its own room (protocol-07 §10.4), and the hub
+        // refuses one naming another room at seeding as it does in an update.
+        if let Some(bytes) = app_data(
+            context,
+            mimi_core::room_metadata::ROOM_METADATA_COMPONENT_ID,
+        ) {
+            let metadata = mimi_core::room_metadata::decode_room_metadata(bytes)
+                .map_err(|_| Some("its GroupContext's room metadata does not decode"))?;
+            if mimi_core::uri::canonical(&metadata.room_uri) != mimi_core::uri::canonical(room_uri)
+            {
+                return Err(Some("its GroupContext's room metadata names another room"));
+            }
+        }
         let list = app_data(context, PARTICIPANT_LIST_COMPONENT)
             .map(decode_participant_list_data)
             .transpose()
@@ -963,3 +978,7 @@ mod partial_tests;
 #[cfg(test)]
 #[path = "room_tree_list_merge_tests.rs"]
 mod list_merge_tests;
+
+#[cfg(test)]
+#[path = "room_tree_seed_metadata_tests.rs"]
+mod seed_metadata_tests;

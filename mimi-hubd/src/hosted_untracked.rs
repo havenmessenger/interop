@@ -103,7 +103,14 @@ impl Provider {
             return Ok(None);
         }
         Ok(self
-            .verify_seed(commit_epoch, requester, group_info, ratchet_tree, &[])
+            .verify_seed(
+                room_uri,
+                commit_epoch,
+                requester,
+                group_info,
+                ratchet_tree,
+                &[],
+            )
             .ok()
             .filter(|seed| seed.list.is_some())
             .map(|seed| seed.signer))
@@ -173,7 +180,14 @@ impl Provider {
             .map(|pair| pair.user_uri)
             .collect();
         let seed = self
-            .verify_seed(commit.epoch, requester, group_info, ratchet_tree, &listed)
+            .verify_seed(
+                room_uri,
+                commit.epoch,
+                requester,
+                group_info,
+                ratchet_tree,
+                &listed,
+            )
             .map_err(|why| why.map_or(NEEDS_TREE, UpdateRefusal::Policy))?;
         if commit_sender_leaf(commit_bytes) != Some(seed.signer_leaf) {
             return Err(NOT_THE_SENDER);

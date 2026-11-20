@@ -6,6 +6,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimi-hubd`: a room's seed checks the `room_metadata` its GroupContext carries as an update's is checked: it must
+  decode within bounds and name the room being seeded. Before, an update's RoomMetaData naming another room was
+  refused but a seed's was not read at all. DIV-15 has the rule.
 - `mimi-hubd`: a Partial GroupInfo whose GroupInfo had the ratchet tree between two other extensions is rebuilt and
   checked. mls-rs with its GREASE feature signs `external_pub`, the tree, then a GREASE extension, and the hub tried
   the tree only at the two ends, so such a Commit was refused. The hub now tries every place in the list, the ends

@@ -409,3 +409,50 @@ fn a_rooms_first_commit_that_only_names_it_needs_the_tree_too() {
     assert!(p.room_tracking(ROOM).unwrap().is_some());
     assert_eq!(listed(&p), vec![ALICE.to_string()], "its creator is listed");
 }
+
+/// A room's first Commit whose seed carries room metadata naming another room in its GroupContext is refused, and
+/// changes nothing, as a bad roles_list's would; naming the room itself, it is taken. Revert check: skip the seed's
+/// metadata check, and the first Commit is taken.
+#[test]
+fn a_first_commit_whose_seed_names_another_room_is_refused() {
+    let metadata = |room: &str| {
+        mimi_core::room_metadata::encode_room_metadata(&mimi_core::room_metadata::RoomMetadata {
+            room_uri: room.to_string(),
+            room_name: "Table".to_string(),
+            descriptions: Vec::new(),
+            avatar: String::new(),
+            subject: String::new(),
+            mood: String::new(),
+        })
+    };
+    for (named, taken) in [("mimi://hub.example/r/elsewhere", false), (ROOM, true)] {
+        let p = Provider::in_memory(DOMAIN).unwrap();
+        let alice = Member::new(ALICE);
+        let bob = Member::new(BOB);
+        let mut group = alices_group(
+            &alice,
+            1,
+            vec![(
+                mimi_core::room_metadata::ROOM_METADATA_COMPONENT_ID,
+                metadata(named),
+            )],
+        );
+        let commit = add(&mut group, &alice, &bob, BOB, 1, &[(ALICE, 1), (BOB, 1)]);
+        let result = p.apply_update_request(
+            ROOM,
+            &bundle(&commit, &group, &alice, None),
+            Some(&member_example()),
+            NOW,
+        );
+        if taken {
+            assert_eq!(result, Ok(()), "the room's own name is taken");
+        } else {
+            assert!(
+                matches!(result, Err(UpdateRefusal::Policy(why)) if why.contains("names another room")),
+                "PLANT-SEED-METADATA-UNTRACKED: a first Commit whose seed names another room was taken: {result:?}"
+            );
+            assert!(listed(&p).is_empty(), "nothing is listed");
+            assert!(p.room_tracking(ROOM).unwrap().is_none());
+        }
+    }
+}
