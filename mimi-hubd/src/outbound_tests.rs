@@ -613,10 +613,7 @@ async fn a_proxy_with_credentials_gets_basic_authorization() {
         Some(proxy_addr),
         resolver(PEER, &[addr]),
     );
-    assert_eq!(
-        client.get(&url("/", addr.port())).await.unwrap().status,
-        201
-    );
+    let response = client.get(&url("/", addr.port())).await;
     let expected = format!(
         "Basic {}",
         base64::engine::general_purpose::STANDARD.encode("hub:0123abcd")
@@ -626,6 +623,7 @@ async fn a_proxy_with_credentials_gets_basic_authorization() {
         [(addr.to_string(), Some(expected))],
         "PLANT-OUTBOUND-PROXY-AUTH: the CONNECT did not carry the proxy credentials"
     );
+    assert_eq!(response.unwrap().status, 201);
 }
 
 /// The proxy secret never shows: not in `Debug`, not in a parse error, not in the startup line.
