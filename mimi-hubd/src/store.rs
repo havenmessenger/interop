@@ -21,6 +21,8 @@ pub enum KeyClaim {
     NoneCompatible,
 }
 
+#[path = "store_atomic.rs"]
+mod atomic;
 #[path = "store_external.rs"]
 mod external;
 #[path = "store_follow.rs"]
@@ -1535,9 +1537,9 @@ impl SqliteStore {
     /// The caller computes `rows` from the draft's own rules (`mimi_core::participant_list::apply_update`); this
     /// method only stores the result, so there is a single place that decides what an update does to a list.
     ///
-    /// Uses `unchecked_transaction` (rusqlite's `&self`-compatible transaction API) rather than `transaction`
-    /// (which needs `&mut self`) because every other method on this store is `&self`. Safe here: this connection is
-    /// only reached through a single `Provider`, held behind one mutex at the request-handling layer.
+    /// The writes run as one group ([`SqliteStore::atomically`]): atomic alone, and nestable inside a larger group (a
+    /// room's seed) where a `BEGIN` would be refused. Safe on `&self`: this connection is only reached through a single
+    /// `Provider`, held behind one mutex at the request-handling layer.
     pub fn replace_participants(
         &self,
         room_uri: &str,
@@ -1557,7 +1559,8 @@ impl SqliteStore {
         if rows.len() as i64 > MAX_PARTICIPANTS_PER_ROOM {
             anyhow::bail!("participant cap reached for room ({MAX_PARTICIPANTS_PER_ROOM})");
         }
-        let tx = self.conn.unchecked_transaction()?;
+        self.atomically(|| -> anyhow::Result<()> {
+        let tx = &self.conn;
         let before: Vec<(String, i64)> = {
             let mut stmt =
                 tx.prepare("SELECT member_uri, ts FROM room_participants WHERE room_uri = ?1")?;
@@ -1598,11 +1601,11 @@ impl SqliteStore {
                 params![room_uri, row.member_uri, row.authority, ts, position as i64 + 1],
             )?;
             if let Some(role_index) = row.role_index {
-                Self::set_member_role_on(&tx, room_uri, &row.member_uri, role_index)?;
+                Self::set_member_role_on(tx, room_uri, &row.member_uri, role_index)?;
             }
         }
-        tx.commit()?;
         Ok(())
+        })?
     }
 
     /// TTL sweep: drop welcomes/messages older than `older_than_unix`. Returns rows removed. Called

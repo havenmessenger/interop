@@ -6,6 +6,11 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimi-hubd`: a room's seed is stored all or nothing. Its group, tracking record, room policy, participant list,
+  operational policy, room metadata and kept GroupInfo are written as one SQLite transaction, so a store failure partway
+  no longer leaves a tracked room missing its policy or list. Store writes that must be atomic run inside a savepoint
+  (`SqliteStore::atomically`), which nests: the participant list keeps its own all-or-nothing and now composes into
+  the seed's.
 - `mimi-hubd`: a room's seed checks the `room_metadata` its GroupContext carries as an update's is checked: it must
   decode within bounds and name the room being seeded, and is then kept as the room's metadata, as the room's policy
   and participant list are. Before, an update's RoomMetaData naming another room was refused but a seed's was not read

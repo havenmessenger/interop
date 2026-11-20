@@ -9,10 +9,10 @@ use crate::mls_fixtures::{add_and_join, group_info_after, Member};
 use crate::peer::PeerIdentity;
 use crate::Provider;
 
-const ROOM: &str = "mimi://hub.example/r/room";
+pub(super) const ROOM: &str = "mimi://hub.example/r/room";
 const GROUP: &[u8] = b"mimi://example.com/g/room";
 
-fn metadata_naming(room: &str) -> Vec<u8> {
+pub(super) fn metadata_naming(room: &str) -> Vec<u8> {
     encode_room_metadata(&RoomMetadata {
         room_uri: room.to_string(),
         room_name: "Table".to_string(),
@@ -25,7 +25,7 @@ fn metadata_naming(room: &str) -> Vec<u8> {
 
 /// `p` given Alice's group, created with `room_metadata` (or none) in its GroupContext and Bob added, seeded from the
 /// bundle after that Commit; whether the room is tracked.
-fn seed_into(p: &Provider, room_metadata: Option<Vec<u8>>) -> bool {
+pub(super) fn seed_into(p: &Provider, room_metadata: Option<Vec<u8>>) -> bool {
     let alice = Member::new("mimi://example.com/u/alice");
     let bob = Member::new("mimi://example.com/u/bob");
     let components: Vec<(u16, Vec<u8>)> = room_metadata

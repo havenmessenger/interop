@@ -99,6 +99,18 @@ pub(crate) struct SeedCandidate {
     metadata: Option<Vec<u8>>,
 }
 
+/// What `write_seed` stores, handed to the writes it runs as one group.
+struct SeedParts<'p> {
+    tree: RatchetTreeIn,
+    info: VerifiableGroupInfo,
+    group_id: Vec<u8>,
+    provider: &'p str,
+    policy: Option<mimi_core::room_policy::RoomPolicy>,
+    list: Option<mimi_core::participant_list::ParticipantListData>,
+    operational: Option<Vec<u8>>,
+    metadata: Option<Vec<u8>>,
+}
+
 /// The leaf a member-sent Commit's `PublicMessage` names as its sender, read without a group.
 pub(crate) fn commit_sender_leaf(commit: &[u8]) -> Option<u32> {
     let message = MlsMessageIn::tls_deserialize_exact(commit)
@@ -944,6 +956,52 @@ impl Provider {
             metadata,
             ..
         } = seed;
+        // One group of writes: a failure at any step leaves nothing of the seed behind, not a tracked room missing its
+        // policy or list.
+        self.store
+            .atomically(|| {
+                self.write_seed_parts(
+                    room_uri,
+                    commit_epoch,
+                    SeedParts {
+                        tree,
+                        info,
+                        group_id,
+                        provider: &provider,
+                        policy,
+                        list,
+                        operational,
+                        metadata,
+                    },
+                    group_info,
+                )
+            })
+            .map_err(|_| "its seed could not be stored")??;
+        eprintln!(
+            "[mimi-hubd] {room_uri} is tracked from epoch {}, seeded by {provider}",
+            commit_epoch + 1
+        );
+        Ok(())
+    }
+
+    /// The writes of [`Provider::write_seed`], in order; the caller runs them as one group.
+    fn write_seed_parts(
+        &self,
+        room_uri: &str,
+        commit_epoch: u64,
+        parts: SeedParts<'_>,
+        group_info: &GroupInfoOption,
+    ) -> Result<(), &'static str> {
+        let SeedParts {
+            tree,
+            info,
+            group_id,
+            provider,
+            policy,
+            list,
+            operational,
+            metadata,
+        } = parts;
         let crypto = OpenMlsRustCrypto::default();
         PublicGroup::from_external(
             crypto.crypto(),
@@ -954,7 +1012,7 @@ impl Provider {
         )
         .map_err(|_| "its group could not be stored")?;
         self.store
-            .set_room_tree(room_uri, &group_id, &provider, commit_epoch + 1)
+            .set_room_tree(room_uri, &group_id, provider, commit_epoch + 1)
             .map_err(|_| "its tracking record could not be stored")?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -994,10 +1052,6 @@ impl Provider {
         }
         .map_err(|_| "its room metadata could not be stored")?;
         self.keep_group_info_after(room_uri, commit_epoch + 1, Some(group_info));
-        eprintln!(
-            "[mimi-hubd] {room_uri} is tracked from epoch {}, seeded by {provider}",
-            commit_epoch + 1
-        );
         Ok(())
     }
 }
@@ -1017,3 +1071,7 @@ mod list_merge_tests;
 #[cfg(test)]
 #[path = "room_tree_seed_metadata_tests.rs"]
 mod seed_metadata_tests;
+
+#[cfg(test)]
+#[path = "room_tree_seed_atomic_tests.rs"]
+mod seed_atomic_tests;
