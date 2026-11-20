@@ -62,15 +62,12 @@ fn group_info_with_tree(group: &MlsGroup, by: &Member) -> Vec<u8> {
     }
 }
 
-/// `group_info` with its two extensions swapped and signed again by `by`: the tree last, as ratchet-tree-options §4 has
-/// a GroupInfo sent as a Partial one put it.
-fn with_the_tree_last(group_info: &[u8], by: &Member) -> Vec<u8> {
+/// The extensions of `group_info`, each as `(type, its encoded Extension)`, in order.
+fn extensions_of(group_info: &[u8]) -> Vec<(u16, Vec<u8>)> {
     use openmls::messages::group_info::VerifiableGroupInfo;
     let info = VerifiableGroupInfo::tls_deserialize_exact(group_info).unwrap();
     let context = info.group_context().tls_serialize_detached().unwrap();
-    let rest = &group_info[context.len()..];
-    let list = VLBytes::tls_deserialize(&mut &rest[..]).unwrap();
-    let after_list = &rest[list.tls_serialized_len()..];
+    let list = VLBytes::tls_deserialize(&mut &group_info[context.len()..]).unwrap();
     let mut extensions = Vec::new();
     let mut remaining = list.as_slice();
     while !remaining.is_empty() {
@@ -80,16 +77,24 @@ fn with_the_tree_last(group_info: &[u8], by: &Member) -> Vec<u8> {
         extensions.push((extension_type, remaining[..length].to_vec()));
         remaining = &remaining[length..];
     }
-    assert_eq!(
-        extensions.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
-        [0x0002, 0x0004]
-    );
-    let swapped = [extensions[1].1.clone(), extensions[0].1.clone()].concat();
+    extensions
+}
+
+/// `group_info` with its extension list replaced by `extensions` and signed again by `by`.
+fn resigned(group_info: &[u8], extensions: &[Vec<u8>], by: &Member) -> Vec<u8> {
+    use openmls::messages::group_info::VerifiableGroupInfo;
+    let info = VerifiableGroupInfo::tls_deserialize_exact(group_info).unwrap();
+    let context = info.group_context().tls_serialize_detached().unwrap();
+    let rest = &group_info[context.len()..];
+    let list = VLBytes::tls_deserialize(&mut &rest[..]).unwrap();
+    let after_list = &rest[list.tls_serialized_len()..];
     // After the list: the confirmation tag, the u32 signer, then the 64-byte signature with its two-byte length.
     let tail = &after_list[..after_list.len() - 66];
     let tbs = [
         context,
-        VLBytes::new(swapped).tls_serialize_detached().unwrap(),
+        VLBytes::new(extensions.concat())
+            .tls_serialize_detached()
+            .unwrap(),
         tail.to_vec(),
     ]
     .concat();
@@ -102,6 +107,21 @@ fn with_the_tree_last(group_info: &[u8], by: &Member) -> Vec<u8> {
         VLBytes::new(signature).tls_serialize_detached().unwrap(),
     ]
     .concat()
+}
+
+/// `group_info` with its two extensions swapped and signed again by `by`: the tree last, as ratchet-tree-options §4 has
+/// a GroupInfo sent as a Partial one put it.
+fn with_the_tree_last(group_info: &[u8], by: &Member) -> Vec<u8> {
+    let extensions = extensions_of(group_info);
+    assert_eq!(
+        extensions.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+        [0x0002, 0x0004]
+    );
+    resigned(
+        group_info,
+        &[extensions[1].1.clone(), extensions[0].1.clone()],
+        by,
+    )
 }
 
 /// Alice's Partial GroupInfo for her Commit, the tree not in it, is rebuilt and stages; the same with one byte of its
@@ -169,6 +189,41 @@ fn a_partial_group_info_with_the_tree_last_stages() {
         p.stage_tracked_commit(ROOM, &tracking, &commit, Some(&partial(&partial_last)))
             .is_ok(),
         "PLANT-PARTIAL-GI-TREE-LAST: a Partial GroupInfo with the tree last was refused"
+    );
+}
+
+/// A Partial GroupInfo whose GroupInfo had extensions on both sides of the tree stages: mls-rs built with its GREASE
+/// feature signs external_pub, then ratchet_tree, then a GREASE extension, so the tree is neither first nor last. The
+/// Partial is that list without the tree, and the hub must find where the tree stood. Revert check: try the two ends
+/// only, and it is refused.
+#[test]
+fn a_partial_group_info_with_the_tree_between_others_stages() {
+    let (p, tracking, mut group, alice) = tracked();
+    let carol = Member::new("mimi://example.com/u/carol");
+    let (commit, _group_info, _tree) = add_commit(&mut group, &alice, &[&carol]);
+    let exported = group_info_with_tree(&group, &alice);
+    let extensions = extensions_of(&exported);
+    assert_eq!(
+        extensions.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+        [0x0002, 0x0004]
+    );
+    // A GREASE extension type (RFC 9420 §13.5) with no data.
+    let grease = vec![0x0a, 0x0a, 0x00];
+    let between = resigned(
+        &exported,
+        &[extensions[1].1.clone(), extensions[0].1.clone(), grease],
+        &alice,
+    );
+    assert!(
+        p.stage_tracked_commit(ROOM, &tracking, &commit, Some(&full(&between)))
+            .is_ok(),
+        "the GroupInfo itself is valid"
+    );
+    let partial_between = PartialGroupInfo::split(&between, true).unwrap();
+    assert!(
+        p.stage_tracked_commit(ROOM, &tracking, &commit, Some(&partial(&partial_between)))
+            .is_ok(),
+        "PLANT-PARTIAL-GI-TREE-BETWEEN: a Partial GroupInfo whose tree stood between two extensions was refused"
     );
 }
 
