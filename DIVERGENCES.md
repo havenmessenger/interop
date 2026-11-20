@@ -438,8 +438,8 @@ draft's letter:
 - The draft has a GroupInfo sent as a Partial put its `ratchet_tree` extension last. Implementations differ: openmls
   writes it first, before `external_pub`; mls-rs writes it after `external_pub`, and with its GREASE feature puts a
   GREASE extension after it, so the tree is neither first nor last. A Partial is the signed list with the tree taken
-  out and the rest in order, so the hub puts its own tree after the Commit back at each place in that list, last first
-  and then first, then the places between, and the committer's signature decides which, if any, was signed. Each place
+  out and the rest in order, so the hub puts its own tree after the Commit back at each place in that list (last, then
+  first, then the places between), and the committer's signature decides which, if any, was signed. Each place
   is one GroupInfo built and one signature checked, made one at a time and stopped at the first that verifies, so a
   GroupInfo with the tree at either end costs what it did before. Past 16 extensions only the two ends are tried
   (`MAX_TREE_PLACES_EXTENSIONS`), so one Commit costs at most 17 checks. The work comes after the Commit itself has
