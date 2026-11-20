@@ -146,8 +146,9 @@ authorized_role_changes = [{ from_role_index = 3, target_role_indexes = [0] }]
 "#;
 
 /// With the admin role's entry from itself to 0 a deployment's admins may leave and remove another admin; the neutral
-/// profile, which has no such entry, refuses both (DIV-22). A member may leave under either. Revert check: refuse every
-/// self-removal, and the admin's leave is refused.
+/// profile, which has no such entry, refuses both (DIV-22). A member may leave under either, and removes no one else.
+/// Revert check: refuse every self-removal, and the admin's leave is refused; drop the actor's RemoveParticipant check,
+/// and a member removes another member.
 #[test]
 fn a_profile_may_let_admins_leave_and_remove_admins() {
     let admins_leave = LaneRoomProfile::parse(ADMINS_LEAVE).unwrap().room_policy;
@@ -162,6 +163,19 @@ fn a_profile_may_let_admins_leave_and_remove_admins() {
         "an admin may remove another admin"
     );
     assert!(admins_leave.authorize_self_removal(ROLE_MEMBER).is_ok());
+    // The member's entry from itself to 0 is for leaving only: without RemoveParticipant a member removes no one.
+    assert!(
+        admins_leave
+            .authorize_role_change(ROLE_MEMBER, ROLE_MEMBER, 0)
+            .is_err(),
+        "PLANT-MEMBER-REMOVES-NO-ONE: a member removed another member"
+    );
+    assert!(
+        admins_leave
+            .authorize_role_change(ROLE_MEMBER, ROLE_ADMIN, 0)
+            .is_err(),
+        "a member removed an admin"
+    );
 
     let neutral = LaneRoomProfile::neutral().room_policy;
     assert!(neutral.authorize_self_removal(ROLE_ADMIN).is_err());
