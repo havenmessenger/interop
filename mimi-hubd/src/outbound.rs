@@ -10,8 +10,9 @@
 //!   special ranges are refused unless the operator's allowlist names them. One refused address refuses the request.
 //! - The connection is made to a checked address itself, so no second lookup can name another one: each address the
 //!   host resolved to is tried in turn until one connects, as a host with both an IPv6 and an IPv4 address needs.
-//!   Through a proxy ([`ProxyAddr`]) the `CONNECT` names that address too, and the proxy never resolves the peer's
-//!   name.
+//! - Through a proxy ([`ProxyAddr`]) the hub does not resolve at all: the `CONNECT` names the peer's host and port, and
+//!   resolving it and checking the addresses is the proxy's job. This is for a hub placed where only the proxy is
+//!   reachable, with no resolver of its own. The TLS name check below is unchanged.
 //!
 //! Each request is signed with the provider's DNS-published key when the hub has one (`request_signing.rs`,
 //! draft-atwood-mimi-provider-auth §5), and a client certificate is presented when one is configured; either proves to
@@ -533,7 +534,7 @@ impl PeerClient {
             },
             match &settings.proxy {
                 Some(proxy) => format!(
-                    "through the CONNECT proxy {}:{}{}",
+                    "through the CONNECT proxy {}:{}{}, which resolves and checks the peer's addresses",
                     proxy.host,
                     proxy.port,
                     if proxy.credentials.is_some() {
@@ -619,22 +620,16 @@ impl PeerClient {
         Ok(unique)
     }
 
-    /// A connection to the first of `addresses` that answers, directly or through the proxy; the last failure if none
-    /// does.
+    /// A direct connection to the first of `addresses` that answers; the last failure if none does.
     async fn connect_any(&self, addresses: &[SocketAddr]) -> Result<TcpStream, OutboundError> {
         let mut last = OutboundError::NoAddress(String::new());
         for addr in addresses {
-            let attempt = match &self.proxy {
-                None => {
-                    deadline(CONNECT_TIMEOUT, "connecting", async {
-                        TcpStream::connect(addr)
-                            .await
-                            .map_err(OutboundError::Connect)
-                    })
+            let attempt = deadline(CONNECT_TIMEOUT, "connecting", async {
+                TcpStream::connect(addr)
                     .await
-                }
-                Some(proxy) => self.tunnel(proxy, *addr).await,
-            };
+                    .map_err(OutboundError::Connect)
+            })
+            .await;
             match attempt {
                 Ok(stream) => return Ok(stream),
                 Err(error) => last = error,
@@ -649,8 +644,13 @@ impl PeerClient {
         method: hyper::Method,
         body: Option<(&str, Vec<u8>)>,
     ) -> Result<PeerResponse, OutboundError> {
-        let addresses = self.vetted_addresses(url).await?;
-        let tcp = self.connect_any(&addresses).await?;
+        let tcp = match &self.proxy {
+            Some(proxy) => self.tunnel(proxy, &url.host, url.port).await?,
+            None => {
+                let addresses = self.vetted_addresses(url).await?;
+                self.connect_any(&addresses).await?
+            }
+        };
         let name = ServerName::try_from(url.host.clone())
             .map_err(|_| OutboundError::BadUrl("its host is not a DNS name"))?;
         let tls = deadline(HANDSHAKE_TIMEOUT, "in the TLS handshake", async {
@@ -666,11 +666,13 @@ impl PeerClient {
         .await
     }
 
-    /// Open a `CONNECT` tunnel through `proxy` to `addr`, the checked address, never a name.
+    /// Open a `CONNECT` tunnel through `proxy` to `host:port`, by name: the proxy resolves it and checks the
+    /// addresses.
     async fn tunnel(
         &self,
         proxy: &ProxyAddr,
-        addr: SocketAddr,
+        host: &str,
+        port: u16,
     ) -> Result<TcpStream, OutboundError> {
         let mut stream = deadline(CONNECT_TIMEOUT, "connecting to the proxy", async {
             TcpStream::connect((proxy.host.as_str(), proxy.port))
@@ -679,7 +681,7 @@ impl PeerClient {
         })
         .await?;
         deadline(CONNECT_TIMEOUT, "opening the proxy tunnel", async {
-            let target = addr.to_string();
+            let target = format!("{host}:{port}");
             let authorization = proxy.authorization_line();
             stream
                 .write_all(

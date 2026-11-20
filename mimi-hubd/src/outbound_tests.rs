@@ -513,9 +513,24 @@ async fn a_large_answer_is_refused_and_retry_after_is_returned() {
 /// What the test proxy saw in one `CONNECT`: the target and the `Proxy-Authorization` value, if any.
 type Connects = Arc<Mutex<Vec<(String, Option<String>)>>>;
 
-/// A `CONNECT` proxy that records each target and its `Proxy-Authorization`, and tunnels to the target. `credentials`
-/// go into the `ProxyAddr` the client is given.
-async fn proxy_with(credentials: Option<&str>) -> (ProxyAddr, Connects) {
+/// A resolver that counts its calls and resolves nothing: through a proxy the hub must not resolve.
+struct CountingResolver(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Resolve for CountingResolver {
+    fn resolve<'a>(
+        &'a self,
+        _host: &'a str,
+        _port: u16,
+    ) -> Pin<Box<dyn Future<Output = io::Result<Vec<SocketAddr>>> + Send + 'a>> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Err(io::Error::new(io::ErrorKind::NotFound, "no resolver here")) })
+    }
+}
+
+/// A `CONNECT` proxy that records each target and its `Proxy-Authorization`, and tunnels to `upstream` whatever the
+/// target names (it stands in for the proxy's own resolution). `credentials` go into the `ProxyAddr` the client is
+/// given.
+async fn proxy_with(credentials: Option<&str>, upstream: SocketAddr) -> (ProxyAddr, Connects) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let connects: Connects = Arc::new(Mutex::new(Vec::new()));
@@ -542,8 +557,8 @@ async fn proxy_with(credentials: Option<&str>) -> (ProxyAddr, Connects) {
                 name.eq_ignore_ascii_case("proxy-authorization")
                     .then(|| value.trim().to_string())
             });
-            record.lock().unwrap().push((target.clone(), authorization));
-            let Ok(mut upstream) = TcpStream::connect(&target).await else {
+            record.lock().unwrap().push((target, authorization));
+            let Ok(mut upstream) = TcpStream::connect(upstream).await else {
                 let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n").await;
                 continue;
             };
@@ -562,42 +577,48 @@ async fn proxy_with(credentials: Option<&str>) -> (ProxyAddr, Connects) {
     )
 }
 
-/// Through a proxy, the `CONNECT` names the checked address, never the peer's name, and TLS with the client
-/// certificate runs end to end inside the tunnel. A refused destination is refused before the proxy is contacted.
-/// Revert check: tunnel to the name, and the proxy records `peer.example`.
+/// Through a proxy the hub does not resolve: the `CONNECT` names the peer's host and port, and TLS with the client
+/// certificate and the name check runs end to end inside the tunnel.
+/// Revert check: resolve and tunnel to the address, and the resolver is called and the proxy records an address.
 #[tokio::test]
-async fn a_proxy_tunnel_names_the_checked_address() {
+async fn a_proxy_tunnel_names_the_host_and_the_hub_does_not_resolve() {
     let pki = Pki::new();
     let (addr, seen) = server(&pki, PEER, answer("201 Created", "", b"")).await;
-    let (proxy_addr, connects) = proxy_with(None).await;
+    let (proxy_addr, connects) = proxy_with(None, addr).await;
+    let lookups = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let client = pki.client(
-        loopback_allowed(),
-        Some(proxy_addr.clone()),
-        resolver(PEER, &[addr]),
+        AddressPolicy::default(),
+        Some(proxy_addr),
+        Arc::new(CountingResolver(lookups.clone())),
     );
     let response = client.get(&url("/", addr.port())).await;
     assert_eq!(
-        connects.lock().unwrap().as_slice(),
-        [(addr.to_string(), None)],
-        "PLANT-OUTBOUND-PROXY-ADDRESS: the CONNECT did not name the checked address"
+        (
+            connects.lock().unwrap().as_slice(),
+            lookups.load(std::sync::atomic::Ordering::SeqCst)
+        ),
+        ([(format!("{PEER}:{}", addr.port()), None)].as_slice(), 0),
+        "PLANT-OUTBOUND-PROXY-NAME: the hub resolved, or the CONNECT did not name the host"
     );
     assert_eq!(response.unwrap().status, 201);
     assert!(seen.lock().unwrap()[0].client_certificate);
+}
 
-    let refusing = pki.client(
+/// Through a proxy the peer's certificate is still checked against the URL's host.
+#[tokio::test]
+async fn through_a_proxy_a_certificate_for_another_name_is_refused() {
+    let pki = Pki::new();
+    let (addr, _seen) = server(&pki, "other.example", answer("201 Created", "", b"")).await;
+    let (proxy_addr, _connects) = proxy_with(None, addr).await;
+    let client = pki.client(
         AddressPolicy::default(),
         Some(proxy_addr),
-        resolver(PEER, &[addr]),
+        resolver(PEER, &[]),
     );
     assert!(matches!(
-        refusing.get(&url("/", addr.port())).await,
-        Err(OutboundError::Refused { .. })
+        client.get(&url("/", addr.port())).await,
+        Err(OutboundError::Tls(_))
     ));
-    assert_eq!(
-        connects.lock().unwrap().len(),
-        1,
-        "the proxy was asked for a refused destination"
-    );
 }
 
 /// A proxy given with credentials gets them as `Proxy-Authorization: Basic` on the `CONNECT`.
@@ -607,7 +628,7 @@ async fn a_proxy_with_credentials_gets_basic_authorization() {
     use base64::Engine;
     let pki = Pki::new();
     let (addr, _seen) = server(&pki, PEER, answer("201 Created", "", b"")).await;
-    let (proxy_addr, connects) = proxy_with(Some("hub:0123abcd")).await;
+    let (proxy_addr, connects) = proxy_with(Some("hub:0123abcd"), addr).await;
     let client = pki.client(
         loopback_allowed(),
         Some(proxy_addr),
@@ -620,7 +641,7 @@ async fn a_proxy_with_credentials_gets_basic_authorization() {
     );
     assert_eq!(
         connects.lock().unwrap().as_slice(),
-        [(addr.to_string(), Some(expected))],
+        [(format!("{PEER}:{}", addr.port()), Some(expected))],
         "PLANT-OUTBOUND-PROXY-AUTH: the CONNECT did not carry the proxy credentials"
     );
     assert_eq!(response.unwrap().status, 201);

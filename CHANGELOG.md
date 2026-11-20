@@ -9,6 +9,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 - `mimi-hubd`: `MIMI_OUTBOUND_PROXY` takes credentials, `http://user:secret@host:port`, for a `CONNECT` proxy that
   requires them. They are sent as `Proxy-Authorization: Basic` on each `CONNECT`, and never appear in `Debug`, a
   configuration error or the startup line; an error about the setting no longer quotes its value.
+- `mimi-hubd`: through `MIMI_OUTBOUND_PROXY` the hub no longer resolves a peer's name. The `CONNECT` names the host and
+  port, and the proxy resolves it and checks the addresses, so a hub with no resolver of its own can reach peers. The
+  peer's certificate is still checked against the host. Without a proxy nothing changes.
 - `mimi-hubd`: a room's seed is stored all or nothing. Its group, tracking record, room policy, participant list,
   operational policy, room metadata and kept GroupInfo are written as one SQLite transaction, so a store failure partway
   no longer leaves a tracked room missing its policy or list. Store writes that must be atomic run inside a savepoint
