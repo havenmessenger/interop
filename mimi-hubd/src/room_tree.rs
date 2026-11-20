@@ -304,6 +304,26 @@ fn app_data_refusal(error: AppDataError) -> UpdateRefusal {
     }
 }
 
+/// Why a `RoomMetaData` was refused for a room.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MetadataRefusal {
+    /// It does not decode within its bounds.
+    Malformed,
+    /// It names another room.
+    AnotherRoom,
+}
+
+/// Check a `RoomMetaData` (protocol-07 §10.4) for `room_uri`: it decodes within its bounds and names that room, compared
+/// canonically. Display data the hub enforces nothing from, but it names its own room, in an update and at seeding.
+pub(crate) fn check_room_metadata(bytes: &[u8], room_uri: &str) -> Result<(), MetadataRefusal> {
+    let read = mimi_core::room_metadata::decode_room_metadata(bytes)
+        .map_err(|_| MetadataRefusal::Malformed)?;
+    if mimi_core::uri::canonical(&read.room_uri) != mimi_core::uri::canonical(room_uri) {
+        return Err(MetadataRefusal::AnotherRoom);
+    }
+    Ok(())
+}
+
 /// One component of a GroupContext's app data dictionary.
 pub(crate) fn app_data(context: &openmls::group::GroupContext, component: u16) -> Option<&[u8]> {
     context
@@ -863,11 +883,16 @@ impl Provider {
             mimi_core::room_metadata::ROOM_METADATA_COMPONENT_ID,
         );
         if let Some(bytes) = metadata {
-            let read = mimi_core::room_metadata::decode_room_metadata(bytes)
-                .map_err(|_| Some("its GroupContext's room metadata does not decode"))?;
-            if mimi_core::uri::canonical(&read.room_uri) != mimi_core::uri::canonical(room_uri) {
-                return Err(Some("its GroupContext's room metadata names another room"));
-            }
+            check_room_metadata(bytes, room_uri).map_err(|refusal| {
+                Some(match refusal {
+                    MetadataRefusal::Malformed => {
+                        "its GroupContext's room metadata does not decode"
+                    }
+                    MetadataRefusal::AnotherRoom => {
+                        "its GroupContext's room metadata names another room"
+                    }
+                })
+            })?;
         }
         let metadata = metadata.map(<[u8]>::to_vec);
         let list = app_data(context, PARTICIPANT_LIST_COMPONENT)
