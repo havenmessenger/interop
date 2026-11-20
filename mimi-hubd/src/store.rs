@@ -1559,7 +1559,17 @@ impl SqliteStore {
         if rows.len() as i64 > MAX_PARTICIPANTS_PER_ROOM {
             anyhow::bail!("participant cap reached for room ({MAX_PARTICIPANTS_PER_ROOM})");
         }
-        self.atomically(|| -> anyhow::Result<()> {
+        self.atomically(|| self.replace_participants_in(room_uri, rows, now_unix))?
+    }
+
+    /// The writes of [`SqliteStore::replace_participants`], which runs them as one group: `room_uri` and `rows` are
+    /// already canonical and within the participant cap.
+    fn replace_participants_in(
+        &self,
+        room_uri: &str,
+        rows: &[ParticipantRow],
+        now_unix: u64,
+    ) -> anyhow::Result<()> {
         let tx = &self.conn;
         let before: Vec<(String, i64)> = {
             let mut stmt =
@@ -1605,7 +1615,6 @@ impl SqliteStore {
             }
         }
         Ok(())
-        })?
     }
 
     /// TTL sweep: drop welcomes/messages older than `older_than_unix`. Returns rows removed. Called

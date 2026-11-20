@@ -1,5 +1,6 @@
-//! A room's seed is stored all or nothing: a store failure at its last write leaves every table as it was, so the hub
-//! never tracks a room whose policy, list or metadata did not make it.
+//! A room's seed is stored all or nothing: a store failure at the last of its writes that can fail it (the room
+//! metadata; the kept GroupInfo after it only logs its own failure) leaves every table as it was, so the hub never
+//! tracks a room whose policy, list or metadata did not make it.
 
 use std::collections::BTreeMap;
 
