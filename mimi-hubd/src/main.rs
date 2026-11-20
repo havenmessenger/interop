@@ -39,7 +39,8 @@
 //!   MIMI_OUTBOUND_ALLOW    optional; comma-separated addr/len ranges an outbound request may reach although they are
 //!                          special (loopback, private, ...); for test deployments. A value that does not parse stops
 //!                          the start
-//!   MIMI_OUTBOUND_PROXY    optional; an HTTP CONNECT proxy for outbound requests, http://host:port
+//!   MIMI_OUTBOUND_PROXY    optional; an HTTP CONNECT proxy for outbound requests, http://host:port, or
+//!                          http://user:secret@host:port for one that requires Proxy-Authorization (Basic)
 //!   MIMI_PEER_TRUST        optional; `system` (default: the system roots plus MIMI_CLIENT_CA) or `bundle`
 //!                          (MIMI_CLIENT_CA only), the roots a peer's server certificate may chain to
 //!   MIMI_CLIENT_CERT       optional, with MIMI_CLIENT_KEY; PEM paths of the certificate and key outbound requests

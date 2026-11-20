@@ -371,30 +371,78 @@ impl PeerTrust {
     }
 }
 
-/// An HTTP proxy that tunnels with `CONNECT` (`MIMI_OUTBOUND_PROXY`, `http://host:port`). The connection to it is plain
-/// TCP; TLS to the peer runs inside the tunnel, with the hub's client certificate, end to end.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// An HTTP proxy that tunnels with `CONNECT` (`MIMI_OUTBOUND_PROXY`, `http://host:port`, or `http://user:secret@host:port`
+/// for a proxy that requires credentials). The connection to it is plain TCP; TLS to the peer runs inside the tunnel,
+/// with the hub's client certificate, end to end. Credentials are sent as `Proxy-Authorization: Basic` on each
+/// `CONNECT` and never appear in `Debug`, an error or the startup line.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProxyAddr {
     host: String,
     port: u16,
+    /// `user:secret`, as given.
+    credentials: Option<String>,
+}
+
+impl std::fmt::Debug for ProxyAddr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyAddr")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field(
+                "credentials",
+                &self.credentials.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 impl ProxyAddr {
+    /// Parse `MIMI_OUTBOUND_PROXY`. An error never quotes the value, since it may carry a secret.
     pub fn parse(text: &str) -> Result<Self, String> {
+        const SHAPE: &str =
+            "MIMI_OUTBOUND_PROXY is not http://host:port or http://user:secret@host:port";
         let rest = text
             .trim()
             .strip_prefix("http://")
-            .ok_or_else(|| format!("MIMI_OUTBOUND_PROXY {text:?} is not http://host:port"))?
+            .ok_or(SHAPE)?
             .trim_end_matches('/');
+        let (credentials, rest) = match rest.rsplit_once('@') {
+            Some((userinfo, rest)) => {
+                let well_formed = userinfo
+                    .split_once(':')
+                    .is_some_and(|(user, secret)| !user.is_empty() && !secret.is_empty())
+                    && userinfo
+                        .chars()
+                        .all(|c| c.is_ascii_graphic() && c != '/' && c != '@');
+                if !well_formed {
+                    return Err(SHAPE.to_string());
+                }
+                (Some(userinfo.to_string()), rest)
+            }
+            None => (None, rest),
+        };
         let (host, port) = rest
             .rsplit_once(':')
             .and_then(|(host, port)| Some((host, port.parse::<u16>().ok()?)))
             .filter(|(host, _)| !host.is_empty() && !host.contains(['/', '@']))
-            .ok_or_else(|| format!("MIMI_OUTBOUND_PROXY {text:?} is not http://host:port"))?;
+            .ok_or(SHAPE)?;
         Ok(Self {
             host: host.trim_matches(['[', ']']).to_string(),
             port,
+            credentials,
         })
+    }
+
+    /// The `Proxy-Authorization` header line for a `CONNECT`, empty without credentials.
+    fn authorization_line(&self) -> String {
+        use base64::Engine;
+        match &self.credentials {
+            Some(credentials) => format!(
+                "Proxy-Authorization: Basic {}\r\n",
+                base64::engine::general_purpose::STANDARD.encode(credentials)
+            ),
+            None => String::new(),
+        }
     }
 }
 
@@ -484,7 +532,16 @@ impl PeerClient {
                 n => format!(" except {n} allowlisted range(s)"),
             },
             match &settings.proxy {
-                Some(proxy) => format!("through the CONNECT proxy {}:{}", proxy.host, proxy.port),
+                Some(proxy) => format!(
+                    "through the CONNECT proxy {}:{}{}",
+                    proxy.host,
+                    proxy.port,
+                    if proxy.credentials.is_some() {
+                        " with credentials"
+                    } else {
+                        ""
+                    }
+                ),
                 None => "direct".to_string(),
             }
         );
@@ -623,9 +680,11 @@ impl PeerClient {
         .await?;
         deadline(CONNECT_TIMEOUT, "opening the proxy tunnel", async {
             let target = addr.to_string();
+            let authorization = proxy.authorization_line();
             stream
                 .write_all(
-                    format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n").as_bytes(),
+                    format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n{authorization}\r\n")
+                        .as_bytes(),
                 )
                 .await
                 .map_err(|error| OutboundError::Proxy(error.to_string()))?;

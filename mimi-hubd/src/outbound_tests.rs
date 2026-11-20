@@ -510,12 +510,16 @@ async fn a_large_answer_is_refused_and_retry_after_is_returned() {
 
 // ---------------------------------------------------------------- the proxy
 
-/// A `CONNECT` proxy that records each target and tunnels to it.
-async fn proxy() -> (ProxyAddr, Arc<Mutex<Vec<String>>>) {
+/// What the test proxy saw in one `CONNECT`: the target and the `Proxy-Authorization` value, if any.
+type Connects = Arc<Mutex<Vec<(String, Option<String>)>>>;
+
+/// A `CONNECT` proxy that records each target and its `Proxy-Authorization`, and tunnels to the target. `credentials`
+/// go into the `ProxyAddr` the client is given.
+async fn proxy_with(credentials: Option<&str>) -> (ProxyAddr, Connects) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let targets = Arc::new(Mutex::new(Vec::new()));
-    let record = targets.clone();
+    let connects: Connects = Arc::new(Mutex::new(Vec::new()));
+    let record = connects.clone();
     tokio::spawn(async move {
         while let Ok((mut client, _)) = listener.accept().await {
             let mut head = Vec::new();
@@ -526,13 +530,19 @@ async fn proxy() -> (ProxyAddr, Arc<Mutex<Vec<String>>>) {
                 }
                 head.push(byte[0]);
             }
-            let line = String::from_utf8_lossy(&head)
+            let head = String::from_utf8_lossy(&head).to_string();
+            let target = head
                 .lines()
                 .next()
+                .and_then(|line| line.split_whitespace().nth(1))
                 .unwrap_or("")
                 .to_string();
-            let target = line.split_whitespace().nth(1).unwrap_or("").to_string();
-            record.lock().unwrap().push(target.clone());
+            let authorization = head.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("proxy-authorization")
+                    .then(|| value.trim().to_string())
+            });
+            record.lock().unwrap().push((target.clone(), authorization));
             let Ok(mut upstream) = TcpStream::connect(&target).await else {
                 let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n").await;
                 continue;
@@ -545,9 +555,10 @@ async fn proxy() -> (ProxyAddr, Arc<Mutex<Vec<String>>>) {
             });
         }
     });
+    let userinfo = credentials.map(|c| format!("{c}@")).unwrap_or_default();
     (
-        ProxyAddr::parse(&format!("http://{addr}")).unwrap(),
-        targets,
+        ProxyAddr::parse(&format!("http://{userinfo}{addr}")).unwrap(),
+        connects,
     )
 }
 
@@ -558,7 +569,7 @@ async fn proxy() -> (ProxyAddr, Arc<Mutex<Vec<String>>>) {
 async fn a_proxy_tunnel_names_the_checked_address() {
     let pki = Pki::new();
     let (addr, seen) = server(&pki, PEER, answer("201 Created", "", b"")).await;
-    let (proxy_addr, targets) = proxy().await;
+    let (proxy_addr, connects) = proxy_with(None).await;
     let client = pki.client(
         loopback_allowed(),
         Some(proxy_addr.clone()),
@@ -566,8 +577,8 @@ async fn a_proxy_tunnel_names_the_checked_address() {
     );
     let response = client.get(&url("/", addr.port())).await;
     assert_eq!(
-        targets.lock().unwrap().as_slice(),
-        [addr.to_string()],
+        connects.lock().unwrap().as_slice(),
+        [(addr.to_string(), None)],
         "PLANT-OUTBOUND-PROXY-ADDRESS: the CONNECT did not name the checked address"
     );
     assert_eq!(response.unwrap().status, 201);
@@ -583,15 +594,80 @@ async fn a_proxy_tunnel_names_the_checked_address() {
         Err(OutboundError::Refused { .. })
     ));
     assert_eq!(
-        targets.lock().unwrap().len(),
+        connects.lock().unwrap().len(),
         1,
         "the proxy was asked for a refused destination"
+    );
+}
+
+/// A proxy given with credentials gets them as `Proxy-Authorization: Basic` on the `CONNECT`.
+/// Revert check: drop the header line from the `CONNECT`, and the proxy records none.
+#[tokio::test]
+async fn a_proxy_with_credentials_gets_basic_authorization() {
+    use base64::Engine;
+    let pki = Pki::new();
+    let (addr, _seen) = server(&pki, PEER, answer("201 Created", "", b"")).await;
+    let (proxy_addr, connects) = proxy_with(Some("hub:0123abcd")).await;
+    let client = pki.client(
+        loopback_allowed(),
+        Some(proxy_addr),
+        resolver(PEER, &[addr]),
+    );
+    assert_eq!(
+        client.get(&url("/", addr.port())).await.unwrap().status,
+        201
+    );
+    let expected = format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode("hub:0123abcd")
+    );
+    assert_eq!(
+        connects.lock().unwrap().as_slice(),
+        [(addr.to_string(), Some(expected))],
+        "PLANT-OUTBOUND-PROXY-AUTH: the CONNECT did not carry the proxy credentials"
+    );
+}
+
+/// The proxy secret never shows: not in `Debug`, not in a parse error, not in the startup line.
+/// Revert check: derive `Debug`, or quote the value in the parse error, and the secret shows.
+#[test]
+fn proxy_credentials_never_print() {
+    const SECRET: &str = "f00dfacecafe";
+    let proxy = ProxyAddr::parse(&format!("http://hub:{SECRET}@proxy.example:3128")).unwrap();
+    let debug = format!("{proxy:?}");
+    assert!(
+        !debug.contains(SECRET) && debug.contains("<redacted>"),
+        "PLANT-OUTBOUND-PROXY-REDACT: Debug shows the proxy secret: {debug}"
+    );
+    for bad in [
+        format!("https://hub:{SECRET}@proxy.example:3128"),
+        format!("http://hub:{SECRET}@proxy.example"),
+        format!("http://hub:{SECRET}@"),
+        format!("http://:{SECRET}@proxy.example:3128"),
+        format!("http://hub:{SECRET} x@proxy.example:3128"),
+        format!("http://hub:{SECRET}@@proxy.example:3128"),
+    ] {
+        let error = ProxyAddr::parse(&bad).expect_err(&bad);
+        assert!(
+            !error.contains(SECRET),
+            "PLANT-OUTBOUND-PROXY-REDACT: a parse error shows the proxy secret: {error}"
+        );
+    }
+    let pki = Pki::new();
+    let client = pki.client(loopback_allowed(), Some(proxy), resolver(PEER, &[]));
+    let line = client.describe();
+    assert!(
+        !line.contains(SECRET) && line.contains("with credentials"),
+        "PLANT-OUTBOUND-PROXY-REDACT: the startup line shows the proxy secret: {line}"
     );
 }
 
 #[test]
 fn proxy_and_trust_settings_parse() {
     assert!(ProxyAddr::parse("http://proxy.example:3128").is_ok());
+    assert!(ProxyAddr::parse("http://hub:token@proxy.example:3128").is_ok());
+    assert!(ProxyAddr::parse("http://hub@proxy.example:3128").is_err());
+    assert!(ProxyAddr::parse("http://hub:@proxy.example:3128").is_err());
     assert!(ProxyAddr::parse("https://proxy.example:3128").is_err());
     assert!(ProxyAddr::parse("http://proxy.example").is_err());
     assert_eq!(PeerTrust::parse("system"), Ok(PeerTrust::SystemAndBundle));
