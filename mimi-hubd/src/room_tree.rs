@@ -92,10 +92,11 @@ pub(crate) struct SeedCandidate {
     /// The GroupInfo's signer's user, and its leaf.
     pub(crate) signer: String,
     pub(crate) signer_leaf: u32,
-    /// The room policy, participant list and operational policy of the group's GroupContext.
+    /// The room policy, participant list, operational policy and room metadata of the group's GroupContext.
     pub(crate) policy: Option<mimi_core::room_policy::RoomPolicy>,
     pub(crate) list: Option<mimi_core::participant_list::ParticipantListData>,
     operational: Option<Vec<u8>>,
+    metadata: Option<Vec<u8>>,
 }
 
 /// The leaf a member-sent Commit's `PublicMessage` names as its sender, read without a group.
@@ -857,17 +858,18 @@ impl Provider {
         .map_err(|_| Some("its GroupContext's operational policy does not decode"))?;
         // Display data the hub enforces nothing from, but it names its own room (protocol-07 §10.4), and the hub
         // refuses one naming another room at seeding as it does in an update.
-        if let Some(bytes) = app_data(
+        let metadata = app_data(
             context,
             mimi_core::room_metadata::ROOM_METADATA_COMPONENT_ID,
-        ) {
-            let metadata = mimi_core::room_metadata::decode_room_metadata(bytes)
+        );
+        if let Some(bytes) = metadata {
+            let read = mimi_core::room_metadata::decode_room_metadata(bytes)
                 .map_err(|_| Some("its GroupContext's room metadata does not decode"))?;
-            if mimi_core::uri::canonical(&metadata.room_uri) != mimi_core::uri::canonical(room_uri)
-            {
+            if mimi_core::uri::canonical(&read.room_uri) != mimi_core::uri::canonical(room_uri) {
                 return Err(Some("its GroupContext's room metadata names another room"));
             }
         }
+        let metadata = metadata.map(<[u8]>::to_vec);
         let list = app_data(context, PARTICIPANT_LIST_COMPONENT)
             .map(decode_participant_list_data)
             .transpose()
@@ -893,11 +895,12 @@ impl Provider {
             policy,
             list,
             operational,
+            metadata,
         })
     }
 
-    /// Store a verified seed: the room is tracked from the epoch after the Commit, and its policy, participant list and
-    /// operational policy are its group's from here.
+    /// Store a verified seed: the room is tracked from the epoch after the Commit, and its policy, participant list,
+    /// operational policy and room metadata are its group's from here.
     pub(crate) fn write_seed(
         &self,
         room_uri: &str,
@@ -913,6 +916,7 @@ impl Provider {
             policy,
             list,
             operational,
+            metadata,
             ..
         } = seed;
         let crypto = OpenMlsRustCrypto::default();
@@ -958,6 +962,12 @@ impl Provider {
             None => self.store.clear_operational_policy(room_uri),
         }
         .map_err(|_| "its operational policy could not be stored")?;
+        // Kept as the GroupContext carries it, as an update's is kept as sent; none there, none here.
+        match &metadata {
+            Some(data) => self.store.set_room_metadata(room_uri, data, now),
+            None => self.store.clear_room_metadata(room_uri),
+        }
+        .map_err(|_| "its room metadata could not be stored")?;
         self.keep_group_info_after(room_uri, commit_epoch + 1, Some(group_info));
         eprintln!(
             "[mimi-hubd] {room_uri} is tracked from epoch {}, seeded by {provider}",

@@ -563,7 +563,8 @@ in all, 1 KiB a text, 4 KiB a description, 16 descriptions, UTF-8 without NUL, a
 this room is stored as sent, replacing the last one, alone or beside the changes above. It is display data and the hub
 enforces nothing from it; who may change it is not checked, since no capability for it is kept. The `room_metadata` a
 GroupContext carries when the room is seeded is held to the same rule: a seed whose `RoomMetaData` does not decode
-within those bounds, or names another room, is refused like a seed with a bad `roles_list`.
+within those bounds, or names another room, is refused like a seed with a bad `roles_list`. A seed that passes keeps
+it as the room's metadata, as sent, and a GroupContext with none leaves the room with none.
 
 `mls_operational_policy` (`0x0024`) is read and kept (DIV-18). The other ten components are refused as an unrecognized
 proposal type, as are a removal of any component and an AppSync proposal, so a sender is told

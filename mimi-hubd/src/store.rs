@@ -918,6 +918,16 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Forget a room's metadata.
+    pub fn clear_room_metadata(&self, room_uri: &str) -> anyhow::Result<()> {
+        let room_uri = mimi_core::uri::canonical(room_uri);
+        self.conn.execute(
+            "DELETE FROM room_metadata WHERE room_uri = ?1",
+            params![room_uri.as_str()],
+        )?;
+        Ok(())
+    }
+
     /// A room's metadata, or None when it has none.
     pub fn room_metadata(&self, room_uri: &str) -> anyhow::Result<Option<Vec<u8>>> {
         let room_uri = mimi_core::uri::canonical(room_uri);
