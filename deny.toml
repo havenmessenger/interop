@@ -1,0 +1,26 @@
+# cargo-deny configuration: the advisory check for this lock. CI runs
+# `cargo deny --locked check -D unknown-advisory -D advisory-not-detected advisories`, so an ignore that no longer
+# matches anything in the resolved graph, or names an advisory the database does not know, fails the job: an ignore
+# cannot outlive its reason unnoticed.
+#
+# Every ignore's reason ends with one machine-checked condition, `until: <condition>`, which
+# scripts/check_advisory_conditions.py enforces. When the condition comes true the ignore must be revisited:
+#   until: lock <crate> >= <version>               every locked <crate> is at least <version>
+#   until: release <crate> beyond <version>        <crate>'s newest stable release is newer than <version>
+#   until: release <crate> requires <dep> <req>    <crate>'s newest stable release requires <dep> as <req>
+#   until: release <crate> drops <dep>             <crate>'s newest stable release no longer depends on <dep>
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+unmaintained = "all"
+unused-ignored-advisory = "deny"
+ignore = [
+    # `proc-macro-error2` unmaintained, no known vulnerability. Chain: proc-macro-error2 <- hax-lib-macros 0.3 <-
+    # hax-lib 0.3 <- core-models <- libcrux-intrinsics <- libcrux-sha3 <- hpke-rs <- openmls_rust_crypto. A procedural
+    # macro, run at build time only. hax-lib-macros 0.5 has dropped it; libcrux-intrinsics, newest release, still
+    # requires hax-lib ^0.4.
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 unmaintained: build-time macro under hax-lib 0.3, not in any shipped artifact. until: release libcrux-intrinsics requires hax-lib ^0.5" },
+]
