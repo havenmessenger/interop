@@ -12,6 +12,13 @@ paths = [
     # generic-api-key rule; none of it is a real secret, all of it is reproducible from
     # tools/vc-vectors-xcheck (see docs/vc-01-vector-report.md).
     '''tests/vectors/vc-01-vectors\.json$''',
+    # Joint UpdateRequest vectors shared with another MIMI implementation: the hub's franking and signature keys
+    # for the example domain `a.example` were generated for these vectors only, and the file says so ("Test keys
+    # only"). tests/joint_ietf127_vectors_replay.rs replays them; no running hub uses them.
+    '''tests/vectors/joint-ietf127-mls-vectors\.json$''',
+    # Cargo lockfiles: crate names, versions and registry checksums only. A dependency named `libcrux-secrets`
+    # followed by the next entry's line reads as a generic API key to the default rules.
+    '''(^|/)Cargo\.lock$''',
     # check_tell_scan.py's own self-test fixture: a deliberately-shaped fake AWS access key ID
     # that proves this repo's own secrets scanner catches that shape. Not a real credential;
     # removing it would silently disable the self-test's positive-detection proof for the
