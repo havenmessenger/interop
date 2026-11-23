@@ -825,26 +825,48 @@ def self_test() -> int:
             "the audit missed: a served vector that differs from the listed one"
         )
 
-    # A cut commit list says how many there were.
-    if int(git(repo, "rev-list", "--count", "HEAD").strip()) >= 3:
-        global MAX_COMMITS
-        saved, MAX_COMMITS = MAX_COMMITS, 1
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                args = argparse.Namespace(
-                    revision=head,
-                    previous=git(repo, "rev-parse", "HEAD~2").strip(),
-                    deployed_at="x",
-                    domain=None,
-                    setting=[],
-                    out=tmp,
+    # A cut commit list says how many there were. The history is a fixture of its own, this tree and then exactly two
+    # commits, so the count does not depend on how the checkout was made: a pull request is checked out as a merge
+    # commit, whose HEAD~2..HEAD holds more than two.
+    global MAX_COMMITS
+    saved, MAX_COMMITS = MAX_COMMITS, 1
+    try:
+        with tempfile.TemporaryDirectory() as fix, tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(fix)
+            tree = subprocess.run(
+                ["git", "-C", str(repo), "archive", "HEAD"],
+                capture_output=True,
+                check=True,
+            ).stdout
+            subprocess.run(["tar", "-x", "-C", fix], input=tree, check=True)
+            ident = ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false"]
+
+            def commit(*extra: str) -> None:
+                subprocess.run(
+                    ["git", "-C", fix, *ident, "commit", "-q", "--no-verify", *extra],
+                    check=True,
                 )
-                render(repo, args, check_checkout=False)
-                assert "the latest 1 of 2" in (Path(tmp) / "index.html").read_text(), (
-                    "a cut commit list is not marked"
-                )
-        finally:
-            MAX_COMMITS = saved
+
+            subprocess.run(["git", "init", "-q", fix], check=True)
+            subprocess.run(["git", "-C", fix, "add", "-A"], check=True)
+            commit("-m", "base")
+            base = git(fixture, "rev-parse", "HEAD").strip()
+            commit("--allow-empty", "-m", "one")
+            commit("--allow-empty", "-m", "two")
+            args = argparse.Namespace(
+                revision=git(fixture, "rev-parse", "HEAD").strip(),
+                previous=base,
+                deployed_at="x",
+                domain=None,
+                setting=[],
+                out=tmp,
+            )
+            render(fixture, args, check_checkout=False)
+            assert "the latest 1 of 2" in (Path(tmp) / "index.html").read_text(), (
+                "a cut commit list is not marked"
+            )
+    finally:
+        MAX_COMMITS = saved
 
     # The table check catches a table that is wrong.
     base = gather(repo, head, None)
