@@ -41,9 +41,12 @@ GENERIC_PATTERNS = {
     # Excludes RFC 2606 reserved documentation domains/TLDs (example.com/.org/.net/.edu, and
     # the .example/.test/.invalid/.localhost TLDs) so test fixtures using those conventional
     # placeholders are not flagged as a PII leak. The reserved name must be the domain's last
-    # label: "example-mail.com" or "example.co.uk" is still flagged.
+    # label: "example-mail.com" or "example.co.uk" is still flagged. A "domain" made only of
+    # digits and dots is a version (`dtolnay/rust-toolchain@1.96.0`, `cargo-deny@0.20.2`), never
+    # an address: no top-level domain is numeric.
     "email address (non-placeholder domain)": re.compile(
-        r"\b[\w.+-]+@(?!(?:[\w-]+\.)*(?:example(?:\.(?:com|org|net|edu))?|test|invalid|localhost)"
+        r"\b[\w.+-]+@(?!\d+(?:\.\d+)+\b)"
+        r"(?!(?:[\w-]+\.)*(?:example(?:\.(?:com|org|net|edu))?|test|invalid|localhost)"
         r"(?![\w-]|\.[\w-]))"
         r"[\w-]+(?:\.[\w-]+)+\b"
     ),
@@ -130,6 +133,9 @@ let email = "alice@example.com";
 let peer = "henry@a.example";
 // A curl example using @file redirection, not an email address.
 // curl -X POST --data-binary @notify.bin https://localhost:8443/mimi/pl/notify
+// A pinned action or crate version, not an email address.
+      - uses: dtolnay/rust-toolchain@1.96.0
+cargo install cargo-deny --locked --version 0.20.2 # or cargo-deny@0.20.2
 // A different private-network range, outside what this scan targets.
 let addr = "192.168.1.1:8443";
 let local = "127.0.0.1:0";
@@ -141,6 +147,7 @@ _SELF_TEST_TELL_FIXTURE = """
 let key = "AKIAABCDEFGHIJKLMNOP";
 let contact = "user@example-mail.com";
 let other = "user@example.co.uk";
+let numeric_label = "user@1.example-mail.com";
 let host = "10.0.0.1";
 """
 
