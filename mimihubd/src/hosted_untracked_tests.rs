@@ -246,6 +246,8 @@ fn a_first_commit_whose_seed_fails_a_check_is_refused() {
 fn a_room_with_commits_and_no_tree_takes_a_change_only_with_the_tree() {
     let p = Provider::in_memory(DOMAIN).unwrap();
     p.add_participant(ROOM, ALICE, NOW).unwrap();
+    // Bob has a client in the group, so he is listed: every client is a listed user's.
+    p.add_participant(ROOM, BOB, NOW).unwrap();
     p.store.commit_accepted_at(ROOM, 0).unwrap();
     let alice = Member::new(ALICE);
     let bob = Member::new(BOB);
@@ -258,7 +260,7 @@ fn a_room_with_commits_and_no_tree_takes_a_change_only_with_the_tree() {
         &carol,
         CAROL,
         1,
-        &[(ALICE, 1), (CAROL, 1)],
+        &[(ALICE, 1), (BOB, 1), (CAROL, 1)],
     );
     let peer = member_example();
     let result = p.apply_update_request(
@@ -271,7 +273,11 @@ fn a_room_with_commits_and_no_tree_takes_a_change_only_with_the_tree() {
         matches!(result, Err(UpdateRefusal::Policy(_))),
         "PLANT-UNTRACKED-ROLE-GATED: a participant change was taken without the tree: {result:?}"
     );
-    assert_eq!(listed(&p), vec![ALICE.to_string()], "Carol is not listed");
+    assert_eq!(
+        listed(&p),
+        vec![ALICE.to_string(), BOB.to_string()],
+        "Carol is not listed"
+    );
     let result = p.apply_update_request(
         ROOM,
         &bundle(&commit, &group, &alice, None),
@@ -328,6 +334,8 @@ fn the_seeding_commits_changes_are_authorized_for_its_committer() {
 fn a_seed_signed_by_another_member_than_the_committer_is_refused() {
     let p = Provider::in_memory(DOMAIN).unwrap();
     p.add_participant(ROOM, ALICE, NOW).unwrap();
+    // Bob has a client in the group, so he is listed: every client is a listed user's.
+    p.add_participant(ROOM, BOB, NOW).unwrap();
     p.store.commit_accepted_at(ROOM, 0).unwrap();
     let alice = Member::new(ALICE);
     let bob = Member::new(BOB);
@@ -340,7 +348,7 @@ fn a_seed_signed_by_another_member_than_the_committer_is_refused() {
         &carol,
         CAROL,
         1,
-        &[(ALICE, 1), (CAROL, 1)],
+        &[(ALICE, 1), (BOB, 1), (CAROL, 1)],
     );
     let message = MlsMessageIn::tls_deserialize_exact(&commit)
         .unwrap()
@@ -351,7 +359,7 @@ fn a_seed_signed_by_another_member_than_the_committer_is_refused() {
     let mut updater = bobs.app_data_dictionary_updater();
     updater.set(openmls::component::ComponentData::from_parts(
         PARTICIPANT_LIST_COMPONENT,
-        list(&[(ALICE, 1), (CAROL, 1)]).into(),
+        list(&[(ALICE, 1), (BOB, 1), (CAROL, 1)]).into(),
     ));
     let changes = updater.changes();
     let processed = bobs

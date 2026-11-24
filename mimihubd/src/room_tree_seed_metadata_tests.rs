@@ -1,6 +1,9 @@
 //! A room's seed checks the `room_metadata` its GroupContext carries as an update's is checked: it must decode within
 //! bounds and name the room being seeded (protocol-07 §10.4). A seed that passes keeps it as the room's metadata.
 
+use mimi_core::participant_list::{
+    encode_participant_list_data, ParticipantListData, UserRolePair,
+};
 use mimi_core::protocol_wire::{GroupInfoOption, GroupInfoRepresentation};
 use mimi_core::room_metadata::{encode_room_metadata, RoomMetadata, ROOM_METADATA_COMPONENT_ID};
 use openmls::prelude::tls_codec::Serialize as _;
@@ -28,9 +31,21 @@ pub(super) fn metadata_naming(room: &str) -> Vec<u8> {
 pub(super) fn seed_into(p: &Provider, room_metadata: Option<Vec<u8>>) -> bool {
     let alice = Member::new("mimi://example.com/u/alice");
     let bob = Member::new("mimi://example.com/u/bob");
+    // Alice and Bob are listed in the GroupContext: every client in a seeded tree is a listed user's.
+    let listed = encode_participant_list_data(&ParticipantListData {
+        participants: ["mimi://example.com/u/alice", "mimi://example.com/u/bob"]
+            .into_iter()
+            .map(|user_uri| UserRolePair {
+                user_uri: user_uri.to_string(),
+                role_index: 1,
+            })
+            .collect(),
+    })
+    .unwrap();
     let components: Vec<(u16, Vec<u8>)> = room_metadata
         .map(|data| (ROOM_METADATA_COMPONENT_ID, data))
         .into_iter()
+        .chain([(crate::room_tree::PARTICIPANT_LIST_COMPONENT, listed)])
         .collect();
     let mut group = alice.create_group_with(GROUP, &components);
     let _bob_group = add_and_join(&mut group, &alice, &bob);
