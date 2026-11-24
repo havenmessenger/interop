@@ -40,6 +40,7 @@ mod hosted_untracked;
 pub mod http;
 pub mod identifier_search;
 pub mod key_material_proxy;
+mod list_leaves;
 #[cfg(test)]
 mod mls_fixtures;
 pub mod notify_source;
@@ -1295,6 +1296,10 @@ impl Provider {
             self.authorize_tracked_commit(room_uri, staged, &commit, now_unix)?;
         }
         self.include_held_proposals(room_uri, &mut commit, now_unix)?;
+        // A tracked room's clients and its list stay paired (`list_leaves.rs`), held proposals counted.
+        if let Some(staged) = &tracked {
+            self.require_list_leaves_paired(room_uri, staged)?;
+        }
         let seed = if needs_seed {
             let seed = self
                 .required_seed(room_uri, commit_bytes, &commit, &by_value, bundle, requester)
@@ -1426,6 +1431,26 @@ impl Provider {
             staged.sender.as_deref(),
             &commit.updates,
         )
+    }
+
+    /// Refuse a Commit to a tracked room after which its clients and its participant list are not paired: a client added
+    /// for a user not listed after it, a user taken off the list who keeps a client, or a listed user's client removed by
+    /// anyone but that user as its own (room-policy-04 §8.1.2, `list_leaves.rs`).
+    fn require_list_leaves_paired(
+        &self,
+        room_uri: &str,
+        staged: &crate::room_tree::StagedRoomCommit,
+    ) -> Result<(), UpdateRefusal> {
+        let Some(view) = staged.list_and_leaves()? else {
+            return Ok(());
+        };
+        let policy = self
+            .room_policy(room_uri)
+            .map_err(|_| UpdateRefusal::Store)?;
+        crate::list_leaves::require_paired(&view, policy.as_ref()).map_err(|why| {
+            eprintln!("[mimihubd] refused a Commit for {room_uri} (tracked): {why}");
+            UpdateRefusal::Invalid(why)
+        })
     }
 
     /// Read the proposals `commit` names by reference into it, from what this hub holds for the room at the Commit's

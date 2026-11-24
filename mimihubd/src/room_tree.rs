@@ -26,16 +26,17 @@ use openmls::messages::group_info::VerifiableGroupInfo;
 use openmls::prelude::tls_codec::{Deserialize as _, Serialize as _};
 use openmls::prelude::{
     AppDataUpdateOperation, Credential, GroupId, LeafNodeIndex, OpenMlsSignaturePublicKey,
-    ProposalStore, RatchetTreeIn, Verifiable as _,
+    Proposal, ProposalStore, RatchetTreeIn, Verifiable as _,
 };
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::OpenMlsProvider;
 
 use mimi_core::app_data::{resolve_component, AppDataError, ComponentChange};
 use mimi_core::partial_group_info::{PartialGroupInfo, TreeAt};
-use mimi_core::participant_list::decode_participant_list_data;
+use mimi_core::participant_list::{decode_participant_list_data, ParticipantListData};
 use mimi_core::protocol_wire::{GroupInfoOption, GroupInfoRepresentation};
 
+use crate::list_leaves::{ListAndLeaves, RemovedLeaf};
 use crate::{Provider, UpdateRefusal};
 
 /// `participant_list`'s component id in a GroupContext's app data dictionary (protocol-07 §10.3).
@@ -80,6 +81,95 @@ pub struct StagedRoomCommit {
     pub(crate) had_roles_list: bool,
     /// For an external Commit, the joiner's user, by the credential of the leaf its update path adds.
     pub(crate) joiner: Option<String>,
+}
+
+impl StagedRoomCommit {
+    /// The room's list and clients around this Commit, for [`crate::list_leaves::require_paired`]: the participant list
+    /// before it (the group's GroupContext) and after it (the GroupContext as staged, its AppDataUpdates resolved), the
+    /// clients it adds and removes, held proposals included, and the user of each client after it. `None` for a room
+    /// whose group carries no participant list before or after the Commit.
+    ///
+    /// An external Commit that removes a client of its joiner's own user (a resync, RFC 9420 §12.4.3.2) replaces that
+    /// client with the joiner, so that client is not counted as removed by another member.
+    pub(crate) fn list_and_leaves(&self) -> Result<Option<ListAndLeaves>, UpdateRefusal> {
+        let decode = |bytes: Option<&[u8]>| {
+            bytes
+                .map(decode_participant_list_data)
+                .transpose()
+                .map_err(|_| UpdateRefusal::Invalid("the participant list does not decode"))
+        };
+        let before = decode(app_data(
+            self.group.group_context(),
+            PARTICIPANT_LIST_COMPONENT,
+        ))?;
+        let after = decode(app_data(
+            self.staged.group_context(),
+            PARTICIPANT_LIST_COMPONENT,
+        ))?;
+        if before.is_none() && after.is_none() {
+            return Ok(None);
+        }
+        let mut removed_at = Vec::new();
+        let mut removed = Vec::new();
+        for queued in self.staged.queued_proposals() {
+            let proposer_leaf = match queued.sender() {
+                Sender::Member(leaf) => Some(*leaf),
+                _ => None,
+            };
+            let leaf = match queued.proposal() {
+                Proposal::Remove(remove) => remove.removed(),
+                Proposal::SelfRemove => match proposer_leaf {
+                    Some(leaf) => leaf,
+                    None => continue,
+                },
+                _ => continue,
+            };
+            removed_at.push(leaf);
+            let user = member_uri(&self.group, leaf);
+            let proposer = match queued.sender() {
+                Sender::NewMemberCommit => self.joiner.clone(),
+                _ => proposer_leaf.and_then(|leaf| member_uri(&self.group, leaf)),
+            };
+            if matches!(queued.sender(), Sender::NewMemberCommit)
+                && user.is_some()
+                && user == proposer
+            {
+                continue;
+            }
+            removed.push(RemovedLeaf { user, proposer });
+        }
+        let mut added: Vec<Option<String>> = self
+            .staged
+            .add_proposals()
+            .map(|add| credential_uri(add.add_proposal().key_package().leaf_node().credential()))
+            .collect();
+        if let Some(joiner) = &self.joiner {
+            added.push(Some(joiner.clone()));
+        }
+        let mut leaves_after: Vec<Option<String>> = self
+            .group
+            .members()
+            .filter(|member| !removed_at.contains(&member.index))
+            .map(|member| credential_uri(&member.credential))
+            .collect();
+        leaves_after.extend(added.iter().cloned());
+        let users = |list: Option<ParticipantListData>| -> Vec<(String, u32)> {
+            list.map(|list| {
+                list.participants
+                    .into_iter()
+                    .map(|pair| (mimi_core::uri::canonical(&pair.user_uri), pair.role_index))
+                    .collect()
+            })
+            .unwrap_or_default()
+        };
+        Ok(Some(ListAndLeaves {
+            before: users(before),
+            after: users(after).into_iter().map(|(user, _)| user).collect(),
+            added,
+            removed,
+            leaves_after,
+        }))
+    }
 }
 
 /// A seeding bundle that passed every check, not written yet: what `write_seed` stores for the room.
@@ -920,6 +1010,26 @@ impl Provider {
                     "a participant its GroupContext lists is not in its tree or names no provider",
                 ));
             }
+        }
+        // Every client in the tree is a client of a listed user (room-policy-04 §8.1.2). The list after the Commit is the
+        // GroupContext's when it carries one, else the hub's own with the Commit's change applied (`listed`).
+        let listed_after: Vec<String> = match &list {
+            Some(list) => list
+                .participants
+                .iter()
+                .map(|pair| mimi_core::uri::canonical(&pair.user_uri))
+                .collect(),
+            None => listed
+                .iter()
+                .map(|user| mimi_core::uri::canonical(user))
+                .collect(),
+        };
+        if candidate.members().any(|member| {
+            credential_uri(&member.credential).is_none_or(|user| !listed_after.contains(&user))
+        }) {
+            return Err(Some(
+                "a client in its tree is not a client of a participant it lists",
+            ));
         }
         let signer_leaf = info.signer().u32();
         Ok(SeedCandidate {
