@@ -31,6 +31,10 @@ pub(crate) struct RemovedLeaf {
     pub proposer: Option<String>,
 }
 
+/// A client the Commit gives a new leaf: the identity bytes of its Basic credential before, and of its new leaf's;
+/// `None` for a credential of another type.
+pub(crate) type Renewal = (Option<Vec<u8>>, Option<Vec<u8>>);
+
 /// A tracked room's participant list and clients around one Commit.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct ListAndLeaves {
@@ -46,7 +50,7 @@ pub(crate) struct ListAndLeaves {
     pub leaves_after: Vec<Option<String>>,
     /// Each client the Commit gives a new leaf (an Update, or the committer's leaf in its update path): the identity
     /// bytes of its Basic credential before and of its new leaf's, `None` for a credential of another type.
-    pub renewed: Vec<(Option<Vec<u8>>, Option<Vec<u8>>)>,
+    pub renewed: Vec<Renewal>,
 }
 
 pub(crate) const ADDED_NOT_LISTED: &str =

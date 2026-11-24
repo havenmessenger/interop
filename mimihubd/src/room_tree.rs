@@ -36,7 +36,7 @@ use mimi_core::partial_group_info::{PartialGroupInfo, TreeAt};
 use mimi_core::participant_list::{decode_participant_list_data, ParticipantListData};
 use mimi_core::protocol_wire::{GroupInfoOption, GroupInfoRepresentation};
 
-use crate::list_leaves::{ListAndLeaves, RemovedLeaf};
+use crate::list_leaves::{ListAndLeaves, RemovedLeaf, Renewal};
 use crate::{Provider, UpdateRefusal};
 
 /// `participant_list`'s component id in a GroupContext's app data dictionary (protocol-07 §10.3).
@@ -164,7 +164,7 @@ impl StagedRoomCommit {
                 .leaf(leaf)
                 .and_then(|node| basic_identity(node.credential()))
         };
-        let mut renewed: Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> = self
+        let mut renewed: Vec<Renewal> = self
             .staged
             .update_proposals()
             .filter_map(|update| match update.sender() {
