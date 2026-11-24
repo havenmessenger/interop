@@ -289,7 +289,7 @@ fn a_room_with_commits_and_no_tree_takes_a_change_only_with_the_tree() {
         p.room_tracking(ROOM).unwrap().is_some(),
         "and the room is tracked"
     );
-    assert_eq!(listed(&p).len(), 2);
+    assert_eq!(listed(&p).len(), 3, "Alice, Bob and now Carol");
 }
 
 /// The Commit that gives the hub the tree is authorized for its committer like any other: a creator whose role may not
