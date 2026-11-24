@@ -155,6 +155,24 @@ impl StagedRoomCommit {
             .map(|member| credential_uri(&member.credential))
             .collect();
         leaves_after.extend(added.iter().cloned());
+        // A client's new leaf must name the user its old one did: each Update by its sender, and a member committer's
+        // leaf in its update path (an external Commit's joiner is a new client, counted among the added).
+        let mut renewed: Vec<(Option<String>, Option<String>)> = self
+            .staged
+            .update_proposals()
+            .filter_map(|update| match update.sender() {
+                Sender::Member(leaf) => Some((
+                    member_uri(&self.group, *leaf),
+                    credential_uri(update.update_proposal().leaf_node().credential()),
+                )),
+                _ => None,
+            })
+            .collect();
+        if self.joiner.is_none() {
+            if let Some(leaf) = self.staged.update_path_leaf_node() {
+                renewed.push((self.sender.clone(), credential_uri(leaf.credential())));
+            }
+        }
         let users = |list: Option<ParticipantListData>| -> Vec<(String, u32)> {
             list.map(|list| {
                 list.participants
@@ -176,6 +194,7 @@ impl StagedRoomCommit {
             added,
             removed,
             leaves_after,
+            renewed,
         })
     }
 }

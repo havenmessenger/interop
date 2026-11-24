@@ -4,9 +4,12 @@
 //! - each client the Commit adds is a client of a user listed after it;
 //! - a user the Commit takes off the list keeps no client in the group ("There MUST NOT be any clients of the removed
 //!   user in the MLS group after the corresponding commit");
-//! - a client of a user who stays listed is removed only by that user, as its own client (`canRemoveOwnClient`), by a
-//!   Remove it commits or a Remove or SelfRemove it proposed. Another member removes a user's clients only by taking
-//!   the user off the list.
+//! - a client of a user who stays listed is removed by that user, as its own client (`canRemoveOwnClient`), by a Remove
+//!   it commits or a Remove or SelfRemove it proposed; or by a member whose role holds `canKick`, which removes another
+//!   participant's clients without changing the list. Otherwise a member removes a user's clients only by taking the
+//!   user off the list;
+//! - a client keeps its user: an Update, or the committer's new leaf, names the same user as the leaf it replaces
+//!   (RFC 9420 §5.3.1, a valid successor), so no client becomes another user's, listed or not.
 //!
 //! A listed user with no client is valid (an inactive participant). Users are compared in canonical form.
 //!
@@ -39,6 +42,9 @@ pub(crate) struct ListAndLeaves {
     pub removed: Vec<RemovedLeaf>,
     /// The user of each client in the group after the Commit.
     pub leaves_after: Vec<Option<String>>,
+    /// Each client the Commit gives a new leaf (an Update, or the committer's leaf in its update path): its user before
+    /// and the user its new leaf names.
+    pub renewed: Vec<(Option<String>, Option<String>)>,
 }
 
 pub(crate) const ADDED_NOT_LISTED: &str =
@@ -46,16 +52,27 @@ pub(crate) const ADDED_NOT_LISTED: &str =
 pub(crate) const DELISTED_KEEPS_CLIENT: &str =
     "a participant the Commit takes off the list keeps a client in the group";
 pub(crate) const CLIENT_OF_ANOTHER: &str =
-    "the Commit removes a listed participant's client that the participant did not remove as its own";
+    "the Commit removes a listed participant's client that the participant did \
+     not remove as its own and no member who may kick removed";
+pub(crate) const CLIENT_CHANGES_USER: &str =
+    "a client's new leaf names another user than the client's";
 
 /// Refuses a Commit after which the room's clients and its list are not paired, by the rules in the module doc.
 /// `policy` is the room's policy, when it has roles: removing one's own client then needs `canRemoveOwnClient` in the
-/// user's role. A room without roles has no capability to check.
+/// user's role, and removing another's needs `canKick` in the proposer's. A room without roles has no capability to
+/// check: a user may remove its own client there, and no one may remove another's without taking it off the list.
 pub(crate) fn require_paired(
     view: &ListAndLeaves,
     policy: Option<&RoomPolicy>,
 ) -> Result<(), &'static str> {
     let listed_after = |user: &str| view.after.iter().any(|listed| listed == user);
+    if view
+        .renewed
+        .iter()
+        .any(|(before, after)| before.is_none() || before != after)
+    {
+        return Err(CLIENT_CHANGES_USER);
+    }
     if view
         .added
         .iter()
@@ -83,13 +100,24 @@ pub(crate) fn require_paired(
         let (Some((_, role)), true) = (listed_before, listed_after(user)) else {
             continue;
         };
+        let holds = |role: Option<u32>, capability: Capability| {
+            policy.is_some_and(|policy| {
+                role.and_then(|role| policy.role(role))
+                    .is_some_and(|role| role.has(capability))
+            })
+        };
         let own = removed.proposer.as_deref() == Some(user);
-        let may = policy.is_none_or(|policy| {
-            policy
-                .role(*role)
-                .is_some_and(|role| role.has(Capability::RemoveOwnClient))
-        });
-        if !(own && may) {
+        let as_own = own && (policy.is_none() || holds(Some(*role), Capability::RemoveOwnClient));
+        let by_kick = !own
+            && removed.proposer.as_deref().is_some_and(|proposer| {
+                let proposer_role = view
+                    .before
+                    .iter()
+                    .find(|(listed, _)| listed == proposer)
+                    .map(|(_, role)| *role);
+                holds(proposer_role, Capability::Kick)
+            });
+        if !(as_own || by_kick) {
             return Err(CLIENT_OF_ANOTHER);
         }
     }

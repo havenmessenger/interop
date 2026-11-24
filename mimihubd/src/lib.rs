@@ -1734,9 +1734,10 @@ impl Provider {
 
     /// What a Commit's `Add` and `Remove` proposals must say beside its change (when it has any), checked against the list the room holds now
     /// and the update (§7.5): every user the update adds has an `Add` for one of its clients, no `Add` is for a user who is
-    /// neither listed nor added by the update, and an update that removes users has a `Remove` to go with them. A `Remove`
-    /// is a leaf index and the hub holds no ratchet tree, so which user it is cannot be checked; a `Remove` without a
-    /// removed user (one device of a listed user) is allowed, and an `Add` for a listed user (a second device) too.
+    /// neither listed nor added by the update, and an update that removes users has a `Remove` to go with them. Here a
+    /// `Remove` is only a leaf index: in an untracked room the hub holds no ratchet tree to map it to a user, so a `Remove`
+    /// without a removed user (one device of a listed user) is allowed, and an `Add` for a listed user (a second device)
+    /// too. A tracked room's Removes are also checked against its tree (`list_leaves.rs`).
     fn check_commit_against_list(
         &self,
         room_uri: &str,

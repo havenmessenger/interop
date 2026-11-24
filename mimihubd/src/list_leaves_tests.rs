@@ -49,6 +49,7 @@ fn room() -> ListAndLeaves {
         added: Vec::new(),
         removed: Vec::new(),
         leaves_after: leaves(&[ALICE, BOB, BOB, CAROL]),
+        renewed: Vec::new(),
     }
 }
 
@@ -214,4 +215,40 @@ fn a_listed_user_with_no_client_left_is_valid() {
         ..room()
     };
     assert_eq!(require_paired(&view, Some(&may_remove_own())), Ok(()));
+}
+
+#[test]
+fn a_client_whose_new_leaf_names_another_user_is_refused() {
+    let dave = "mimi://d.example/u/dave";
+    for other in [CAROL, dave] {
+        let view = ListAndLeaves {
+            renewed: vec![(Some(BOB.into()), Some(other.into()))],
+            ..room()
+        };
+        assert_eq!(
+            require_paired(&view, Some(&may_remove_own())),
+            Err(CLIENT_CHANGES_USER),
+            "PLANT-HUB-SAME-USER: a client's new leaf named another user ({other})"
+        );
+    }
+    let same = ListAndLeaves {
+        renewed: vec![(Some(BOB.into()), Some(BOB.into()))],
+        ..room()
+    };
+    assert_eq!(require_paired(&same, Some(&may_remove_own())), Ok(()));
+}
+
+#[test]
+fn a_member_who_may_kick_removes_another_listed_users_client() {
+    let view = ListAndLeaves {
+        removed: vec![removed(BOB, ALICE)],
+        leaves_after: leaves(&[ALICE, BOB, CAROL]),
+        ..room()
+    };
+    assert_eq!(
+        require_paired(&view, Some(&policy(vec![Capability::Kick]))),
+        Ok(()),
+        "PLANT-HUB-KICK: canKick removes another participant's client without changing the list"
+    );
+    assert_eq!(require_paired(&view, None), Err(CLIENT_OF_ANOTHER));
 }

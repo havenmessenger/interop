@@ -188,6 +188,32 @@ fn a_listed_users_new_client_joins_by_external_commit() {
     assert_eq!(group.members().count(), 3);
 }
 
+/// A member that resyncs by external Commit (its client rejoining with the key its leaf holds, RFC 9420 §12.4.3.2)
+/// replaces its own old leaf: the Commit's Remove of that leaf is the joiner's own, so it needs no canRemoveOwnClient,
+/// which Bob's role lacks here, and Bob keeps one client. Revert check: count that Remove as another member's, and the
+/// resync is refused.
+#[test]
+fn a_members_resync_by_external_commit_replaces_its_own_client() {
+    let p = Provider::in_memory("hub.example").unwrap();
+    let room = room(&p, &roles(true), None, true);
+    let info = group_info_after(&room.group, &room.alice);
+    let (resync, _) = external_commit(
+        &info,
+        room.group.export_ratchet_tree().into(),
+        &room.bob.on_a_fresh_store(),
+    );
+    let result = apply(&p, &resync);
+    assert!(
+        result.is_ok(),
+        "PLANT-HUB-RESYNC: a member's resync was refused: {result:?}"
+    );
+    let tracking = p.room_tracking(ROOM).unwrap().unwrap();
+    let group = PublicGroup::load(&p.store.groups(), &GroupId::from_slice(&tracking.group_id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(group.members().count(), 2, "Bob's old client was replaced");
+}
+
 /// The user an external Commit's new leaf names must belong to the provider that sent it: another provider, or a
 /// request with no provider's proof, cannot add a client in that user's name. Revert check: skip the provider check,
 /// and other.example adds a client as Bob.

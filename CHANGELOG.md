@@ -8,9 +8,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 - `mimihubd`: a tracked room's Commit is checked against the room's tree as well as its list (room-policy-04
   §8.1.2). Each client it adds is a client of a user listed after it; a user it takes off the list keeps no client in
-  the group; and a client of a user who stays listed is removed only by that user, as its own client
-  (`canRemoveOwnClient`), by a Remove it commits or proposes or a SelfRemove. A seeding bundle's tree holds only
-  clients of the users the room lists after its Commit. A listed user with no client stays valid.
+  the group; a client of a user who stays listed is removed by that user, as its own client (`canRemoveOwnClient`),
+  by a Remove it commits or proposes or a SelfRemove, or by a member whose role holds `canKick`; and a client's new
+  leaf (an Update, or the committer's) names the same user as its old one. A seeding bundle's tree holds only clients
+  of the users the room lists after its Commit. A listed user with no client stays valid.
 - `mimi-core`: the room policy decode carries `canRemoveOwnClient` (room-policy-04 §8.1.2, registry value
   0x0003). A role that lists it may remove a client of its own without changing the participant list.
 - The hub daemon is renamed from `mimi-hubd` to `mimihubd`: the crate and binary, the Debian package with its

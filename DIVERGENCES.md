@@ -530,14 +530,17 @@ Commit. A change to another user needs the capability its transition needs (`can
 `authorized_role_changes`. Those capabilities exclude the holder itself, so a proposer's own leaving needs
 `canRemoveSelf` and an entry from its role to 0. Any other change to the proposer's own role is `canChangeOwnRole`,
 which works through the Preauthorized users component this hub does not read yet: such a change is refused until that
-is built. Not checked yet: the participant-count constraints, a Remove with no participant-list change (`canKick`,
-`canRemoveOwnClient`), and `canAddOwnClient`. An untracked room's Commit sender is a leaf index the hub cannot map to
+is built. In a tracked room a Remove with no participant-list change is checked against the tree: it removes the
+proposer's own client (`canRemoveOwnClient`) or is a kick (`canKick`), and no client's new leaf names another user
+(`mimihubd/src/list_leaves.rs`). Not checked yet: the participant-count constraints, and `canAddOwnClient` outside an
+external Commit. An untracked room's Commit sender is a leaf index the hub cannot map to
 a member: by default its changes that need a proposer are taken only in the Commit that gives the hub the tree, whose
 committer is the GroupInfo's signer (DIV-10); on `untracked_rooms = "accept"` none of this is checked.
 
 A tracked room's policy and list are its group's. When the room is seeded, the GroupContext's `roles_list`,
 `base_room_policy` and `participant_list` replace what the hub stored (a GroupContext with no `roles_list` leaves the
-room with no policy), and every participant it lists must be in the tree. Room-policy PR
+room with no policy), every participant it lists must be in the tree, and every client in the tree must be a client of
+a participant it lists. Room-policy PR
 [#52](https://github.com/ietf-wg-mimi/mimi-room-policy/pull/52), still open, sets a `roles_list` when the MLS group is
 created, in its change "Set the roles_list at group creation" (its title and description name only its other change,
 the `base_room_policy` one in DIV-15): a Commit that adds a `roles_list` to a group that has none is invalid, and a room with no `roles_list` has no

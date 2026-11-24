@@ -47,6 +47,16 @@ impl Member {
         }
     }
 
+    /// The same client on a fresh store: its signing key and credential with a new provider, as a client that lost its
+    /// group state and rejoins with the key its leaf holds (a resync, RFC 9420 §12.4.3.2).
+    pub(crate) fn on_a_fresh_store(&self) -> Self {
+        Self {
+            provider: OpenMlsRustCrypto::default(),
+            signer: MemorySigner(self.signer.0.clone()),
+            credential: self.credential.clone(),
+        }
+    }
+
     /// A KeyPackage for this member to be added with, advertising the app data dictionary and AppDataUpdate.
     pub(crate) fn key_package(&self) -> KeyPackage {
         KeyPackage::builder()
