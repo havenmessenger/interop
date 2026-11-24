@@ -25,8 +25,8 @@ use openmls::group::{PublicGroup, StagedCommit};
 use openmls::messages::group_info::VerifiableGroupInfo;
 use openmls::prelude::tls_codec::{Deserialize as _, Serialize as _};
 use openmls::prelude::{
-    AppDataUpdateOperation, Credential, GroupId, LeafNodeIndex, OpenMlsSignaturePublicKey,
-    Proposal, ProposalStore, RatchetTreeIn, Verifiable as _,
+    AppDataUpdateOperation, Credential, CredentialType, GroupId, LeafNodeIndex,
+    OpenMlsSignaturePublicKey, Proposal, ProposalStore, RatchetTreeIn, Verifiable as _,
 };
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::OpenMlsProvider;
@@ -81,6 +81,8 @@ pub struct StagedRoomCommit {
     pub(crate) had_roles_list: bool,
     /// For an external Commit, the joiner's user, by the credential of the leaf its update path adds.
     pub(crate) joiner: Option<String>,
+    /// The committer's leaf, for a Commit a member sent.
+    committer_leaf: Option<LeafNodeIndex>,
 }
 
 impl StagedRoomCommit {
@@ -157,20 +159,28 @@ impl StagedRoomCommit {
         leaves_after.extend(added.iter().cloned());
         // A client's new leaf must name the user its old one did: each Update by its sender, and a member committer's
         // leaf in its update path (an external Commit's joiner is a new client, counted among the added).
-        let mut renewed: Vec<(Option<String>, Option<String>)> = self
+        let before = |leaf: LeafNodeIndex| {
+            self.group
+                .leaf(leaf)
+                .and_then(|node| basic_identity(node.credential()))
+        };
+        let mut renewed: Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> = self
             .staged
             .update_proposals()
             .filter_map(|update| match update.sender() {
                 Sender::Member(leaf) => Some((
-                    member_uri(&self.group, *leaf),
-                    credential_uri(update.update_proposal().leaf_node().credential()),
+                    before(*leaf),
+                    basic_identity(update.update_proposal().leaf_node().credential()),
                 )),
                 _ => None,
             })
             .collect();
         if self.joiner.is_none() {
             if let Some(leaf) = self.staged.update_path_leaf_node() {
-                renewed.push((self.sender.clone(), credential_uri(leaf.credential())));
+                renewed.push((
+                    self.committer_leaf.and_then(before),
+                    basic_identity(leaf.credential()),
+                ));
             }
         }
         let users = |list: Option<ParticipantListData>| -> Vec<(String, u32)> {
@@ -477,6 +487,13 @@ fn provider_of(uri: &str) -> Option<String> {
         .map(|parsed| parsed.authority.to_ascii_lowercase())
 }
 
+/// A Basic credential's identity bytes, exactly; `None` for a credential of another type. A client's renewed leaf must
+/// carry the same bytes as the leaf it replaces, as its group's clients require.
+fn basic_identity(credential: &Credential) -> Option<Vec<u8>> {
+    (credential.credential_type() == CredentialType::Basic)
+        .then(|| credential.serialized_content().to_vec())
+}
+
 fn member_uri(group: &PublicGroup, leaf: LeafNodeIndex) -> Option<String> {
     group
         .leaf(leaf)
@@ -732,6 +749,7 @@ impl Provider {
             sender,
             had_roles_list,
             joiner,
+            committer_leaf,
         })
     }
 

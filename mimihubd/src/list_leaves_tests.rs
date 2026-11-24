@@ -220,9 +220,12 @@ fn a_listed_user_with_no_client_left_is_valid() {
 #[test]
 fn a_client_whose_new_leaf_names_another_user_is_refused() {
     let dave = "mimi://d.example/u/dave";
-    for other in [CAROL, dave] {
+    let bytes = |user: &str| Some(user.as_bytes().to_vec());
+    // Another listed user, an unlisted one, and Bob's own URI with its host in another case: each is another
+    // credential, though the last names the same user in canonical form.
+    for other in [CAROL, dave, "mimi://B.EXAMPLE/u/bob"] {
         let view = ListAndLeaves {
-            renewed: vec![(Some(BOB.into()), Some(other.into()))],
+            renewed: vec![(bytes(BOB), bytes(other))],
             ..room()
         };
         assert_eq!(
@@ -232,10 +235,18 @@ fn a_client_whose_new_leaf_names_another_user_is_refused() {
         );
     }
     let same = ListAndLeaves {
-        renewed: vec![(Some(BOB.into()), Some(BOB.into()))],
+        renewed: vec![(bytes(BOB), bytes(BOB))],
         ..room()
     };
     assert_eq!(require_paired(&same, Some(&may_remove_own())), Ok(()));
+    let not_basic = ListAndLeaves {
+        renewed: vec![(None, bytes(BOB))],
+        ..room()
+    };
+    assert_eq!(
+        require_paired(&not_basic, Some(&may_remove_own())),
+        Err(CLIENT_CHANGES_USER)
+    );
 }
 
 #[test]

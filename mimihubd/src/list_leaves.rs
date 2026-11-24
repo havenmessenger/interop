@@ -8,8 +8,10 @@
 //!   it commits or a Remove or SelfRemove it proposed; or by a member whose role holds `canKick`, which removes another
 //!   participant's clients without changing the list. Otherwise a member removes a user's clients only by taking the
 //!   user off the list;
-//! - a client keeps its user: an Update, or the committer's new leaf, names the same user as the leaf it replaces
-//!   (RFC 9420 §5.3.1, a valid successor), so no client becomes another user's, listed or not.
+//! - a client keeps its credential: an Update, or the committer's new leaf, carries a Basic credential with exactly the
+//!   identity bytes of the leaf it replaces (RFC 9420 §5.3.1, a valid successor), so no client becomes another user's,
+//!   listed or not. This is byte equality, not the canonical form the list is matched in: it is the comparison the
+//!   room's clients make, so every renewal a client refuses is refused here first.
 //!
 //! A listed user with no client is valid (an inactive participant). Users are compared in canonical form.
 //!
@@ -42,9 +44,9 @@ pub(crate) struct ListAndLeaves {
     pub removed: Vec<RemovedLeaf>,
     /// The user of each client in the group after the Commit.
     pub leaves_after: Vec<Option<String>>,
-    /// Each client the Commit gives a new leaf (an Update, or the committer's leaf in its update path): its user before
-    /// and the user its new leaf names.
-    pub renewed: Vec<(Option<String>, Option<String>)>,
+    /// Each client the Commit gives a new leaf (an Update, or the committer's leaf in its update path): the identity
+    /// bytes of its Basic credential before and of its new leaf's, `None` for a credential of another type.
+    pub renewed: Vec<(Option<Vec<u8>>, Option<Vec<u8>>)>,
 }
 
 pub(crate) const ADDED_NOT_LISTED: &str =
