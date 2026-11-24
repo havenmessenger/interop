@@ -8,7 +8,11 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 - The hub daemon is renamed from `mimi-hubd` to `mimihubd`: the crate and binary, the Debian package with its
   systemd unit, user and paths (`/etc/mimihubd`, `/var/lib/mimihubd`), the release assets and the container image
-  (`ghcr.io/havenmessenger/mimihubd`).
+  (`ghcr.io/havenmessenger/mimihubd`; the old image keeps its tags). The `mimihubd` package replaces `mimi-hubd`:
+  apt removes the old one and leaves its configuration and state in place. To carry them over, move `/etc/mimi-hubd`
+  to `/etc/mimihubd` and `/var/lib/mimi-hubd` to `/var/lib/mimihubd`, rename `mimi-hubd.toml` and `mimi-hubd.env`
+  to `mimihubd.*`, update the paths the configuration names, give the files to the `mimihubd` user
+  (`/etc/mimihubd` stays `root:mimihubd` 0750), then `systemctl enable --now mimihubd`.
 - `mimihubd`: `MIMI_OUTBOUND_PROXY` takes credentials, `http://user:secret@host:port`, for a `CONNECT` proxy that
   requires them. They are sent as `Proxy-Authorization: Basic` on each `CONNECT`, and never appear in `Debug`, a
   configuration error or the startup line; an error about the setting no longer quotes its value.
@@ -214,7 +218,7 @@ change in mimi-core below.
   `MLS_128_DHKEMX25519_AES128GCM_SHA256_ED25519` names 0x0001.
 
 ### The deployment's settings
-- mimihubd reads a policy file named by `MIMI_POLICY` (`policy`): `mls_ciphersuites` (default: every implemented suite;
+- mimi-hubd reads a policy file named by `MIMI_POLICY` (`policy`): `mls_ciphersuites` (default: every implemented suite;
   the directory advertises exactly the list) and `identifier_discovery` (default `all`: every user the hub can answer
   for, one it has enrolled or holds an unexpired KeyPackage for; `enrolled` keeps it to enrolled users). A named file
   that cannot be read or is not a valid policy stops the start; the hub logs the policy it runs. A deployment that
@@ -227,7 +231,7 @@ change in mimi-core below.
 ### Protocol
 - `notify` refuses an application message, a Commit or a proposal for a room hosted on another hub with 422 and the
   RFC 9457 problem `remote-room-not-delivered`, instead of answering 201 for a message it does not deliver. A Welcome
-  is still queued and answered 201. `docs/problems.md` names the problem types mimihubd answers with.
+  is still queued and answered 201. `docs/problems.md` names the problem types mimi-hubd answers with.
 - A Commit's participant-list change is checked against the room's policy: every role it puts a user in must be one
   the policy defines. A ban into role 1 is refused unless the room's role list defines role 1 (room-policy #51); a list
   that names role 1 without defining it is still valid. Who made a role change is not checked yet (DIV-15).
@@ -240,7 +244,7 @@ change in mimi-core below.
 - The directory's `unsupported` block no longer lists other ciphersuites, and says the GroupInfo join is not built yet.
 
 ### Operating the hub
-- Every answer from mimihubd carries `Server: mimihubd/<version>`.
+- Every answer from mimi-hubd carries `Server: mimi-hubd/<version>`.
 - Releases are signed: `SHA256SUMS` and a detached signature by the Haven Releases key on each release, signed tags,
   and the public key in `RELEASE-KEY.asc`. The README says how to verify one.
 
@@ -300,7 +304,7 @@ draft-atwood-mimi-provider-auth-00 (DNS-published keys).
 - The fingerprint of each client CA is printed at startup.
 
 ### Operating the hub
-- `mimihubd enroll` lets the operator enroll a handle for `identifierQuery` from the hub's host.
+- `mimi-hubd enroll` lets the operator enroll a handle for `identifierQuery` from the hub's host.
 - An optional listener serves the directory and nothing else; an optional activity line logs each peer request's
   method, route template and status.
 - The startup line names the version and the git commit it was built from.
@@ -322,5 +326,5 @@ any provider domain), DIV-17 (content-10 against content-09 peers). See DIVERGEN
 ## 0.0.1 - 2026-07-16
 
 First release: the mimi-core library (protocol-06 wire codecs, consent, participant lists, room policy, content
-codec) and the mimihubd reference hub over mutually authenticated TLS, with binaries, `.deb` packages and a container
+codec) and the mimi-hubd reference hub over mutually authenticated TLS, with binaries, `.deb` packages and a container
 image.

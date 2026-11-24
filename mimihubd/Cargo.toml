@@ -90,6 +90,10 @@ panic = "warn"
 # Without this, postinst dies under `set -e` on a bare install, leaving the package half-configured.
 [package.metadata.deb]
 depends = ["$auto", "adduser"]
+# Replaces the mimi-hubd package, the same daemon: installing this one removes it, which keeps its configuration and
+# state (only a purge deletes them).
+conflicts = "mimi-hubd"
+replaces = "mimi-hubd"
 maintainer = "Haven Messenger <security@havenmessenger.com>"
 copyright = "2026, Haven Messenger"
 license-file = ["../LICENSE", "0"]
