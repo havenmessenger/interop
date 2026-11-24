@@ -61,6 +61,9 @@ pub enum Capability {
     Ban,
     /// `canAddOwnClient`: the holder, a listed participant, may add a client of its own (by an external Commit too).
     AddOwnClient,
+    /// `canRemoveOwnClient`: the holder may remove a client of its own without changing the participant list
+    /// (room-policy-04 §8.1.2). The client being removed cannot commit its own removal; another member commits it.
+    RemoveOwnClient,
     /// `canOpenJoin`: on role 0, any user may join the room unlisted, into the role the join names.
     OpenJoin,
     /// `canChangeMlsOperationalPolicies`: the holder may change the room's `mls_operational_policy`. Listed "(reserved)"

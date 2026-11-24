@@ -6,6 +6,8 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimi-core`: the room policy decode carries `canRemoveOwnClient` (room-policy-04 §8.1.2, registry value
+  0x0003). A role that lists it may remove a client of its own without changing the participant list.
 - The hub daemon is renamed from `mimi-hubd` to `mimihubd`: the crate and binary, the Debian package with its
   systemd unit, user and paths (`/etc/mimihubd`, `/var/lib/mimihubd`), the release assets and the container image
   (`ghcr.io/havenmessenger/mimihubd`; the old image keeps its tags). The `mimihubd` package replaces `mimi-hubd`:

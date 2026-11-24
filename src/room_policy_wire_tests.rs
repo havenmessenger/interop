@@ -105,6 +105,7 @@ fn each_enforced_capability_has_its_registry_value_and_the_others_are_dropped() 
         (0x0000u16, Capability::AddParticipant),
         (0x0001, Capability::RemoveParticipant),
         (0x0002, Capability::AddOwnClient),
+        (0x0003, Capability::RemoveOwnClient),
         (0x0004, Capability::OpenJoin),
         (0x0006, Capability::RemoveSelf),
         (0x000a, Capability::Ban),
@@ -120,7 +121,7 @@ fn each_enforced_capability_has_its_registry_value_and_the_others_are_dropped() 
     }
     // Other registry values (upload, call, room attributes) are read and not carried; a repeat counts once.
     let mut role = String::from("00000002 01 61 00 ");
-    role.push_str("0a 0002 0003 0100 0100 0010");
+    role.push_str("0a 0002 0005 0100 0100 0010");
     role.push_str(" 00000000 00 00000000 00 00");
     let body = hex(&role);
     let wrapped = [run(&body)].concat();
