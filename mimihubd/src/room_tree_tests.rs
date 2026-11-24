@@ -100,6 +100,30 @@ fn a_tree_without_a_listed_participant_does_not_seed() {
     );
 }
 
+/// A tree with a client of a user the hub does not list does not seed the room: every client in the group is a client
+/// of a listed participant (room-policy-04 §8.1.2). Revert check: drop that check, and the room is tracked.
+#[test]
+fn a_tree_with_a_client_of_an_unlisted_user_does_not_seed() {
+    let p = hub();
+    let alice = Member::new("mimi://example.com/u/alice");
+    let bob = Member::new("mimi://example.com/u/bob");
+    let mut group = alice.create_group(GROUP);
+    let (_commit, group_info, tree) = add_commit(&mut group, &alice, &[&bob]);
+    p.add_participant(ROOM, "mimi://example.com/u/alice", 1)
+        .unwrap();
+    p.seed_room_tree(
+        ROOM,
+        0,
+        Some(&example_peer()),
+        &full(&group_info),
+        &tree_option(&tree),
+    );
+    assert!(
+        p.room_tracking(ROOM).unwrap().is_none(),
+        "PLANT-HUB-SEED-UNLISTED: a tree with a client of an unlisted user seeded the room"
+    );
+}
+
 /// A bundle sent by a provider other than its GroupInfo's signer's, or for another epoch, or with no peer, does not seed.
 /// Revert check: drop the provider check, and the other provider's bundle seeds the room.
 #[test]

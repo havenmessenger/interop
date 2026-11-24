@@ -1298,7 +1298,7 @@ impl Provider {
         self.include_held_proposals(room_uri, &mut commit, now_unix)?;
         // A tracked room's clients and its list stay paired (`list_leaves.rs`), held proposals counted.
         if let Some(staged) = &tracked {
-            self.require_list_leaves_paired(room_uri, staged)?;
+            self.require_list_leaves_paired(room_uri, staged, &commit)?;
         }
         let seed = if needs_seed {
             let seed = self
@@ -1440,10 +1440,40 @@ impl Provider {
         &self,
         room_uri: &str,
         staged: &crate::room_tree::StagedRoomCommit,
+        commit: &DecodedCommit,
     ) -> Result<(), UpdateRefusal> {
-        let Some(view) = staged.list_and_leaves()? else {
-            return Ok(());
+        let rows = self
+            .store
+            .list_participant_rows(room_uri)
+            .map_err(|_| UpdateRefusal::Store)?;
+        let before = mimi_core::participant_list::ParticipantListData {
+            participants: rows
+                .iter()
+                .map(|row| mimi_core::participant_list::UserRolePair {
+                    user_uri: row.member_uri.clone(),
+                    role_index: row.role_index.unwrap_or(0),
+                })
+                .collect(),
         };
+        let after = mimi_core::participant_list::apply_updates(
+            &before,
+            &crate::hosted_untracked::list_updates(&commit.updates)?,
+        )
+        .map_err(|_| {
+            UpdateRefusal::Invalid("the participant list update does not apply to the room's list")
+        })?;
+        let view = staged.list_and_leaves(
+            before
+                .participants
+                .into_iter()
+                .map(|pair| (pair.user_uri, pair.role_index))
+                .collect(),
+            after
+                .participants
+                .into_iter()
+                .map(|pair| pair.user_uri)
+                .collect(),
+        )?;
         let policy = self
             .room_policy(room_uri)
             .map_err(|_| UpdateRefusal::Store)?;

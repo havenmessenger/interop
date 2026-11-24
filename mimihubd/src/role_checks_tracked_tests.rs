@@ -329,6 +329,32 @@ fn a_held_leave_is_authorized_for_the_leaver() {
     );
 }
 
+/// A member's Commit that removes another listed user's client, with no change to the list, is refused: only the user
+/// removes its own client from a list it stays on (room-policy-04 §8.1.2). Revert check: drop the hub's pairing check,
+/// and Alice's Remove of Bob's client is accepted.
+#[test]
+fn removing_another_listed_users_client_is_refused() {
+    let p = Provider::in_memory("hub.example").unwrap();
+    let mut room = tracked_room(&p, Some(&roles(true)));
+    let (commit, _, _) = room
+        .group
+        .remove_members(
+            &room.alice.provider,
+            &room.alice.signer,
+            &[LeafNodeIndex::new(1)],
+        )
+        .unwrap();
+    let refused = apply(&p, &commit.tls_serialize_detached().unwrap());
+    assert!(
+        matches!(
+            refused,
+            Err(UpdateRefusal::Invalid(why)) if why == crate::list_leaves::CLIENT_OF_ANOTHER
+        ),
+        "PLANT-HUB-OWN-CLIENT-E2E: another user's client was removed while the user stays listed: {refused:?}"
+    );
+    assert_eq!(role_of(&p, BOB), Some(MEMBER));
+}
+
 /// The operator's routes answer 409 for a tracked room: its policy and list are its group's, changed by a Commit. An
 /// untracked room's are still the operator's to set. Revert check: drop the tracked check, and `addParticipant` lists
 /// Carol in the tracked room.

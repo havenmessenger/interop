@@ -86,12 +86,17 @@ pub struct StagedRoomCommit {
 impl StagedRoomCommit {
     /// The room's list and clients around this Commit, for [`crate::list_leaves::require_paired`]: the participant list
     /// before it (the group's GroupContext) and after it (the GroupContext as staged, its AppDataUpdates resolved), the
-    /// clients it adds and removes, held proposals included, and the user of each client after it. `None` for a room
-    /// whose group carries no participant list before or after the Commit.
+    /// clients it adds and removes, held proposals included, and the user of each client after it. A group that carries
+    /// no participant list in its GroupContext is read with the hub's own list, `hub_before` and `hub_after` (its
+    /// participants before the Commit and after its change).
     ///
     /// An external Commit that removes a client of its joiner's own user (a resync, RFC 9420 §12.4.3.2) replaces that
     /// client with the joiner, so that client is not counted as removed by another member.
-    pub(crate) fn list_and_leaves(&self) -> Result<Option<ListAndLeaves>, UpdateRefusal> {
+    pub(crate) fn list_and_leaves(
+        &self,
+        hub_before: Vec<(String, u32)>,
+        hub_after: Vec<String>,
+    ) -> Result<ListAndLeaves, UpdateRefusal> {
         let decode = |bytes: Option<&[u8]>| {
             bytes
                 .map(decode_participant_list_data)
@@ -106,9 +111,6 @@ impl StagedRoomCommit {
             self.staged.group_context(),
             PARTICIPANT_LIST_COMPONENT,
         ))?;
-        if before.is_none() && after.is_none() {
-            return Ok(None);
-        }
         let mut removed_at = Vec::new();
         let mut removed = Vec::new();
         for queued in self.staged.queued_proposals() {
@@ -162,13 +164,19 @@ impl StagedRoomCommit {
             })
             .unwrap_or_default()
         };
-        Ok(Some(ListAndLeaves {
-            before: users(before),
-            after: users(after).into_iter().map(|(user, _)| user).collect(),
+        Ok(ListAndLeaves {
+            before: match before {
+                Some(_) => users(before),
+                None => hub_before,
+            },
+            after: match after {
+                Some(_) => users(after).into_iter().map(|(user, _)| user).collect(),
+                None => hub_after,
+            },
             added,
             removed,
             leaves_after,
-        }))
+        })
     }
 }
 

@@ -60,7 +60,7 @@ fn is_policy_change(change: &DecodedCustomProposal) -> bool {
 }
 
 /// The participant-list updates among `changes`, users in one form.
-fn list_updates(
+pub(crate) fn list_updates(
     changes: &[DecodedCustomProposal],
 ) -> Result<Vec<mimi_core::participant_list::ParticipantListUpdate>, UpdateRefusal> {
     changes
