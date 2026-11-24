@@ -1,13 +1,13 @@
 # Divergences from the drafts
 
-`mimi-hubd`'s v1 implements a subset of `draft-ietf-mimi-protocol`, `draft-ietf-mimi-content`,
+`mimihubd`'s v1 implements a subset of `draft-ietf-mimi-protocol`, `draft-ietf-mimi-content`,
 and `draft-ietf-mimi-room-policy`. The authoritative source is the hub's own `directory`
-endpoint `unsupported` block (`mimi-hubd/src/lib.rs`); this file explains the reasoning.
+endpoint `unsupported` block (`mimihubd/src/lib.rs`); this file explains the reasoning.
 
 This file lists only what is not built yet, and the points where the drafts are open and this hub
 takes a reading the working group may settle otherwise. What a deployment chooses (which
 ciphersuites it accepts, who `identifierQuery` finds) is a setting, described in
-`mimi-hubd/README.md`, not a divergence. DIV-1, DIV-3 and DIV-4 are parts not built yet. DIV-5
+`mimihubd/README.md`, not a divergence. DIV-1, DIV-3 and DIV-4 are parts not built yet. DIV-5
 through DIV-15 are gaps in what v1 attempts: endpoints or fields the code accepts
 and processes without yet enforcing everything the draft requires, or behaviour that differs
 from the draft on a point where the draft is silent or the pinned MLS library falls short. A
@@ -17,7 +17,7 @@ points until they close.
 ## DIV-1 - GroupInfo and external-commit join: built for rooms whose tree the hub keeps
 
 A client can join a room by external Commit (protocol-07 §5.6), as the drafts describe and as mimid does it
-(`mimi-hubd/src/external_join.rs`, `group_info_endpoint.rs`):
+(`mimihubd/src/external_join.rs`, `group_info_endpoint.rs`):
 
 - **Whether the room allows it**: its `mls_operational_policy` component's `external_commit_allowed` (DIV-18). A room
   with no such component follows MLS, where an external join is possible; a deployment can refuse those rooms instead
@@ -51,7 +51,7 @@ A client can join a room by external Commit (protocol-07 §5.6), as the drafts d
 
 The accept-gates refuse a KeyPackage, Welcome or GroupInfo in a ciphersuite outside the accepted
 list before the bytes reach openmls. The list is the deployment's (`mls_ciphersuites` in the
-policy file, `mimi-hubd/README.md`); by default it is every suite the crypto provider implements,
+policy file, `mimihubd/README.md`); by default it is every suite the crypto provider implements,
 and the directory lists the same suites.
 
 ## DIV-3 - Assets and OHTTP transport
@@ -61,7 +61,7 @@ asset transfer, no OHTTP relay path (`§5.10`).
 
 ## DIV-4 - `identifierQuery` answers a single Handle or Nick query only: other identifier types not built yet
 
-Who a query can find is the deployment's setting (`identifier_discovery`, `mimi-hubd/README.md`). On the TLS-PL wire
+Who a query can find is the deployment's setting (`identifier_discovery`, `mimihubd/README.md`). On the TLS-PL wire
 lane the answer is an `IdentifierResponse`, as §5.8 has it, always HTTP 200 (notFound means the request was acceptable
 and nothing matched, so the code in the body says the outcome): a user the hub answers for is `success` with the
 user's URI on this provider; every other answer is the same `notFound` body, byte for byte, whether the user is
@@ -87,7 +87,7 @@ handle, or a name that does not decode to UTF-8 is not-found.
 
 ## DIV-5 - fan-out to other providers, and what is not delivered yet
 
-For a room it hosts, the hub fans out what it accepts (protocol-07 §5.5; `mimi-hubd/src/fanout.rs`): each local
+For a room it hosts, the hub fans out what it accepts (protocol-07 §5.5; `mimihubd/src/fanout.rs`): each local
 participant gets the message in its queue, and each other provider with a participant gets one FanoutMessage in the
 outbox, which a worker posts to that provider's `notify`.
 
@@ -114,14 +114,14 @@ outbound client refuses (a peer whose name resolves into a refused range, or a d
 retried like any failure, so that room's queue to that provider does not move until the operator changes the
 configuration or drops the queue; its last outcome is the refusal's reason. A provider's endpoints come from its
 directory at `https://<domain>/.well-known/mimi-protocol-directory`, or under the base the operator's `MIMI_PEERS`
-gives it. Every request goes through the hub's one outbound client (`mimi-hubd/src/outbound.rs`; SECURITY-INVARIANTS
+gives it. Every request goes through the hub's one outbound client (`mimihubd/src/outbound.rs`; SECURITY-INVARIANTS
 says what it refuses). Two of its rules are this hub's, not the draft's. A URL it sends to must name the peer's own
 domain or a subdomain of it as its host, so a directory that points an endpoint at another host is refused, where
 protocol-07 §5.1 takes a directory's URLs as given. And the peer's server certificate is checked for the host
 connected to, by the same `dNSName` test DIV-16 applies inbound; for an endpoint on a subdomain that is the subdomain,
 not the provider domain §4.1 names.
 
-**keyMaterial for a user of another provider** (`mimi-hubd/src/key_material_proxy.rs`), chosen by the request's
+**keyMaterial for a user of another provider** (`mimihubd/src/key_material_proxy.rs`), chosen by the request's
 `targetUser`: the hub forwards it only for a room it hosts and only from a participant whose role may add
 participants (`canAddParticipant`; any participant of a room with no roles), as mimid does. Any other such request is
 answered `noConsent`, which is what §5.2 has for a refusal, and nothing is forwarded. The request goes as received to
@@ -130,7 +130,7 @@ the target provider's directory `keyMaterial` URL; a `200` answer must decode as
 routed there. The answer is returned as received. A peer that fails or answers anything else is `502`. The hub does not
 check the request's signature before forwarding: the target provider does (DIV-6).
 
-**A room on another hub**, as this provider's users see it (`mimi-hubd/src/follower.rs`): a Welcome its hub sends is
+**A room on another hub**, as this provider's users see it (`mimihubd/src/follower.rs`): a Welcome its hub sends is
 queued for each user here whose published KeyPackage it names and makes that user a member of the room here; what
 the hub sends after that (Commits, proposals, application messages) is queued, as its MLSMessage without the
 FanoutMessage's tail, for every member here, in arrival order. A message for a room with no member here is refused
@@ -655,7 +655,7 @@ answers 201; it delivers nothing.
   participants. They are not MIMI routes, and no peer reaches them: they are served only on a listener bound to a
   loopback address (`MIMI_ADMIN_BIND_ADDR`; the hub does not start with any other address), with no client
   certificate, so the caller is whoever can reach that address on the hub's host, the same person who can run
-  `mimi-hubd enroll` or open the hub's store. Unset, there is no such listener. That listener is safe without a
+  `mimihubd enroll` or open the hub's store. Unset, there is no such listener. That listener is safe without a
   credential only while nothing a peer sends can make the hub connect to it: every request the hub sends is https and
   goes only to an address its outbound client checked, which refuses loopback unless the operator allowlists it, and
   this plain-HTTP listener does not answer TLS.
@@ -700,7 +700,7 @@ DIV-10, DIV-13, DIV-15, and DIV-16 still do, for the endpoints they touch, until
 ## DIV-19 - the client lane is a local extension
 
 MIMI specifies provider-to-provider traffic and leaves how a provider's own clients reach it to the provider. This hub
-serves one such path, the client lane (`mimi-hubd/README.md`, "The client lane"), on its own listener, for a provider
+serves one such path, the client lane (`mimihubd/README.md`, "The client lane"), on its own listener, for a provider
 whose client-facing service authenticates its users and signs each request for one of them. Nothing on it is a MIMI
 route or changes one: rooms, Commits, proposals and application messages it carries go through the same checks as on
 the provider path, with the user as the requester. A peer cannot reach it, and the operator's routes stay on their own

@@ -1814,7 +1814,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mimi-hubd"
+name = "mimihubd"
 version = "0.1.0"
 dependencies = [
  "anyhow",

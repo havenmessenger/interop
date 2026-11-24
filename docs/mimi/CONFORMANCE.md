@@ -1,9 +1,9 @@
-# Conformance of interop (mimi-core and mimi-hubd)
+# Conformance of interop (mimi-core and mimihubd)
 
 Per section of the drafts below, what this repository implements and what it does not build yet. Hand-maintained from
 the code; a row that says "not built yet" names the entry in [`DIVERGENCES.md`](../../DIVERGENCES.md) that explains it.
 A deployment's own choices (which ciphersuites it accepts, who `identifierQuery` finds) are settings, described in
-[`mimi-hubd/README.md`](../../mimi-hubd/README.md), not rows here.
+[`mimihubd/README.md`](../../mimihubd/README.md), not rows here.
 
 **Status words.** *Implemented*: the code does it, with tests. *Partly*: the code does part of it; the row says which
 part. *Not built yet*: the code does not do it. *Client*: the requirement falls on a client; the library supplies the
@@ -23,7 +23,7 @@ mechanism and a client calls it.
 
 | ID | § | Requirement | Status | Where |
 |---|---|---|---|---|
-| T1 | 4.1 | Inter-provider requests over HTTPS | Implemented | `mimi-hubd/src/tls.rs`: the peer listener serves TLS only |
+| T1 | 4.1 | Inter-provider requests over HTTPS | Implemented | `mimihubd/src/tls.rs`: the peer listener serves TLS only |
 | T2 | 4.1 | Target provider in `Host` | Partly | Not compared with this hub's domain (DIV-16) |
 | T3 | 4.1 | Source provider in `From` | Partly | Checked against the certificate when present, not required (DIV-16) |
 | T4 | 4.1 | Mutually authenticated TLS | Implemented | Client certificate from the CA bundle, or a DNS-key request signature (`provider_auth.rs`); any CA may name any provider (DIV-16) |
@@ -103,7 +103,7 @@ mechanism and a client calls it.
 | W7 | 5.1 | The directory names the wire endpoints | Implemented | `Provider::directory` |
 | W8 | 2 | TLS presentation language as the wire encoding | Implemented | The `/mimi/pl/*` routes |
 | W10 | 7.5 | Participant-list indices are positions; added users appended | Implemented | `src/participant_list.rs` |
-| W12 | 5.7, 10.6 | Consent answered 202 (422 for an operation the route does not take); wire bodies labelled `application/mimi-protocol` | Implemented | `mimi-hubd/src/http.rs` |
+| W12 | 5.7, 10.6 | Consent answered 202 (422 for an operation the route does not take); wire bodies labelled `application/mimi-protocol` | Implemented | `mimihubd/src/http.rs` |
 
 ## Content (content-10)
 

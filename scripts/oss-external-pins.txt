@@ -10,5 +10,5 @@ f3040aaac59b8c72a9d4e0b7970eefcde9c1dd11
 # openmls/openmls commit the cross-check ran at before.
 28369d5b48608bef4ddf8371d91503b0f3852bb3
 
-# openmls/openmls commit the cross-check now runs at (also mimi-core's and mimi-hubd's pin).
+# openmls/openmls commit the cross-check now runs at (also mimi-core's and mimihubd's pin).
 ba267737b9511e538a77a41f4480fbed28ff4e83

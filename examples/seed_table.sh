@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Seeds a mimi-hubd with the state a visiting implementation needs to test against it, through the hub's own
+# Seeds a mimihubd with the state a visiting implementation needs to test against it, through the hub's own
 # routes, and checks the result on the wire lane.
 #
 #   HUB=https://mimi.example.com:8443 ADMIN=http://127.0.0.1:8445 CERT=client-cert.pem KEY=client-key.pem \
@@ -22,7 +22,7 @@
 #
 # The room is set up through the hub operator's listener ($ADMIN), which serves only on a loopback address of the hub's
 # host, so `seed` runs there (or through a tunnel to it). One thing no route does: enroll a handle for identifierQuery.
-# That is `mimi-hubd enroll <handle>`, also run on the hub's host. `check` says whether $HANDLE is enrolled.
+# That is `mimihubd enroll <handle>`, also run on the hub's host. `check` says whether $HANDLE is enrolled.
 #
 # Environment:
 #   HUB           the hub's mTLS listener, scheme and port included (required)
@@ -189,7 +189,7 @@ check() {
         echo "handle: '$HANDLE' is enrolled"
     else
         echo "handle: '$HANDLE' is NOT enrolled (the hub answered $status). No route enrolls one: on the hub's host,"
-        echo "        run: mimi-hubd enroll $HANDLE"
+        echo "        run: mimihubd enroll $HANDLE"
         failed=1
     fi
     return "$failed"

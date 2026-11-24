@@ -1,4 +1,4 @@
-# CI for interop (mimi-core and mimi-hubd). Enforces formatting, lints, tests, dependency audit, and
+# CI for interop (mimi-core and mimihubd). Enforces formatting, lints, tests, dependency audit, and
 # the standalone-source-of-truth guards below (guard 1: every dependency resolves from
 # crates.io; guard 3: no leaf-library reach-up into app-binding types).
 #

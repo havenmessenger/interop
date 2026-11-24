@@ -5,7 +5,7 @@
 independent implementations of the `-01` mechanism.
 
 - Implementation A: this repository, `src/virtual_clients.rs`.
-- Implementation B: `openmls/openmls`, commit `ba267737b9511e538a77a41f4480fbed28ff4e83`, the commit `mimi-core` and `mimi-hubd`
+- Implementation B: `openmls/openmls`, commit `ba267737b9511e538a77a41f4480fbed28ff4e83`, the commit `mimi-core` and `mimihubd`
   build on. The vectors were first produced against commit `f3040aaac59b8c72a9d4e0b7970eefcde9c1dd11`
   (2026-07-07, unreleased; 0.8.1 predates the `virtual-clients-draft` feature); both the live PRP check and
   the extraction below give identical output at either commit.

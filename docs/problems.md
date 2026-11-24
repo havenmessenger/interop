@@ -1,10 +1,10 @@
 # Problem types
 
-mimi-hubd answers some refusals with an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem body
+mimihubd answers some refusals with an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem body
 (`Content-Type: application/problem+json`). Each problem type below is named by its URI: this page, with the type as
 its anchor. A problem body names the condition only. It never names a user, a client or a room.
 
-Every refusal mimi-hubd answers with an HTTP error status (4xx or 5xx) carries one, on each of its listeners. Answers
+Every refusal mimihubd answers with an HTTP error status (4xx or 5xx) carries one, on each of its listeners. Answers
 that are a protocol structure in a 2xx (`update`'s `notAllowed`, `groupInfo`'s `notAuthorized`, `keyMaterial`'s
 `noConsent`) are not HTTP errors and keep their protocol form. As mimi-protocol PR #211 asks, a client acts on the
 `type` and shows neither `title` nor `detail` to a user.
@@ -250,5 +250,5 @@ Two answers stay 201:
 - a `notify` that carries a Welcome: the Welcome is queued for its client;
 - a duplicate of a `notify` already received from the same hub, as §5.5 requires.
 
-mimi-hubd answers this from the release after 0.0.2. Before it, such a `notify` is answered 201 and the message is not
+mimihubd answers this from the release after 0.0.2. Before it, such a `notify` is answered 201 and the message is not
 delivered (see DIV-5 in [DIVERGENCES.md](../DIVERGENCES.md)).

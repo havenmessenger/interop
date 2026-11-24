@@ -12,7 +12,7 @@ protocol surface you build against.
 
 ## Status
 Early. Haven's hub is running at https://mimi.havenmessenger.com, and no other provider has
-connected to it yet. One independent implementation has run against a local `mimi-hubd`; its
+connected to it yet. One independent implementation has run against a local `mimihubd`; its
 results are in [issue #1](https://github.com/havenmessenger/interop/issues/1). To test against
 the hub, open an issue, or reach us through the contact in [`SECURITY.md`](../SECURITY.md) /
 Haven's site.

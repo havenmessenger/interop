@@ -608,7 +608,7 @@ pub fn decode_participant_list_update(
     // type carries a nested `VLBytes` field the blanket impl would otherwise decode against the
     // untruncated remainder); `changed`/`removed` route through the same helper for uniformity
     // even though their fixed-size element types are not independently exposed to it. Not live
-    // from mimi-hubd's own HTTP handlers today (confirmed by grep), but public API any consumer
+    // from mimihubd's own HTTP handlers today (confirmed by grep), but public API any consumer
     // decodes a `ParticipantListUpdate` with.
     let (bounded, rest) =
         bounded_run_input(bytes, "changed", MAX_RUN_AGGREGATE_BYTES).map_err(|e| {

@@ -1,4 +1,4 @@
-# Security properties of mimi-hubd
+# Security properties of mimihubd
 
 What the reference hub guarantees, and where the code holds each one. What it does not do yet is in
 [`DIVERGENCES.md`](DIVERGENCES.md); how to report a problem is in [`SECURITY.md`](SECURITY.md).
@@ -6,12 +6,12 @@ What the reference hub guarantees, and where the code holds each one. What it do
 ## It relays ciphertext and holds no key that opens an application message
 
 Application messages reach the hub as MLS `PrivateMessage`s and leave it unchanged: the store keeps them as opaque bytes
-under a routing key (`mimi-hubd/src/store.rs`, the `messages` and `welcomes` tables) and bounds only their size and
+under a routing key (`mimihubd/src/store.rs`, the `messages` and `welcomes` tables) and bounds only their size and
 number. The hub is not a member of any group and holds no group secret. The only MLS content it reads is what MLS sends in
 the clear for a delivery service: a Commit's proposals in a `PublicMessage` (participant-list and room-policy changes,
 `src/commit_wire.rs`) and the outer fields of a handshake message. A Commit wrapped in a `PrivateMessage` is refused. For
 a room whose ratchet tree it keeps, the hub holds that room's public group state (the tree and GroupContext, as
-openmls's `PublicGroup`; `mimi-hubd/src/room_tree.rs`, `group_store.rs`): public keys and hashes, no epoch secret.
+openmls's `PublicGroup`; `mimihubd/src/room_tree.rs`, `group_store.rs`): public keys and hashes, no epoch secret.
 
 ## A tracked room's Commits are verified against its tree
 
@@ -22,14 +22,14 @@ provider; the hub never drops a room's checks because a Commit failed them. Only
 (`untrackRoom`, loopback only).
 
 Each participant-list change to a tracked room is authorized for the member who proposed it, by the role the room's
-list gives that member and the room's policy (`mimi-hubd/src/role_checks.rs`, room-policy-04 §8.1); a change it does
+list gives that member and the room's policy (`mimihubd/src/role_checks.rs`, room-policy-04 §8.1); a change it does
 not authorize is refused and changes nothing. The policy and list are the group's from its GroupContext, so the
 operator's routes cannot change them for a tracked room. What is not checked yet is in DIV-15.
 
 ## Its requests to other hubs go only where they are meant to
 
 The hub reads the keys of peers that sign requests from a file a job on the host keeps current (`MIMI_PEER_KEYS`), and
-has one outbound client (`mimi-hubd/src/outbound.rs`); the outbox worker (`outbox.rs`) and the directory lookup
+has one outbound client (`mimihubd/src/outbound.rs`); the outbox worker (`outbox.rs`) and the directory lookup
 (`peer_directory.rs`) send through it, and nothing else reaches another provider. (The one other connection the hub can
 open is to the operator's own OpenTelemetry collector, below.) Every request that
 client makes is `https` to a host that is the peer's domain or a subdomain of it, endpoint URLs from a peer's directory
@@ -54,7 +54,7 @@ collector that is slow or down drops records and never slows or fails a request.
 ## Every peer request is from an authenticated provider
 
 The peer listener requires a client certificate from the configured CA bundle, or a request signed with a key the
-provider publishes in DNS (`mimi-hubd/src/provider_auth.rs`, `signature.rs`: a signature older than 300 s or more than
+provider publishes in DNS (`mimihubd/src/provider_auth.rs`, `signature.rs`: a signature older than 300 s or more than
 60 s ahead is refused). Only the directory document is served without either. Every other request names its provider
 in `From`, and the proof must authenticate that domain. A signature's nonce is remembered for its window, and a second
 use by the same key is refused; the policy can require a nonce on keyMaterial (`require_nonce_on_key_material`).
@@ -66,7 +66,7 @@ A client can join a room by external Commit only where the hub keeps the room's 
 against it like any other; only when the user its new leaf names belongs to the provider whose proof came with the
 request (on the client lane: is the requesting user); only where the room's operational policy allows it (or, with no such policy, the hub's
 `external_commit_when_unset`); only for a joiner the room's roles admit (`canAddOwnClient` for a listed user's new
-client, `canOpenJoin` on role 0 for an unlisted one, `mimi-hubd/src/external_join.rs`); never while proposals are held
+client, `canOpenJoin` on role 0 for an unlisted one, `mimihubd/src/external_join.rs`); never while proposals are held
 for the epoch; and changing nothing but the joiner's own entry in the list. A GroupInfo is kept and served
 (`group_info_endpoint.rs`) only for such a room, encrypted to the requester's key and signed with the hub's own MLS key
 (`MIMI_HUB_MLS_KEY`), which signs nothing else. A change to the room's operational policy needs
@@ -78,7 +78,7 @@ for the epoch; and changing nothing but the joiner's own entry in the list. A Gr
 The client lane (`MIMI_LANE_BIND_ADDR`, off when unset) is a listener of its own; a peer request is not served there,
 nor a lane request on the peer listener. A lane request verifies only with a key in `MIMI_LANE_KEYS`, under the tag
 `mimi-client-lane` and nothing else, with a new nonce, at most 30 s old, signed after the process started
-(`mimi-hubd/src/client_lane.rs`); its `mimi-client-user` must be a user URI on this hub's domain. Every route acts for
+(`mimihubd/src/client_lane.rs`); its `mimi-client-user` must be a user URI on this hub's domain. Every route acts for
 that user and takes no user from the body (`client_http.rs`). In a room change the user speaks only for themself
 (`requester.rs`): a leave removes only them, an external Commit joins only them, a GroupInfo that seeds a room's tree
 is signed by them. A peer never speaks for a user of this hub, whatever domains its proof names: a leave removing one,
@@ -89,7 +89,7 @@ bounded number of requests a minute.
 
 `roomPolicy`, `memberRole` and `addParticipant` change a room's policy, roles and participants. They are not served to
 peers: only on the listener `MIMI_ADMIN_BIND_ADDR` names, and the hub does not start if that address is not 127.0.0.0/8
-or `::1` (`mimi-hubd/src/admin.rs`). Unset, there is no such listener.
+or `::1` (`mimihubd/src/admin.rs`). Unset, there is no such listener.
 
 ## It accepts only the ciphersuites its policy names
 
@@ -109,8 +109,8 @@ decoder that can panic on malformed input runs behind `catch_unwind` so a bad ob
 Per recipient, 32 pending Welcomes and 256 pending messages, each at most 64 KiB, for 24 hours. Per user, the newest 64
 KeyPackages, each kept 30 days. At most 1024 rooms, 256 participants a room, 65,536 consent records and 65,536 abuse
 reports. Proposals held for a member's leave: 4 KiB each, 64 KiB and one more than the room's participants a room, for 15
-minutes. A routing key is at most 256 bytes and a URI at most 512. The constants are in `mimi-hubd/src/store.rs` and
-`mimi-hubd/src/lib.rs`.
+minutes. A routing key is at most 256 bytes and a URI at most 512. The constants are in `mimihubd/src/store.rs` and
+`mimihubd/src/lib.rs`.
 
 ## `identifierQuery` says found or not found, and nothing else
 

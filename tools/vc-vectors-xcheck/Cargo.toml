@@ -8,7 +8,7 @@ description = "Cross-implementation vector generator for draft-ietf-mls-virtual-
 
 [dependencies]
 mimi-core = { path = "../.." }
-# openmls at the commit docs/vc-01-vector-report.md cites, the one mimi-core and mimi-hubd use, with its
+# openmls at the commit docs/vc-01-vector-report.md cites, the one mimi-core and mimihubd use, with its
 # virtual-clients-draft feature.
 openmls_rust_crypto = { git = "https://github.com/openmls/openmls", rev = "ba267737b9511e538a77a41f4480fbed28ff4e83", features = ["virtual-clients-draft"] }
 openmls_traits = { git = "https://github.com/openmls/openmls", rev = "ba267737b9511e538a77a41f4480fbed28ff4e83", features = ["virtual-clients-draft"] }

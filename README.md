@@ -25,10 +25,10 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
   peers, DIV-17), and room-policy-04, over MLS (RFC 9420) via openmls. `update` reads three of
   room-policy-04's components and refuses the other ten (DIV-15, DIV-18); a client can join a room by external
   Commit where the room allows it (DIV-1).
-- **A runnable, installable hub.** `mimi-hubd` is an mTLS daemon you can stand up from its
+- **A runnable, installable hub.** `mimihubd` is an mTLS daemon you can stand up from its
   quickstart and point an implementation at; its README shows the output of the commands
   it lists. It also installs like a normal system service - a systemd unit, a `.deb`, prebuilt
-  Linux binaries, and a Docker image are all built from the same source (see mimi-hubd/README.md's
+  Linux binaries, and a Docker image are all built from the same source (see mimihubd/README.md's
   "Installing as a service").
 - **Conformance receipts.** The tests include hand-computed byte KATs and
   the official IETF mimi-content test vectors. Cross-implementation vectors against
@@ -47,7 +47,7 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 - [mimi.havenmessenger.com](https://mimi.havenmessenger.com) - Haven's running hub, built from
   this repository. The directory is public; the protocol endpoints need a client certificate. No
   other provider has connected to it yet. To test against it, open an issue.
-- [`mimi-hubd/README.md`](mimi-hubd/README.md) - quickstart for the reference hub daemon: mTLS
+- [`mimihubd/README.md`](mimihubd/README.md) - quickstart for the reference hub daemon: mTLS
   server, a live directory endpoint, and both the JSON and TLS-PL wire lanes.
 - [`docs/vc-01-vector-report.md`](docs/vc-01-vector-report.md) - a cross-implementation test
   against openmls-main, including the small-space PRP (§5.6.1) divergence found and how it was
@@ -65,7 +65,7 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 - Anyone can check that what Haven ships matches the drafts as written.
 
 ## What lives here (and what does not)
-**Here (open):** the interop library + `mimi-hubd` reference hub you can stand up yourself.
+**Here (open):** the interop library + `mimihubd` reference hub you can stand up yourself.
 **Not here:** the production service that operates this protocol is out of scope
 for this repository. (The relays/servers are untrusted by design; the cryptographic endpoint is
 the client.)

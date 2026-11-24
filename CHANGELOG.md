@@ -6,43 +6,46 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
-- `mimi-hubd`: `MIMI_OUTBOUND_PROXY` takes credentials, `http://user:secret@host:port`, for a `CONNECT` proxy that
+- The hub daemon is renamed from `mimi-hubd` to `mimihubd`: the crate and binary, the Debian package with its
+  systemd unit, user and paths (`/etc/mimihubd`, `/var/lib/mimihubd`), the release assets and the container image
+  (`ghcr.io/havenmessenger/mimihubd`).
+- `mimihubd`: `MIMI_OUTBOUND_PROXY` takes credentials, `http://user:secret@host:port`, for a `CONNECT` proxy that
   requires them. They are sent as `Proxy-Authorization: Basic` on each `CONNECT`, and never appear in `Debug`, a
   configuration error or the startup line; an error about the setting no longer quotes its value.
-- `mimi-hubd`: through `MIMI_OUTBOUND_PROXY` the hub no longer resolves a peer's name. The `CONNECT` names the host and
+- `mimihubd`: through `MIMI_OUTBOUND_PROXY` the hub no longer resolves a peer's name. The `CONNECT` names the host and
   port, and the proxy resolves it and checks the addresses, so a hub with no resolver of its own can reach peers. The
   peer's certificate is still checked against the host. Without a proxy nothing changes.
-- `mimi-hubd`: a room's seed is stored all or nothing. Its group, tracking record, room policy, participant list,
+- `mimihubd`: a room's seed is stored all or nothing. Its group, tracking record, room policy, participant list,
   operational policy, room metadata and kept GroupInfo are written as one SQLite transaction, so a store failure partway
   no longer leaves a tracked room missing its policy or list. Store writes that must be atomic run inside a savepoint
   (`SqliteStore::atomically`), which nests: the participant list keeps its own all-or-nothing and now composes into
   the seed's.
-- `mimi-hubd`: a room's seed checks the `room_metadata` its GroupContext carries as an update's is checked: it must
+- `mimihubd`: a room's seed checks the `room_metadata` its GroupContext carries as an update's is checked: it must
   decode within bounds and name the room being seeded, and is then kept as the room's metadata, as the room's policy
   and participant list are. Before, an update's RoomMetaData naming another room was refused but a seed's was not read
   at all, and a seeded room had no metadata until an update set it. DIV-15 has the rule.
-- `mimi-hubd`: a Partial GroupInfo whose GroupInfo had the ratchet tree between two other extensions is rebuilt and
+- `mimihubd`: a Partial GroupInfo whose GroupInfo had the ratchet tree between two other extensions is rebuilt and
   checked. mls-rs with its GREASE feature signs `external_pub`, the tree, then a GREASE extension, and the hub tried
   the tree only at the two ends, so such a Commit was refused. The hub now tries every place in the list, the ends
   first, one at a time, up to 16 extensions (only the ends past that). `mimi-core`: `TreeAt::Before(index)` and
   `PartialGroupInfo::extension_count`. DIV-12 has the rule.
-- `mimi-hubd`: consent on the client lane (protocol-07 §8). A user grants or revokes a requesting user's access to
+- `mimihubd`: consent on the client lane (protocol-07 §8). A user grants or revokes a requesting user's access to
   their KeyPackages (`consent`), asks a user for theirs or cancels (`requestConsent`), lists the requests made of them
   (`consentRequests`) and the grants they hold (`consentReceived`), and opts out (`optOut`: their KeyPackages withdrawn
   and their consent cleared). A grant to a user of another provider is sent to it as `updateConsent`. Four policy
   settings cover what the draft leaves to the provider: `consent_provider_grants`, `consent_revoke_notifies`,
   `consent_kept_at_opt_out` (all off) and `consent_request_days` (30). DIV-19 has the rule.
-- `mimi-hubd`: a room hosted here that the hub keeps no ratchet tree for no longer takes changes the hub cannot
+- `mimihubd`: a room hosted here that the hub keeps no ratchet tree for no longer takes changes the hub cannot
   authorize. Its first Commit, and any participant-list or room-policy change to it, is taken only with a bundle
   carrying a Full GroupInfo and the full ratchet tree, which seed the tree; otherwise it is refused (`notAllowed`, saying
   what is needed). A seed such a Commit needs is checked before anything changes, and the Commit's changes are
   authorized for its committer, the GroupInfo's signer, which must be the member that sent it. Before, such a room
   applied every change with no check of who made it. The policy's new `untracked_rooms` setting keeps that behaviour
   as `"accept"`; the default is `"refuse"`. DIV-10 has the rule.
-- `mimi-hubd`: a room created by another provider's client could not be seeded: the group lists its creator from its
+- `mimihubd`: a room created by another provider's client could not be seeded: the group lists its creator from its
   creation, which no Commit carries, so the hub's list and the group's never matched and the Commit carrying the tree
   was refused. The list before a new room's first Commit is now its creator.
-- `mimi-hubd`: `keyMaterial` on the provider path is taken only from a peer whose proof authenticates the requester's
+- `mimihubd`: `keyMaterial` on the provider path is taken only from a peer whose proof authenticates the requester's
   provider, or the provider hosting the room the request names (the room's hub, protocol-07 §5.2); otherwise `403
   not-permitted`. Before, any peer could name any requester, and a request passed the consent gate for any requester
   ever granted. The path's user and the body's `targetUser` must now be the same user (`400 malformed-request`
@@ -53,7 +56,7 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 - `mimi-core`: `partial_group_info`, the `PartialGroupInfo` of draft-ietf-mls-ratchet-tree-options §4: read, written,
   split from a GroupInfo by its committer, and rebuilt into the GroupInfo it stands for from the GroupContext,
   confirmation tag, signer leaf and tree its receiver holds.
-- `mimi-hubd`: a tracked room's Commit with a Partial GroupInfo is checked as one with a Full GroupInfo is. The hub
+- `mimihubd`: a tracked room's Commit with a Partial GroupInfo is checked as one with a Full GroupInfo is. The hub
   rebuilds the GroupInfo from its group after the Commit (with the tree after it, when the Partial says the GroupInfo
   carries one) and refuses the Commit (`invalidProposal`) unless the committer signed it. Before, a Partial GroupInfo
   was taken unchecked. DIV-12 has where the rebuild departs from the draft's letter.
@@ -61,28 +64,28 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   by decoding the `PartialGroupInfo`; it no longer carries a `<V>` length prefix, and one that does not decode is
   refused. This changes the wire: a bundle written with the prefix does not decode. The `hb-03-partial-group-info`
   vector now carries the `PartialGroupInfo` of `hb-01`'s GroupInfo.
-- `mimi-hubd`: the client lane serves `keyMaterial` (a client's signed `KeyMaterialRequest`, checked to be the user's
+- `mimihubd`: the client lane serves `keyMaterial` (a client's signed `KeyMaterialRequest`, checked to be the user's
   own) and acts on rooms on another hub: `submitMessage`, `update` and `keyMaterial` for such a room are sent to the
   room's hub as this provider, as protocol-07 §3.4 and §5.2 have a member provider do. keyMaterial on the lane is
   limited per user and per user and target. On the provider path, a keyMaterial request whose `{targetUser}` is the URI
   of a user here (as this hub's own forwarding sends it) now finds the KeyPackages published for that user.
 - `mimi-core`: `KeyMaterialRequest::sign` and `signature_verifies`, for its §5.2 signature over
   `KeyMaterialRequestTBS`.
-- `mimi-hubd`: a last-resort KeyPackage (draft-ietf-mls-extensions §6.4, marked by its client) is handed out only when
+- `mimihubd`: a last-resort KeyPackage (draft-ietf-mls-extensions §6.4, marked by its client) is handed out only when
   no one-time KeyPackage is left, and by default once, then deleted like any other, as protocol-07 §5.2 has it ("Keying
   material provided from one response MUST NOT be provided in any other response"). `MIMI_LAST_RESORT_REUSE=true` keeps it to be handed out again, with its
   `KeyPackageRef` still routing every Welcome sent for it (DIV-23). A user has one, the newest replacing the one before,
   and the per-user cap never evicts it. The client lane's `keyPackageCount` says how many one-time KeyPackages are left
   and whether a last-resort one is.
-- `mimi-hubd`: on the provider path, one requester may make at most 5 `keyMaterial` requests an hour for one target
+- `mimihubd`: on the provider path, one requester may make at most 5 `keyMaterial` requests an hour for one target
   user, as on the client lane; past that the hub answers 429 with the new problem type `key-material-rate-limited`.
-- `mimi-hubd`: a user of this provider has one KeyPackage pool, whether published for or claimed by name or by URI;
+- `mimihubd`: a user of this provider has one KeyPackage pool, whether published for or claimed by name or by URI;
   a store that kept some under the URI joins them to the name when it opens.
-- `mimi-hubd`: `updateConsent` is recorded only from the provider of its target user and for a requester of this
+- `mimihubd`: `updateConsent` is recorded only from the provider of its target user and for a requester of this
   provider, and `requestConsent` only from the provider of its requester and for a target of this provider, as
   protocol-07 §5.7 has them. Before, any peer could send a grant naming one of this hub's users as the target, which
   the KeyPackage consent gate then honoured. Every answer is unchanged (201 / 202), so none says what was recorded.
-- `mimi-hubd`: a Commit that would seed a room's tree may not change what the hub holds for the room. Its GroupInfo's
+- `mimihubd`: a Commit that would seed a room's tree may not change what the hub holds for the room. Its GroupInfo's
   GroupContext must carry the room's policy (roles_list and base room policy), its operational policy, and its
   participant list as the hub's list after the Commit; otherwise it is refused and nothing changes. Before, a seed took
   the group's components as the room's state and cleared those the group lacked, so a lane room's creator could drop
@@ -91,7 +94,7 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   neutral lane profile's member role may now leave (its own change to 0, which RemoveSelf alone does not grant).
 - `browser-js` now builds the library for wasm32-unknown-unknown: it also turns on getrandom's `js` feature, which the
   virtual clients' reuse guard needs in a browser. CI checks that build.
-- openmls moves to its main branch as of 2026-11-18, the commit `Cargo.toml` pins. With `extensions-draft` (`mimi-hubd`), commit staging
+- openmls moves to its main branch as of 2026-11-18, the commit `Cargo.toml` pins. With `extensions-draft` (`mimihubd`), commit staging
   now enforces every AppDataUpdate list rule of draft-ietf-mls-extensions-10 §4.7: one Remove per component, no Remove
   together with an Update, and no Remove of a component with no data; Update, Remove and SelfRemove proposals are
   listed in ascending leaf order; and the component operation label is "MLS Component" (§4.1), which only
@@ -107,7 +110,7 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   (`notAllowed`, `notAuthorized`, `noConsent`, ...) and per MLS check a client in a room reports, each naming the
   specification and section it rests on with that section's sentence quoted, or saying the behaviour is this code's
   own and naming the divergence. The status page renders it and fails when a problem type has no row.
-- An example, `mimi-hubd/examples/probe_bodies.rs`, makes the bodies a peer probe sends to a live hub, fresh each run:
+- An example, `mimihubd/examples/probe_bodies.rs`, makes the bodies a peer probe sends to a live hub, fresh each run:
   a `SubmitMessageRequest` from a named sender, a KeyPackage for a named user, and the notify `FanoutMessage` carrying
   a Welcome that adds that KeyPackage's holder. Each is an openmls object encoded with the types the hub decodes.
 - A room takes every message its members may send, however many arrive within the delivery lifetime. An accepted
@@ -142,51 +145,51 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   `/mimi/v1/message`). A user of this provider, by bare name or by URI, takes KeyPackages from no peer, and what is
   queued for one is read by no peer. The operator's loopback listener gains `operator/keyMaterial`,
   `operator/welcome` and `operator/message` for this provider's users; `examples/seed_table.sh` publishes there.
-- mimi-hubd can export traces and metrics over OTLP/HTTP to an OpenTelemetry collector: per peer provider, how many
+- mimihubd can export traces and metrics over OTLP/HTTP to an OpenTelemetry collector: per peer provider, how many
   requests each way, with what status or failure and how long they took. Built with the `otlp` feature (off in a source
   build, on in the release binary and .deb) and on only when `MIMI_OTLP_ENDPOINT` names a collector, which must be
   `https` or loopback `http`. A record carries the route template, never a path value, user or room. Besides the
   outbound client, the exporter is the one connection the hub opens, and only to the operator's collector.
-- Every refusal mimi-hubd answers with an HTTP error status carries an RFC 9457 problem body
+- Every refusal mimihubd answers with an HTTP error status carries an RFC 9457 problem body
   (`application/problem+json`) on each of its listeners: a type named by its anchor in `docs/problems.md` for each
   condition a peer can act on, and `http-error` for any other status. Error bodies were empty or text written for a
   log; the text is gone from the answers, and no problem body names a user, a client or a room.
-- mimi-hubd keeps a room's ratchet tree once a Commit's bundle gives it one (a Full GroupInfo and a full ratchet tree),
+- mimihubd keeps a room's ratchet tree once a Commit's bundle gives it one (a Full GroupInfo and a full ratchet tree),
   after checking who sent it; a tracked room's Commits are verified against the tree with openmls and refused when they
   do not apply, and its held proposals are queued in the group. The hub records which provider seeded each room and
-  logs every Commit the tree refuses. The operator's listener gains `untrackRoom`. mimi-hubd depends on openmls with
+  logs every Commit the tree refuses. The operator's listener gains `untrackRoom`. mimihubd depends on openmls with
   `extensions-draft`.
-- For a tracked room, mimi-hubd authorizes each participant-list change for its proposer (room-policy-04 §8.1): the
+- For a tracked room, mimihubd authorizes each participant-list change for its proposer (room-policy-04 §8.1): the
   committer for a change carried by value, the leaving member for a held leave. One's own leave needs `canRemoveSelf`;
   any other change to one's own role is refused until `canChangeOwnRole` is built. A tracked room's policy and list are
   taken from its GroupContext when it is seeded, a Commit adding a first `roles_list` is refused (room-policy PR #52),
   and the operator's `roomPolicy`, `memberRole` and `addParticipant` answer 409 for it.
 - mimi-core: `Capability::RemoveSelf` (`canRemoveSelf`, `0x0006`) and `RoomPolicy::authorize_self_removal`.
-- mimi-hubd has an outbound client for requests to other providers: https only, to the peer's domain or
+- mimihubd has an outbound client for requests to other providers: https only, to the peer's domain or
   a subdomain; the hub's certificate as the client certificate; every resolved address checked against the special
   ranges before connecting, and the connection made to that address. New settings `MIMI_OUTBOUND_ALLOW`,
   `MIMI_OUTBOUND_PROXY` and `MIMI_PEER_TRUST`. `MIMI_SERVER_CERT` needs the `clientAuth` extended key usage for it.
-- mimi-hubd has an outbox for fan-out to other providers, delivered by a worker in order per room and provider, with
+- mimihubd has an outbox for fan-out to other providers, delivered by a worker in order per room and provider, with
   retries and no expiry, and a peer directory lookup (`MIMI_PEERS` for a peer's base). The operator's listener gains
   `outbox` and `dropOutbox`. `MIMI_CLIENT_CERT` / `MIMI_CLIENT_KEY` set the outbound client certificate apart from the
   server's.
-- mimi-hubd fans out what it accepts for a room it hosts to the other providers with a participant: Commits (to the
+- mimihubd fans out what it accepts for a room it hosts to the other providers with a participant: Commits (to the
   participants before and after), the Welcome in a Commit's bundle (by the provider recorded for its KeyPackageRef, else
   the added user's), held leave proposals with their `moreProposals`, and application messages. Local members now get
   a room's Commits and held proposals in their queue too. mimi-core's `FanoutMessage` gains a constructor per kind.
-- mimi-hubd forwards keyMaterial for another provider's user to that provider, for a room it hosts and from a
+- mimihubd forwards keyMaterial for another provider's user to that provider, for a room it hosts and from a
   participant who may add participants, and records each returned KeyPackage's provider for routing its Welcome.
   Any other such request is answered `noConsent`; a failing peer is `502`.
-- mimi-hubd delivers what another hub fans out for a room it hosts to this provider's members of that room: a Welcome
+- mimihubd delivers what another hub fans out for a room it hosts to this provider's members of that room: a Welcome
   makes the users it names members here, and the Commits, proposals and application messages that follow are queued
   for them, each message once. A message for a room with no member here is answered `404` with the new problem
   `no-local-member`; `remote-room-not-delivered` (422) is retired.
-- mimi-hubd signs every request it sends with the provider's DNS-published key when `MIMI_SIGNING_KEY` and
+- mimihubd signs every request it sends with the provider's DNS-published key when `MIMI_SIGNING_KEY` and
   `MIMI_SIGNING_SELECTOR` are set (RFC 9421, as draft-atwood-mimi-provider-auth §5 profiles it, with a nonce), and then
   presents a client certificate only when `MIMI_CLIENT_CERT` names one. Inbound, `From` is required on every peer
   request and must name a domain its proof authenticates; a signature's nonce is refused the second time within its
   window; the policy setting `require_nonce_on_key_material` refuses a signed keyMaterial request without one.
-- A client can join a room by external Commit where the room allows it (protocol-07 §5.6): mimi-hubd keeps each
+- A client can join a room by external Commit where the room allows it (protocol-07 §5.6): mimihubd keeps each
   tracked room's `mls_operational_policy` (mimi-core reads the whole component) and its last Full GroupInfo, serves
   `POST /groupInfo/{roomId}` (the answer encrypted to the requester and signed with the hub's own MLS key,
   `MIMI_HUB_MLS_KEY`), and accepts an external Commit from a joiner the room's roles admit (`canAddOwnClient`,
@@ -211,7 +214,7 @@ change in mimi-core below.
   `MLS_128_DHKEMX25519_AES128GCM_SHA256_ED25519` names 0x0001.
 
 ### The deployment's settings
-- mimi-hubd reads a policy file named by `MIMI_POLICY` (`policy`): `mls_ciphersuites` (default: every implemented suite;
+- mimihubd reads a policy file named by `MIMI_POLICY` (`policy`): `mls_ciphersuites` (default: every implemented suite;
   the directory advertises exactly the list) and `identifier_discovery` (default `all`: every user the hub can answer
   for, one it has enrolled or holds an unexpired KeyPackage for; `enrolled` keeps it to enrolled users). A named file
   that cannot be read or is not a valid policy stops the start; the hub logs the policy it runs. A deployment that
@@ -224,7 +227,7 @@ change in mimi-core below.
 ### Protocol
 - `notify` refuses an application message, a Commit or a proposal for a room hosted on another hub with 422 and the
   RFC 9457 problem `remote-room-not-delivered`, instead of answering 201 for a message it does not deliver. A Welcome
-  is still queued and answered 201. `docs/problems.md` names the problem types mimi-hubd answers with.
+  is still queued and answered 201. `docs/problems.md` names the problem types mimihubd answers with.
 - A Commit's participant-list change is checked against the room's policy: every role it puts a user in must be one
   the policy defines. A ban into role 1 is refused unless the room's role list defines role 1 (room-policy #51); a list
   that names role 1 without defining it is still valid. Who made a role change is not checked yet (DIV-15).
@@ -237,7 +240,7 @@ change in mimi-core below.
 - The directory's `unsupported` block no longer lists other ciphersuites, and says the GroupInfo join is not built yet.
 
 ### Operating the hub
-- Every answer from mimi-hubd carries `Server: mimi-hubd/<version>`.
+- Every answer from mimihubd carries `Server: mimihubd/<version>`.
 - Releases are signed: `SHA256SUMS` and a detached signature by the Haven Releases key on each release, signed tags,
   and the public key in `RELEASE-KEY.asc`. The README says how to verify one.
 
@@ -297,7 +300,7 @@ draft-atwood-mimi-provider-auth-00 (DNS-published keys).
 - The fingerprint of each client CA is printed at startup.
 
 ### Operating the hub
-- `mimi-hubd enroll` lets the operator enroll a handle for `identifierQuery` from the hub's host.
+- `mimihubd enroll` lets the operator enroll a handle for `identifierQuery` from the hub's host.
 - An optional listener serves the directory and nothing else; an optional activity line logs each peer request's
   method, route template and status.
 - The startup line names the version and the git commit it was built from.
@@ -319,5 +322,5 @@ any provider domain), DIV-17 (content-10 against content-09 peers). See DIVERGEN
 ## 0.0.1 - 2026-07-16
 
 First release: the mimi-core library (protocol-06 wire codecs, consent, participant lists, room policy, content
-codec) and the mimi-hubd reference hub over mutually authenticated TLS, with binaries, `.deb` packages and a container
+codec) and the mimihubd reference hub over mutually authenticated TLS, with binaries, `.deb` packages and a container
 image.

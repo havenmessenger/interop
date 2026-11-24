@@ -70,7 +70,7 @@ fn every_vector_is_decoded_or_refused_as_recorded() {
                 Ok(response) => (true, None, Some(response.encode().unwrap())),
                 Err(_) => (false, None, None),
             },
-            // An UpdateRequest is a HandshakeBundle; what the hub answers is replayed in mimi-hubd's own tests.
+            // An UpdateRequest is a HandshakeBundle; what the hub answers is replayed in mimihubd's own tests.
             "HandshakeBundle" | "UpdateRequest" => {
                 match HandshakeBundle::decode(&bytes, ONLY_AES) {
                     Ok(bundle) => (

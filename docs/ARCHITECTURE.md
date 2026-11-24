@@ -15,7 +15,7 @@ Native Rust, no UI, no platform bindings; a clean protocol library.
 
 ## Boundary (open vs. closed)
 **Open (here):** the protocol/interoperability library (`mimi-core`, the repo root) and a
-reference hub daemon (`mimi-hubd/`) that runs it.
+reference hub daemon (`mimihubd/`) that runs it.
 **Closed (by design):** Haven's own production deployment of a hub is closed by design, along
 with the rest of Haven's operational infrastructure. Across federation the Haven *client* is the
 cryptographic endpoint; hubs and relays carry ciphertext only and hold no decryption capability.
@@ -46,7 +46,7 @@ This crate tracks the relevant IETF drafts/RFCs. Known divergences from the draf
   openmls's own external-commit and external-proposal mechanisms are real and testable, for a
   full-fidelity consumer. A test, not an acceptance path; see `gate`'s join note and DIV-1.
 
-`mimi-hubd/` (the reference hub daemon) consumes these modules and adds the HTTP transport, mTLS
+`mimihubd/` (the reference hub daemon) consumes these modules and adds the HTTP transport, mTLS
 termination, and durable storage. All library modules are dependency-free of FRB and the app;
 each module's tests are self-contained.
 
@@ -65,8 +65,8 @@ throughout.
 
 ## Wire-format conformance
 
-`mimi-hubd`'s v1 started as a JSON-only compatibility lane. As of the routes in
-`mimi-hubd/src/http.rs`, the directory endpoint plus 14 `/mimi/v1/*` JSON routes are live, and 6 of
+`mimihubd`'s v1 started as a JSON-only compatibility lane. As of the routes in
+`mimihubd/src/http.rs`, the directory endpoint plus 14 `/mimi/v1/*` JSON routes are live, and 6 of
 them (`keyMaterial`, `submitMessage`, `notify`, `identifierQuery`, `requestConsent`,
 `updateConsent`) also have a `/mimi/pl/*` route speaking `draft-ietf-mimi-protocol`'s TLS
 presentation-language (TLS-PL) framing directly. Both lanes read and write the same underlying
