@@ -355,6 +355,56 @@ fn removing_another_listed_users_client_is_refused() {
     assert_eq!(role_of(&p, BOB), Some(MEMBER));
 }
 
+/// A client's new leaf must name its own user: Bob commits a self-update whose update-path leaf carries Carol's
+/// credential, signed with her key as a renamed leaf must be, and the hub refuses it with the room at its epoch.
+/// Revert check: stop collecting renewed leaves in `list_and_leaves`, and the renamed leaf is accepted.
+#[test]
+fn a_self_update_that_names_another_user_is_refused() {
+    use openmls_traits::OpenMlsProvider as _;
+    let p = Provider::in_memory("hub.example").unwrap();
+    let mut room = tracked_room(&p, Some(&roles(true)));
+    let carol = Member::new("mimi://example.com/u/carol");
+    let epoch = || {
+        let tracking = p.room_tracking(ROOM).unwrap().unwrap();
+        PublicGroup::load(&p.store.groups(), &GroupId::from_slice(&tracking.group_id))
+            .unwrap()
+            .unwrap()
+            .group_context()
+            .epoch()
+            .as_u64()
+    };
+    let before = epoch();
+    let (commit, _, _) = room
+        .bob_group
+        .commit_builder()
+        .force_self_update(true)
+        .load_psks(room.bob.provider.storage())
+        .unwrap()
+        .build_with_new_signer(
+            room.bob.provider.rand(),
+            room.bob.provider.crypto(),
+            &room.bob.signer,
+            NewSignerBundle {
+                signer: &carol.signer,
+                credential_with_key: carol.credential.clone(),
+            },
+            |_| true,
+        )
+        .unwrap()
+        .stage_commit(&room.bob.provider)
+        .unwrap()
+        .into_contents();
+    let refused = apply(&p, &commit.tls_serialize_detached().unwrap());
+    assert!(
+        matches!(
+            refused,
+            Err(UpdateRefusal::Invalid(why)) if why == crate::list_leaves::CLIENT_CHANGES_USER
+        ),
+        "PLANT-HUB-SAME-USER-E2E: a self-update naming another user was taken: {refused:?}"
+    );
+    assert_eq!(epoch(), before);
+}
+
 /// The operator's routes answer 409 for a tracked room: its policy and list are its group's, changed by a Commit. An
 /// untracked room's are still the operator's to set. Revert check: drop the tracked check, and `addParticipant` lists
 /// Carol in the tracked room.
