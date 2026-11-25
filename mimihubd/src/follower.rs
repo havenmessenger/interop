@@ -81,7 +81,8 @@ impl Provider {
             return Ok(FollowedDelivery::Duplicate);
         }
         if is_welcome {
-            let users = self.deliver_notified_welcome_to(&fanout.message_and_tail, now_unix)?;
+            let users =
+                self.deliver_notified_welcome_to(room_uri, &fanout.message_and_tail, now_unix)?;
             for user in &users {
                 self.store.add_followed_member(room_uri, user, now_unix)?;
             }

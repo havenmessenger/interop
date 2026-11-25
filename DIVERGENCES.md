@@ -709,6 +709,8 @@ route or changes one: rooms, Commits, proposals and application messages it carr
 the provider path, with the user as the requester. A peer cannot reach it, and the operator's routes stay on their own
 loopback listener.
 
+A Welcome the lane hands its user names the room it joins (`inboxFetch`'s `room`), as the hub queued it: the room it fanned the Welcome out for, or the room a hub's `notify` named. A Welcome alone does not say which room it is for, and protocol-07 leaves how a provider hands one to its own client open.
+
 For a room on another hub, the lane sends the user's message, update or keyMaterial request to that hub as this
 provider (protocol-07 §3.4, §5.2). The hosting hub judges it as it judges any peer's request, against the room it
 holds; it can tell that the request comes from a user of this provider, not which one. This hub vouches for that: a

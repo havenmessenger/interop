@@ -483,7 +483,8 @@ async fn ingest_welcome(
     }
     let queued = k.recipient.is_some();
     let r = match k.recipient {
-        Some(rcpt) => g.relay_welcome(&rcpt, &body, now_unix()),
+        // This compatibility route names no room, so the Welcome is queued without one.
+        Some(rcpt) => g.relay_welcome(&rcpt, None, &body, now_unix()),
         None => g.ingest_foreign_welcome(&body),
     };
     eprintln!(

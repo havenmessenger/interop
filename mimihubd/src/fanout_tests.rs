@@ -243,7 +243,11 @@ fn a_full_welcome_queue_does_not_stop_the_other_welcomed_user() {
         .add_members(&alice.provider, &alice.signer, &[daves, erins])
         .unwrap();
     let users = p
-        .deliver_notified_welcome_to(&welcome.tls_serialize_detached().unwrap(), 2)
+        .deliver_notified_welcome_to(
+            "mimi://other.example/r/room",
+            &welcome.tls_serialize_detached().unwrap(),
+            2,
+        )
         .unwrap();
     assert_eq!(
         users,
@@ -310,8 +314,12 @@ fn two_welcomes_on_one_last_resort_key_package_both_reach_the_user() {
             .add_members(&inviter.provider, &inviter.signer, &[last.clone()])
             .unwrap();
         delivered.push(
-            p.deliver_notified_welcome_to(&welcome.tls_serialize_detached().unwrap(), 3)
-                .unwrap(),
+            p.deliver_notified_welcome_to(
+                "mimi://other.example/r/room",
+                &welcome.tls_serialize_detached().unwrap(),
+                3,
+            )
+            .unwrap(),
         );
     }
     assert_eq!(

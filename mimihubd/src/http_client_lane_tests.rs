@@ -448,3 +448,45 @@ async fn a_published_last_resort_key_package_is_handed_out_last_and_kept() {
     .await;
     assert_eq!(count(&answer), (Some(0), Some(true)));
 }
+
+/// A Welcome item names the room the hub queued it for, so the user's client knows which room it joins; a Welcome
+/// queued with no room (the compatibility lane's relay) leaves the key out. Revert check: drop `room` from the item.
+#[tokio::test]
+async fn a_welcome_item_names_its_room() {
+    let lane = lane("inbox-room");
+    {
+        let p = lane.provider.lock().expect("lock");
+        p.store
+            .enqueue_room_welcome(
+                "bob",
+                Some("mimi://havenmessenger.com/r/lounge"),
+                b"welcome-1",
+                now_unix(),
+            )
+            .expect("queue");
+        p.store
+            .enqueue_welcome("bob", b"welcome-2", now_unix())
+            .expect("queue");
+    }
+    let (status, page) = call(
+        &lane.router,
+        signed(
+            &lane.key,
+            "inboxFetch",
+            BOB,
+            r#"{"after_welcome":0,"after_message":0,"limit":10}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let items = page["welcomes"].as_array().expect("items");
+    assert_eq!(items.len(), 2);
+    assert_eq!(
+        items[0]["room"], "mimi://havenmessenger.com/r/lounge",
+        "PLANT-WELCOME-ROOM-LANE: the Welcome item names no room"
+    );
+    assert!(
+        items[1].get("room").is_none(),
+        "a Welcome queued without a room has no room key"
+    );
+}

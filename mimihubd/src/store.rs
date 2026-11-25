@@ -168,7 +168,8 @@ CREATE TABLE IF NOT EXISTS welcomes (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     recipient TEXT NOT NULL,
     bytes     BLOB NOT NULL,
-    ts        INTEGER NOT NULL
+    ts        INTEGER NOT NULL,
+    room      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_welcome_rcpt ON welcomes(recipient, id);
 
@@ -297,6 +298,9 @@ pub struct QueuedItem {
     pub id: i64,
     pub bytes: Vec<u8>,
     pub received_at: i64,
+    /// For a Welcome, the room it joins when the hub knew it as it queued it (a room it hosts, or the room a hub's
+    /// notify named); a Welcome alone does not say. None for a message.
+    pub room: Option<String>,
 }
 
 pub const MAX_QUEUE_WELCOMES: i64 = 32; // pending welcomes per recipient
@@ -388,6 +392,12 @@ impl SqliteStore {
             "ALTER TABLE keypackages ADD COLUMN last_resort INTEGER NOT NULL DEFAULT 0",
             [],
         ) {
+            if !e.to_string().contains("duplicate column name") {
+                return Err(e.into());
+            }
+        }
+        // Migration: welcomes gained `room`, the room a Welcome joins. Rows queued before it name none.
+        if let Err(e) = conn.execute("ALTER TABLE welcomes ADD COLUMN room TEXT", []) {
             if !e.to_string().contains("duplicate column name") {
                 return Err(e.into());
             }
@@ -1091,11 +1101,12 @@ impl SqliteStore {
         cap: i64,
         now_unix: u64,
     ) -> anyhow::Result<()> {
-        self.enqueue_all(table, recipient, &[bytes], cap, now_unix)
+        self.enqueue_all(table, recipient, &[bytes], cap, now_unix, None)
     }
 
     /// Queue `items` for `recipient`, all or none: when the queue has no room for every one of them, or one is out of
-    /// bounds, nothing is queued and the refusal is a [`QueueRefused`]. Any other error is the store's own.
+    /// bounds, nothing is queued and the refusal is a [`QueueRefused`]. Any other error is the store's own. `room` is
+    /// written only to the welcomes table, the one that has the column.
     fn enqueue_all(
         &self,
         table: &str,
@@ -1103,7 +1114,12 @@ impl SqliteStore {
         items: &[&[u8]],
         cap: i64,
         now_unix: u64,
+        room: Option<&str>,
     ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            room.is_none() || table == "welcomes",
+            "only a Welcome names a room"
+        );
         let recipient = mimi_core::uri::canonical(recipient);
         let recipient = recipient.as_str();
         if recipient.is_empty() || recipient.len() > RECIPIENT_MAX_LEN {
@@ -1128,10 +1144,18 @@ impl SqliteStore {
             return Err(QueueRefused(format!("queue full for recipient (cap {cap})")).into());
         }
         for bytes in items {
-            tx.execute(
-                &format!("INSERT INTO {table} (recipient, bytes, ts) VALUES (?1, ?2, ?3)"),
-                params![recipient, bytes, now_unix as i64],
-            )?;
+            match room {
+                Some(room) => tx.execute(
+                    &format!(
+                        "INSERT INTO {table} (recipient, bytes, ts, room) VALUES (?1, ?2, ?3, ?4)"
+                    ),
+                    params![recipient, bytes, now_unix as i64, room],
+                )?,
+                None => tx.execute(
+                    &format!("INSERT INTO {table} (recipient, bytes, ts) VALUES (?1, ?2, ?3)"),
+                    params![recipient, bytes, now_unix as i64],
+                )?,
+            };
         }
         tx.commit()?;
         Ok(())
@@ -1171,8 +1195,13 @@ impl SqliteStore {
             .map(|r| mimi_core::uri::canonical(r))
             .collect();
         let mut out = Vec::new();
+        // Only the welcomes table has a room.
+        let room = match kind {
+            QueueKind::Welcomes => "room",
+            QueueKind::Messages => "NULL",
+        };
         let mut statement = self.conn.prepare(&format!(
-            "SELECT id, bytes, ts FROM {table} WHERE recipient IN (?1, ?2) AND id > ?3 ORDER BY id LIMIT ?4"
+            "SELECT id, bytes, ts, {room} FROM {table} WHERE recipient IN (?1, ?2) AND id > ?3 ORDER BY id LIMIT ?4"
         ))?;
         let first = names.first().map(String::as_str).unwrap_or("");
         let second = names.get(1).map(String::as_str).unwrap_or(first);
@@ -1188,6 +1217,7 @@ impl SqliteStore {
                     id: r.get(0)?,
                     bytes: r.get(1)?,
                     received_at: r.get(2)?,
+                    room: r.get(3)?,
                 })
             },
         )?;
@@ -1232,9 +1262,28 @@ impl SqliteStore {
         bytes: &[u8],
         now_unix: u64,
     ) -> anyhow::Result<()> {
-        let recipient = mimi_core::uri::canonical(recipient);
-        let recipient = recipient.as_str();
-        self.enqueue("welcomes", recipient, bytes, MAX_QUEUE_WELCOMES, now_unix)
+        self.enqueue_room_welcome(recipient, None, bytes, now_unix)
+    }
+
+    /// Queue a Welcome for `recipient`, naming the room it joins when the caller knows it: the room this hub fanned it
+    /// out for, or the room a hub's `notify` named. A Welcome alone does not say which room it is for, and the client
+    /// lane passes the room on to its user.
+    pub fn enqueue_room_welcome(
+        &self,
+        recipient: &str,
+        room: Option<&str>,
+        bytes: &[u8],
+        now_unix: u64,
+    ) -> anyhow::Result<()> {
+        let room = room.map(mimi_core::uri::canonical);
+        self.enqueue_all(
+            "welcomes",
+            recipient,
+            &[bytes],
+            MAX_QUEUE_WELCOMES,
+            now_unix,
+            room.as_deref(),
+        )
     }
     pub fn fetch_welcome(&self, recipient: &str) -> anyhow::Result<Option<Vec<u8>>> {
         let recipient = mimi_core::uri::canonical(recipient);
@@ -1260,6 +1309,7 @@ impl SqliteStore {
             messages,
             MAX_QUEUE_MESSAGES,
             now_unix,
+            None,
         )
     }
 

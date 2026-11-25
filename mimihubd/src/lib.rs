@@ -607,35 +607,40 @@ impl Provider {
         self.store.forget_kpref(kpref)
     }
 
-    /// Relay a Welcome to `recipient`. Suite-gated, THEN enqueued as opaque bytes (deliver-once).
+    /// Relay a Welcome to `recipient`, with the room it joins when the caller knows it. Suite-gated, THEN enqueued as
+    /// opaque bytes (deliver-once).
     pub fn relay_welcome(
         &self,
         recipient: &str,
+        room: Option<&str>,
         welcome_bytes: &[u8],
         now_unix: u64,
     ) -> anyhow::Result<()> {
         mimi_gate_welcome(welcome_bytes, self.accepted_suites())?; // K5, before it touches a queue
         self.store
-            .enqueue_welcome(recipient, welcome_bytes, now_unix)
+            .enqueue_room_welcome(recipient, room, welcome_bytes, now_unix)
     }
 
-    /// A Welcome that reached this provider in a `notify` (protocol-07 §5.5) from the hub of a room it does not host: it
-    /// is queued for each local user whose KeyPackage it names, found by the `KeyPackageRef` this provider recorded when
-    /// it published that KeyPackage. The recipient comes from this provider's own map, never from the peer. Returns how
-    /// many it queued; a notify that carries no Welcome, or names no KeyPackage of ours, queues nothing.
+    /// A Welcome that reached this provider in a `notify` (protocol-07 §5.5) from the hub of `room`, a room it does not
+    /// host: it is queued for each local user whose KeyPackage it names, found by the `KeyPackageRef` this provider
+    /// recorded when it published that KeyPackage, with the room the notify named. The recipient comes from this
+    /// provider's own map, never from the peer. Returns how many it queued; a notify that carries no Welcome, or names no
+    /// KeyPackage of ours, queues nothing.
     pub fn deliver_notified_welcome(
         &self,
+        room: &str,
         message_and_tail: &[u8],
         now_unix: u64,
     ) -> anyhow::Result<usize> {
         Ok(self
-            .deliver_notified_welcome_to(message_and_tail, now_unix)?
+            .deliver_notified_welcome_to(room, message_and_tail, now_unix)?
             .len())
     }
 
     /// As [`Self::deliver_notified_welcome`], returning the users it was queued for.
     pub fn deliver_notified_welcome_to(
         &self,
+        room: &str,
         message_and_tail: &[u8],
         now_unix: u64,
     ) -> anyhow::Result<Vec<String>> {
@@ -646,7 +651,7 @@ impl Provider {
         for kpref in members {
             if let Some(user) = self.store.client_for_kpref(&kpref)? {
                 // A user whose Welcome queue refuses it is skipped; the Welcome still reaches the others it names.
-                match self.relay_welcome(&user, &welcome, now_unix) {
+                match self.relay_welcome(&user, Some(room), &welcome, now_unix) {
                     Ok(()) => users.push(user),
                     Err(error) if error.downcast_ref::<store::QueueRefused>().is_some() => eprintln!(
                         "[mimihubd] welcome: skipped a local user, its queue refused the Welcome: {error}"
@@ -2109,6 +2114,10 @@ mod key_package_user_tests;
 #[cfg(test)]
 #[path = "hosted_untracked_tests.rs"]
 mod hosted_untracked_tests;
+
+#[cfg(test)]
+#[path = "welcome_room_tests.rs"]
+mod welcome_room_tests;
 
 #[cfg(test)]
 mod tests {

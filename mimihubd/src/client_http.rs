@@ -286,6 +286,9 @@ struct Item {
     seq: i64,
     bytes: String,
     received_at: i64,
+    /// For a Welcome, the room it joins, as the hub queued it (left out when the hub had none to give).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    room: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -321,6 +324,7 @@ async fn inbox_fetch(
                 seq: item.id,
                 bytes: STANDARD.encode(item.bytes),
                 received_at: item.received_at,
+                room: item.room,
             })
             .collect()
     };

@@ -163,7 +163,7 @@ impl Provider {
         for kpref in &refs {
             if let Some(user) = self.store.client_for_kpref(kpref)? {
                 // A local member whose Welcome queue refuses it is skipped; the others still get theirs.
-                match self.relay_welcome(&user, &welcome, now_unix) {
+                match self.relay_welcome(&user, Some(room_uri), &welcome, now_unix) {
                     Ok(()) => report.local += 1,
                     Err(error) if error.downcast_ref::<QueueRefused>().is_some() => {
                         eprintln!("[mimihubd] fan-out: skipped a local member, its queue refused the Welcome: {error}");

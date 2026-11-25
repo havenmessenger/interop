@@ -6,6 +6,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimihubd`: a Welcome in the client lane's inbox names the room it joins (`inboxFetch`'s `room`): the room this hub
+  fanned it out for, or the room a hub's `notify` named. A Welcome queued before this, or by the compatibility lane's
+  relay, names none. The `welcomes` table gains a `room` column, added when an older store is opened.
 - A site for mimihubd, published from this repository with GitHub Pages at mimihubd.havenmessenger.com
   (`site/build.py`, `.github/workflows/pages.yml`). Every page but the home page is a file of this repository rendered
   as it is at the revision the site was built from, and each page names that revision; it is rebuilt on every push to
