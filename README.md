@@ -12,12 +12,14 @@ This repository is a MIMI/MLS interoperability library and reference hub: use it
 interoperate with Haven, or adopt it as the interop layer for your own service. It is not
 Haven-specific - the protocol logic follows the IETF drafts, and Haven is one deployment of it.
 
-> **Status:** a reference implementation of the MIMI content codec and room-policy roles, with
-> the IETF content test vectors byte-verified against the official examples, and a hub
-> demonstrating the core mechanisms (directory, key material, message relay, consent). It
-> implements protocol-07. Known
-> gaps against the full protocol-07 surface are listed in [`DIVERGENCES.md`](DIVERGENCES.md).
-> Feedback welcome.
+> **Status:** implements protocol-07, mimi-content-10 and room-policy-04, with the IETF content
+> test vectors byte-verified against the official examples. Its hub, mimihubd, hosts rooms, checks
+> each change to a room against the room's policy, serves key material and consent, and delivers
+> to the providers of a room's members. What is not built yet, and the reading it takes where a
+> draft leaves a point open, are in [`DIVERGENCES.md`](DIVERGENCES.md). Feedback welcome.
+>
+> **Documentation:** [mimihubd.havenmessenger.com](https://mimihubd.havenmessenger.com) - how to
+> test against Haven's hub, how to run your own, the conformance matrix, and the hub's live status.
 
 ## Why use this
 - **Protocol code against the IETF drafts.** MIMI protocol-07 (the JSON lane and the
