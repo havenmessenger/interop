@@ -1,0 +1,15 @@
+name: Bug or question
+description: Something in mimi-core or mimihubd that looks wrong, or a question about them.
+labels: ["question"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What you saw, or what you'd like to know
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: Revision
+      description: The commit or release you're on, if it's about code.

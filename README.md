@@ -44,9 +44,12 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
 - **Standalone.** Apache-2.0, no submodules, no services needed to build and run the tests.
 
 ## See it run
+- [mimihubd.havenmessenger.com](https://mimihubd.havenmessenger.com) - the site for mimihubd: this repository's
+  documentation, and the revision Haven's hub runs.
 - [mimi.havenmessenger.com](https://mimi.havenmessenger.com) - Haven's running hub, built from
-  this repository. The directory is public; the protocol endpoints need a client certificate. No
-  other provider has connected to it yet. To test against it, open an issue.
+  this repository. The directory is public; every other endpoint needs proof of the calling provider, a request
+  signed with a key it publishes in DNS or a client certificate. [`docs/INTEROP.md`](docs/INTEROP.md) says how to
+  test against it.
 - [`mimihubd/README.md`](mimihubd/README.md) - quickstart for the reference hub daemon: mTLS
   server, a live directory endpoint, and both the JSON and TLS-PL wire lanes.
 - [`docs/vc-01-vector-report.md`](docs/vc-01-vector-report.md) - a cross-implementation test

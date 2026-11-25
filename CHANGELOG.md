@@ -6,6 +6,14 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- A site for mimihubd, published from this repository with GitHub Pages at mimihubd.havenmessenger.com
+  (`site/build.py`, `.github/workflows/pages.yml`). Every page but the home page is a file of this repository rendered
+  as it is at the revision the site was built from, and each page names that revision; it is rebuilt on every push to
+  main and once a day. A live-status page shows the revision Haven's hub runs, as its deploy reports it, and the
+  hub's directory as each build reads it, with the deployment report of `scripts/render_status_page.py` for that
+  revision. `docs/INTEROP.md` is now the guide to testing against Haven's hub: what a provider needs to connect, how
+  to ask to be added, and what that deployment does. Issue forms for a peering request, an interop result, and a bug
+  or question.
 - `mimihubd`: a tracked room's Commit is checked against the room's tree as well as its list (room-policy-04
   §8.1.2). Each client it adds is a client of a user listed after it; a user it takes off the list keeps no client in
   the group; a client of a user who stays listed is removed by that user, as its own client (`canRemoveOwnClient`),

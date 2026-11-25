@@ -1,0 +1,42 @@
+name: Interop result
+description: Report what happened when your implementation ran against mimihubd, or against Haven's hub.
+title: "Interop: "
+labels: ["interop"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Results that worked are as useful as ones that didn't. Where a draft is open, [DIVERGENCES.md](https://github.com/havenmessenger/interop/blob/main/DIVERGENCES.md) says which reading mimihubd takes.
+  - type: input
+    id: implementation
+    attributes:
+      label: Your implementation and revision
+    validations:
+      required: true
+  - type: input
+    id: hub
+    attributes:
+      label: Which hub
+      description: Haven's hub (its revision is on https://mimihubd.havenmessenger.com/status.html), or a mimihubd revision you ran yourself.
+    validations:
+      required: true
+  - type: textarea
+    id: tested
+    attributes:
+      label: What you ran
+      description: The operations, in order (for example keyMaterial, update with a Commit, submitMessage, notify).
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What happened
+      description: What each side sent and answered. Problem details (RFC 9457) from the hub name their type.
+    validations:
+      required: true
+  - type: textarea
+    id: bytes
+    attributes:
+      label: Bytes or logs
+      description: Hex, base64 or logs that show it. Nothing secret.
+      render: text

@@ -1,0 +1,74 @@
+# Builds the mimihubd site (site/build.py) and publishes it with GitHub Pages at mimihubd.havenmessenger.com.
+# It runs on every push to main, once a day (to read Haven's hub's directory again), and when a deploy of Haven's hub
+# reports the revision it now runs (workflow_dispatch with running_sha and deployed_at). A build without that report
+# keeps the revision the published site last showed.
+name: site
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+    inputs:
+      running_sha:
+        description: "The commit Haven's hub now runs, from its deploy"
+        required: false
+        default: ""
+      deployed_at:
+        description: "When that deploy finished: ISO 8601, with a time zone"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # The deployment report checks out the running revision, so the history has to be here.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install the renderer's dependency
+        run: python -m pip install --require-hashes -r site/requirements.txt
+      - name: Test the build
+        run: python -m unittest discover -s site/tests
+      - id: pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Build
+        env:
+          RUNNING_SHA: ${{ inputs.running_sha }}
+          DEPLOYED_AT: ${{ inputs.deployed_at }}
+          BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: >-
+          python site/build.py --out _site --sha "$GITHUB_SHA"
+          --running-sha "$RUNNING_SHA" --deployed-at "$DEPLOYED_AT"
+          --previous-status "$BASE_URL/status.json"
+          --directory https://mimi.havenmessenger.com/.well-known/mimi-protocol-directory
+          --report
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

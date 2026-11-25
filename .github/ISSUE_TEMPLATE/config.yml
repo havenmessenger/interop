@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security report
+    url: https://github.com/havenmessenger/interop/blob/main/SECURITY.md
+    about: Report a security problem privately, not in a public issue.
+  - name: The mimihubd site
+    url: https://mimihubd.havenmessenger.com/
+    about: Documentation, the guide to testing against Haven's hub, and its live status.

@@ -1,0 +1,47 @@
+{
+    "endpoints": {
+        "identifierQuery": "/mimi/v1/identifierQuery",
+        "keyMaterial": "/mimi/v1/keyMaterial",
+        "message": "/mimi/v1/message",
+        "notify": "/mimi/v1/notify",
+        "requestConsent": "/mimi/v1/requestConsent",
+        "submitMessage": "/mimi/v1/submitMessage",
+        "updateConsent": "/mimi/v1/updateConsent",
+        "welcome": "/mimi/v1/welcome"
+    },
+    "groupInfo": "https://mimi.havenmessenger.com:8443/mimi/pl/groupInfo/{roomId}",
+    "identifierQuery": "https://mimi.havenmessenger.com:8443/mimi/pl/identifierQuery/{domain}",
+    "keyMaterial": "https://mimi.havenmessenger.com:8443/mimi/pl/keyMaterial/{targetUser}",
+    "mls_ciphersuites": [
+        1
+    ],
+    "notify": "https://mimi.havenmessenger.com:8443/mimi/pl/notify/{roomId}",
+    "protocol_drafts": {
+        "content": "10",
+        "protocol": "07",
+        "room-policy": "04"
+    },
+    "provider": "mimi.havenmessenger.com",
+    "reportAbuse": "https://mimi.havenmessenger.com:8443/mimi/pl/reportAbuse/{roomId}",
+    "requestConsent": "https://mimi.havenmessenger.com:8443/mimi/pl/requestConsent/{targetDomain}",
+    "submitMessage": "https://mimi.havenmessenger.com:8443/mimi/pl/submitMessage/{roomId}",
+    "unsupported": {
+        "assets_ohttp": "DIV-3: v1 is messaging-only",
+        "groupInfo_joining_code": "DIV-1: a GroupInfoRequest with a joining code is refused; preauthorized users are not read",
+        "reportAbuse_with_abusive_messages": "DIV-9: a report attaching an AbusiveMessage is refused (its Frank cannot yet be verified) - metadata-only reports are accepted",
+        "update_wire_endpoint_mixed_commits": "DIV-10: a Commit is applied when it carries participant-list changes, room-policy changes, or both (one change per policy component; a role list never beside a participant-list change, room-policy-04 \u00a73), alone or with Add and Remove proposals beside it; proposals by reference are accepted only when they are the ones this hub holds for a member's leave. A second change of one policy component, a role list beside a participant-list change, a Commit with no change, any other proposal type and any other proposal by reference are refused"
+    },
+    "update": "https://mimi.havenmessenger.com:8443/mimi/pl/update/{roomId}",
+    "updateConsent": "https://mimi.havenmessenger.com:8443/mimi/pl/updateConsent/{requesterDomain}",
+    "wireEndpoints": {
+        "groupInfo": "/mimi/pl/groupInfo/{roomId}",
+        "identifierQuery": "/mimi/pl/identifierQuery/{domain}",
+        "keyMaterial": "/mimi/pl/keyMaterial/{targetUser}",
+        "notify": "/mimi/pl/notify/{roomId}",
+        "reportAbuse": "/mimi/pl/reportAbuse/{roomId}",
+        "requestConsent": "/mimi/pl/requestConsent/{targetDomain}",
+        "submitMessage": "/mimi/pl/submitMessage/{roomId}",
+        "update": "/mimi/pl/update/{roomId}",
+        "updateConsent": "/mimi/pl/updateConsent/{requesterDomain}"
+    }
+}

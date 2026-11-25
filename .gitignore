@@ -24,3 +24,6 @@ target
 # populated file; see scripts/_tell_scan_denylist.py.example for the template.
 scripts/_tell_scan_denylist.py
 scripts/__pycache__/
+
+# Python bytecode (the site build and its tests)
+__pycache__/

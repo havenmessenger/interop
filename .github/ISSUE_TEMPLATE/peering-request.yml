@@ -1,0 +1,59 @@
+name: Peering request
+description: Ask for your provider to be added to Haven's hub at mimi.havenmessenger.com.
+title: "Peering: "
+labels: ["peering"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        What your provider needs is in [Test against our hub](https://mimihubd.havenmessenger.com/interop.html). This issue is public: put nothing secret in it. A CA certificate is public material; its private key never leaves you.
+
+        We add a provider by hand, after checking the request with you. Nothing in a request is trusted until then.
+  - type: input
+    id: domain
+    attributes:
+      label: Provider domain
+      description: The domain your provider speaks for, as it appears in your users' URIs.
+      placeholder: example.com
+    validations:
+      required: true
+  - type: dropdown
+    id: auth
+    attributes:
+      label: How your provider authenticates
+      options:
+        - Requests signed with a key published in DNS (draft-atwood-mimi-provider-auth)
+        - A TLS client certificate
+        - Both
+    validations:
+      required: true
+  - type: input
+    id: selector
+    attributes:
+      label: Key selector
+      description: For signed requests, the selector of your key's TXT record at `<selector>._mimi.<domain>`. Your zone must be DNSSEC-signed.
+      placeholder: mimi1
+  - type: textarea
+    id: ca
+    attributes:
+      label: CA certificate (PEM)
+      description: For a client certificate, the CA that issues it. Your certificate must name your provider domain as a DNS subjectAltName.
+      render: text
+  - type: input
+    id: directory
+    attributes:
+      label: Directory base, if not at your domain
+      description: Leave empty if your directory is at `https://<domain>/.well-known/mimi-protocol-directory`.
+      placeholder: https://mimi.example.com
+  - type: textarea
+    id: implementation
+    attributes:
+      label: Implementation
+      description: Its name, version or revision, and the drafts and versions it implements.
+    validations:
+      required: true
+  - type: textarea
+    id: users
+    attributes:
+      label: Test users
+      description: Users on your side that ours may message, and any you need on ours.
