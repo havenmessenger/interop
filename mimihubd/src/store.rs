@@ -338,6 +338,28 @@ pub struct ParticipantRow {
     pub role_index: Option<u32>,
 }
 
+/// Adds `column` to `table` when the table does not have it: a store made before the column. Returns whether it did.
+fn add_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> anyhow::Result<bool> {
+    let present: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
+        params![table, column],
+        |r| r.get(0),
+    )?;
+    if present > 0 {
+        return Ok(false);
+    }
+    conn.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+        [],
+    )?;
+    Ok(true)
+}
+
 impl SqliteStore {
     /// Open (or create) the store at `path`, running migrations. Use for production.
     pub fn open(path: &str) -> anyhow::Result<Self> {
@@ -357,51 +379,39 @@ impl SqliteStore {
         // The atomic single-statement claim (K1) is still the correctness primitive; this just makes
         // contention graceful rather than erroring.
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        // WAL + foreign-keys are good hygiene; the schema is idempotent (IF NOT EXISTS).
-        conn.execute_batch(SCHEMA)?;
-        conn.execute_batch(outbox::SCHEMA)?;
-        conn.execute_batch(follow::SCHEMA)?;
-        conn.execute_batch(external::SCHEMA)?;
-        // Migration (L1): notify_seen gained `seen_at` after its initial release, needed to sweep
-        // an otherwise permanently-growing dedup ledger. `CREATE TABLE IF NOT EXISTS` above is a
-        // no-op against a pre-existing DB missing the column, so add it explicitly; ignore only the
-        // "already has this column" case (a DB created after this migration shipped), propagate
-        // anything else.
-        if let Err(e) = conn.execute(
-            "ALTER TABLE notify_seen ADD COLUMN seen_at INTEGER NOT NULL DEFAULT 0",
-            [],
-        ) {
-            if !e.to_string().contains("duplicate column name") {
-                return Err(e.into());
-            }
+        // The schema and its migrations run in one IMMEDIATE transaction, which takes the write lock before it reads. A
+        // deferred one that read and then wrote could be refused at once ("database is locked", without the busy handler,
+        // since waiting there could deadlock) while another connection opens the same file, as `mimihubd enroll` does
+        // beside a running hub. The schema is idempotent (IF NOT EXISTS), and a column is added only to a store made
+        // before it, so opening a migrated store changes nothing.
+        let tx =
+            rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute_batch(SCHEMA)?;
+        tx.execute_batch(outbox::SCHEMA)?;
+        tx.execute_batch(follow::SCHEMA)?;
+        tx.execute_batch(external::SCHEMA)?;
+        // notify_seen gained `seen_at` after its initial release, to sweep an otherwise permanently-growing dedup ledger.
+        add_column(&tx, "notify_seen", "seen_at", "INTEGER NOT NULL DEFAULT 0")?;
+        // room_participants gained `seq`, the position in the room's participants vector. Rows written before it hold 0;
+        // they take their insertion order (rowid) as their position.
+        if add_column(
+            &tx,
+            "room_participants",
+            "seq",
+            "INTEGER NOT NULL DEFAULT 0",
+        )? {
+            tx.execute("UPDATE room_participants SET seq = rowid WHERE seq = 0", [])?;
         }
-        // Migration: room_participants gained `seq`, the position in the room's participants vector. Rows
-        // written before it hold 0; they take their insertion order (rowid) as their position.
-        if let Err(e) = conn.execute(
-            "ALTER TABLE room_participants ADD COLUMN seq INTEGER NOT NULL DEFAULT 0",
-            [],
-        ) {
-            if !e.to_string().contains("duplicate column name") {
-                return Err(e.into());
-            }
-        }
-        conn.execute("UPDATE room_participants SET seq = rowid WHERE seq = 0", [])?;
-        // Migration: keypackages gained `last_resort`. Rows written before it are one-time KeyPackages, as every
-        // KeyPackage was then.
-        if let Err(e) = conn.execute(
-            "ALTER TABLE keypackages ADD COLUMN last_resort INTEGER NOT NULL DEFAULT 0",
-            [],
-        ) {
-            if !e.to_string().contains("duplicate column name") {
-                return Err(e.into());
-            }
-        }
-        // Migration: welcomes gained `room`, the room a Welcome joins. Rows queued before it name none.
-        if let Err(e) = conn.execute("ALTER TABLE welcomes ADD COLUMN room TEXT", []) {
-            if !e.to_string().contains("duplicate column name") {
-                return Err(e.into());
-            }
-        }
+        // keypackages gained `last_resort`. Rows written before it are one-time KeyPackages, as every KeyPackage was then.
+        add_column(
+            &tx,
+            "keypackages",
+            "last_resort",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        // welcomes gained `room`, the room a Welcome joins. Rows queued before it name none.
+        add_column(&tx, "welcomes", "room", "TEXT")?;
+        tx.commit()?;
         let report = crate::store_canonical::canonicalize_stored_uris(&conn)?;
         if report.rewritten > 0 || !report.left.is_empty() {
             eprintln!(
@@ -1942,6 +1952,102 @@ mod tests {
         );
     }
 
+    /// A store file nobody has opened yet, opened by several connections at the same moment: each runs the schema, the
+    /// migrations and the URI pass, and every open succeeds. Revert check: run the migrations outside the IMMEDIATE
+    /// transaction.
+    #[test]
+    fn a_new_store_opened_by_several_connections_at_once_opens_for_each() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        const THREADS: usize = 8;
+        let dir = std::env::temp_dir().join(format!("mimi_open_race_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for round in 0..20 {
+            let path = dir.join(format!("open-{round}.db"));
+            let _ = std::fs::remove_file(&path);
+            let p = Arc::new(path.to_str().unwrap().to_string());
+            let start = Arc::new(Barrier::new(THREADS));
+            let opened: Vec<Result<(), String>> = (0..THREADS)
+                .map(|_| {
+                    let p = Arc::clone(&p);
+                    let start = Arc::clone(&start);
+                    thread::spawn(move || {
+                        start.wait();
+                        SqliteStore::open(&p)
+                            .map(drop)
+                            .map_err(|e| format!("{e:#}"))
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect();
+            let refused: Vec<&String> = opened.iter().filter_map(|r| r.as_ref().err()).collect();
+            assert!(
+                refused.is_empty(),
+                "PLANT-STORE-OPEN-RACE: concurrent opens of a new store were refused: {refused:?}"
+            );
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// A store from before a column was added, opened by several connections at the same moment (a hub just upgraded,
+    /// and `mimihubd enroll` beside it): each reads the table's columns and one adds the missing one, and every open
+    /// succeeds. Revert check: run the migrations in a deferred transaction.
+    #[test]
+    fn an_older_store_opened_by_several_connections_at_once_migrates_once() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        const THREADS: usize = 8;
+        let dir = std::env::temp_dir().join(format!("mimi_migrate_race_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for round in 0..20 {
+            let path = dir.join(format!("older-{round}.db"));
+            let _ = std::fs::remove_file(&path);
+            Connection::open(&path)
+                .unwrap()
+                .execute_batch(include_str!(
+                    "../tests/fixtures/hub_before_welcome_room.sql"
+                ))
+                .unwrap();
+            let p = Arc::new(path.to_str().unwrap().to_string());
+            let start = Arc::new(Barrier::new(THREADS));
+            let opened: Vec<Result<(), String>> = (0..THREADS)
+                .map(|_| {
+                    let p = Arc::clone(&p);
+                    let start = Arc::clone(&start);
+                    thread::spawn(move || {
+                        start.wait();
+                        SqliteStore::open(&p)
+                            .map(drop)
+                            .map_err(|e| format!("{e:#}"))
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect();
+            let refused: Vec<&String> = opened.iter().filter_map(|r| r.as_ref().err()).collect();
+            assert!(
+                refused.is_empty(),
+                "PLANT-STORE-MIGRATE-RACE: concurrent opens of an older store were refused: {refused:?}"
+            );
+            let store = SqliteStore::open(&p).unwrap();
+            assert_eq!(
+                store
+                    .peek_queue(QueueKind::Welcomes, &["bob", "bob"], 0, 10)
+                    .unwrap()
+                    .len(),
+                2,
+                "the older store's Welcomes read back after the migration"
+            );
+            drop(store);
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
     #[test]
     fn keypackage_claim_is_atomic_under_concurrency() {
         // K1 contention proof: N threads, EACH with its own Connection to a shared file db, all racing
@@ -1969,10 +2075,15 @@ mod tests {
         }
 
         const THREADS: usize = 8;
+        // Every thread opens its own connection at the same moment, so the opens race too (as `mimihubd enroll` opens
+        // beside a running hub).
+        let start = Arc::new(std::sync::Barrier::new(THREADS));
         let handles: Vec<_> = (0..THREADS)
             .map(|_| {
                 let p = Arc::clone(&p);
+                let start = Arc::clone(&start);
                 thread::spawn(move || {
+                    start.wait();
                     let s = SqliteStore::open(&p).unwrap();
                     let mut got = Vec::new();
                     // each thread claims until the pool is drained

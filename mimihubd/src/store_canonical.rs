@@ -44,7 +44,14 @@ pub fn canonicalize_stored_uris(conn: &Connection) -> anyhow::Result<CanonicalRe
     if version >= CANONICAL_URIS_VERSION {
         return Ok(report);
     }
-    let tx = conn.unchecked_transaction()?;
+    // IMMEDIATE, so a connection opening the same file at once waits rather than deadlocking on read-then-write; the
+    // version is read again under the lock, since that connection may have done the pass already.
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+    let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version >= CANONICAL_URIS_VERSION {
+        tx.commit()?;
+        return Ok(report);
+    }
     for (table, column) in URI_COLUMNS {
         let rows: Vec<(i64, String)> = {
             let mut stmt = tx.prepare(&format!("SELECT rowid, {column} FROM {table}"))?;
