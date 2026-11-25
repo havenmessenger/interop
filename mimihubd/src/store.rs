@@ -1948,13 +1948,12 @@ mod tests {
         // to claim from a fixed pool. The atomic DELETE..RETURNING + busy_timeout must guarantee every
         // claimed KeyPackage is served EXACTLY once - no double-serve, no loss.
         use std::collections::HashSet;
-        use std::sync::Arc;
         use std::thread;
 
         let dir = std::env::temp_dir().join(format!("mimi_claim_race_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("race.db");
-        let p = Arc::new(path.to_str().unwrap().to_string());
+        let p = path.to_str().unwrap().to_string();
 
         // Must stay <= MAX_KEYPACKAGES_PER_USER (L1's per-user backlog cap) or the cap's own oldest-
         // eviction would race this test's own inserts and make "every one served exactly once" false
@@ -1969,11 +1968,15 @@ mod tests {
         }
 
         const THREADS: usize = 8;
-        let handles: Vec<_> = (0..THREADS)
-            .map(|_| {
-                let p = Arc::clone(&p);
+        // Each thread's connection is opened here, one at a time: opening runs the migrations, and eight opens at once
+        // contend on the schema, which is not what this test is about. The claims below still race.
+        let stores: Vec<SqliteStore> = (0..THREADS)
+            .map(|_| SqliteStore::open(&p).unwrap())
+            .collect();
+        let handles: Vec<_> = stores
+            .into_iter()
+            .map(|s| {
                 thread::spawn(move || {
-                    let s = SqliteStore::open(&p).unwrap();
                     let mut got = Vec::new();
                     // each thread claims until the pool is drained
                     while let Some(kp) = s.claim_key_package("alice", 1000, false).unwrap() {
