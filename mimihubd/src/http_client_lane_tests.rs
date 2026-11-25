@@ -76,9 +76,24 @@ pub(super) fn lane_reaching(
     rooms: crate::client_lane_rooms::LaneRoomProfile,
     access: Option<Arc<crate::peer_directory::PeerAccess>>,
 ) -> Lane {
-    let key = Ed25519KeyPair::from_seed_unchecked(&[7u8; 32]).expect("seed");
+    let mut hub = Provider::in_memory(domain).expect("provider");
+    if let Some(access) = access {
+        hub = hub.with_peer_access(access);
+    }
+    lane_over(test, hub, rooms)
+}
+
+/// The directory a lane for `test` keeps its files in, removed when the lane is dropped.
+fn lane_dir(test: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("mimi-lane-http-{}-{test}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("dir");
+    dir
+}
+
+/// A lane over `hub`, a provider the test opened.
+fn lane_over(test: &str, hub: Provider, rooms: crate::client_lane_rooms::LaneRoomProfile) -> Lane {
+    let key = Ed25519KeyPair::from_seed_unchecked(&[7u8; 32]).expect("seed");
+    let dir = lane_dir(test);
     let path = dir.join("lane_keys.json");
     std::fs::write(
         &path,
@@ -88,16 +103,13 @@ pub(super) fn lane_reaching(
         ),
     )
     .expect("key file");
-    let mut hub = Provider::in_memory(domain).expect("provider");
-    if let Some(access) = access {
-        hub = hub.with_peer_access(access);
-    }
+    let domain = hub.domain.clone();
     let provider: SharedProvider = Arc::new(Mutex::new(hub));
     let auth = Arc::new(ClientLaneAuth {
         keys: PeerKeys::from_file(Some(path)),
         nonces: NonceLedger::default(),
         started_unix: i64::try_from(seconds()).unwrap_or(0) - 10,
-        domain: domain.into(),
+        domain,
     });
     Lane {
         key,
@@ -489,4 +501,78 @@ async fn a_welcome_item_names_its_room() {
         items[1].get("room").is_none(),
         "a Welcome queued without a room has no room key"
     );
+}
+
+/// A hub.db the store wrote before Welcomes carried a room (`tests/fixtures/hub_before_welcome_room.sql`, made by that
+/// store's own code): this store opens it, its queued Welcomes read back with no room, and inboxFetch still serves
+/// them and its message, beside a Welcome queued after the upgrade that names its room.
+#[tokio::test]
+async fn an_older_hubs_queued_welcomes_still_come_through_the_inbox() {
+    let test = "older-hub";
+    let path = lane_dir(test).join("hub.db");
+    rusqlite::Connection::open(&path)
+        .expect("db")
+        .execute_batch(include_str!(
+            "../tests/fixtures/hub_before_welcome_room.sql"
+        ))
+        .expect("fixture");
+    let hub = Provider::open(DOMAIN, path.to_str().expect("path")).expect("open");
+    let rooms: Vec<Option<String>> = hub
+        .store
+        .peek_queue(crate::store::QueueKind::Welcomes, &["bob", "bob"], 0, 10)
+        .expect("peek")
+        .into_iter()
+        .map(|item| item.room)
+        .collect();
+    assert_eq!(
+        rooms,
+        vec![None, None],
+        "the older Welcomes read back with no room"
+    );
+    hub.store
+        .enqueue_room_welcome(
+            "bob",
+            Some("mimi://havenmessenger.com/r/lounge"),
+            b"new-welcome",
+            now_unix(),
+        )
+        .expect("queue");
+    let lane = lane_over(
+        test,
+        hub,
+        crate::client_lane_rooms::LaneRoomProfile::neutral(),
+    );
+    let (status, page) = call(
+        &lane.router,
+        signed(
+            &lane.key,
+            "inboxFetch",
+            BOB,
+            r#"{"after_welcome":0,"after_message":0,"limit":10}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let welcomes = page["welcomes"].as_array().expect("welcomes");
+    let bytes: Vec<Vec<u8>> = welcomes
+        .iter()
+        .map(|item| {
+            STANDARD
+                .decode(item["bytes"].as_str().expect("bytes"))
+                .expect("base64")
+        })
+        .collect();
+    assert_eq!(
+        bytes,
+        vec![
+            b"old-welcome-1".to_vec(),
+            b"old-welcome-2".to_vec(),
+            b"new-welcome".to_vec()
+        ],
+        "PLANT-WELCOME-ROOM-FIXTURE: the older Welcomes no longer come through the inbox"
+    );
+    assert!(welcomes[0].get("room").is_none() && welcomes[1].get("room").is_none());
+    assert_eq!(welcomes[2]["room"], "mimi://havenmessenger.com/r/lounge");
+    let messages = page["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 1, "the older message still comes through");
 }

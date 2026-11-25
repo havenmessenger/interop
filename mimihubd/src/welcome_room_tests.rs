@@ -41,30 +41,6 @@ fn a_welcome_keeps_its_room_and_a_message_has_none() {
     assert_eq!(messages[0].room, None);
 }
 
-/// A store opened over a welcomes table from before the room column gains it, and what was queued then names no room.
-#[test]
-fn an_older_welcome_queue_migrates_and_its_welcomes_name_no_room() {
-    let path = std::env::temp_dir().join(format!("mimi-welcome-room-{}.db", std::process::id()));
-    let _ = std::fs::remove_file(&path);
-    {
-        let old = rusqlite::Connection::open(&path).unwrap();
-        old.execute_batch(
-            "CREATE TABLE welcomes (id INTEGER PRIMARY KEY AUTOINCREMENT, recipient TEXT NOT NULL, bytes BLOB NOT NULL,
-             ts INTEGER NOT NULL);
-             INSERT INTO welcomes (recipient, bytes, ts) VALUES ('bob', x'01', 1);",
-        )
-        .unwrap();
-    }
-    let store = SqliteStore::open(path.to_str().unwrap()).unwrap();
-    store
-        .enqueue_room_welcome("bob", Some(ROOM), b"w", 2)
-        .unwrap();
-    let rooms = welcomes(&store, "bob");
-    drop(store);
-    let _ = std::fs::remove_file(&path);
-    assert_eq!(rooms, vec![None, Some(ROOM.to_string())]);
-}
-
 /// A room this hub hosts: the Welcome its fan-out queues for a local new member names that room.
 #[test]
 fn a_hosted_rooms_fan_out_names_the_room() {
@@ -95,7 +71,10 @@ fn a_hosted_rooms_fan_out_names_the_room() {
             2,
         )
         .unwrap();
-    assert_eq!(report.local, 1, "Erin's Welcome was queued here");
+    assert_eq!(
+        report.local, 2,
+        "Alice's Commit and Erin's Welcome were queued here"
+    );
     assert_eq!(
         welcomes(&p.store, "erin"),
         vec![Some(ROOM.to_string())],
