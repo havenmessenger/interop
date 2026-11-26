@@ -30,9 +30,24 @@ mod follow;
 #[path = "store_outbox.rs"]
 mod outbox;
 pub use outbox::{OutboxQueue, OutboxRow};
+#[path = "store_events.rs"]
+mod events;
+pub use events::{ConsentChange, EventAck, EventCursor, EventKind, EventRow};
 
 pub struct SqliteStore {
     conn: Connection,
+    /// Set when the operator chose `events` delivery: what would be queued per user is written to the provider event
+    /// stream instead (`store_events.rs`).
+    events: Option<EventDelivery>,
+}
+
+/// The provider event stream's settings: the provider's domain, which turns a stored name into the user's URI, and what
+/// to notify when an event is written.
+struct EventDelivery {
+    domain: String,
+    wake: std::sync::Arc<tokio::sync::Notify>,
+    /// Whether the hub pushes the stream to the provider's server (`event_push.rs`).
+    push: bool,
 }
 
 impl SqliteStore {
@@ -390,6 +405,7 @@ impl SqliteStore {
         tx.execute_batch(outbox::SCHEMA)?;
         tx.execute_batch(follow::SCHEMA)?;
         tx.execute_batch(external::SCHEMA)?;
+        tx.execute_batch(events::SCHEMA)?;
         // notify_seen gained `seen_at` after its initial release, to sweep an otherwise permanently-growing dedup ledger.
         add_column(&tx, "notify_seen", "seen_at", "INTEGER NOT NULL DEFAULT 0")?;
         // room_participants gained `seq`, the position in the room's participants vector. Rows written before it hold 0;
@@ -421,7 +437,70 @@ impl SqliteStore {
                 report.left
             );
         }
-        Ok(Self { conn })
+        Ok(Self { conn, events: None })
+    }
+
+    /// Write what would be queued per user to the provider event stream from now on: Welcomes, room messages and
+    /// consent changes for `domain`'s users. `wake` is notified after each event is written.
+    pub fn deliver_as_events(&mut self, domain: &str, wake: std::sync::Arc<tokio::sync::Notify>) {
+        self.events = Some(EventDelivery {
+            domain: domain.to_ascii_lowercase(),
+            wake,
+            push: false,
+        });
+    }
+
+    /// Record that the stream is pushed to the provider's server. Refused when the stream is off.
+    pub fn set_event_push(&mut self) -> anyhow::Result<()> {
+        let events = self.events.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("event push needs event delivery (lane_delivery = \"events\")")
+        })?;
+        events.push = true;
+        Ok(())
+    }
+
+    /// Whether the stream is pushed to the provider's server.
+    pub fn pushes_events(&self) -> bool {
+        self.events.as_ref().is_some_and(|events| events.push)
+    }
+
+    /// Whether this store writes the provider event stream instead of per-user queues.
+    pub fn delivers_events(&self) -> bool {
+        self.events.is_some()
+    }
+
+    /// What is notified after each event is written, when the stream is on.
+    pub fn event_waker(&self) -> Option<std::sync::Arc<tokio::sync::Notify>> {
+        self.events.as_ref().map(|events| events.wake.clone())
+    }
+
+    fn wake_event_readers(&self) {
+        if let Some(events) = &self.events {
+            events.wake.notify_waiters();
+        }
+    }
+
+    /// The URI of a local user named by URI or by stored name, when the stream is on and the name is one of ours.
+    fn event_user(&self, recipient: &str) -> Option<String> {
+        let events = self.events.as_ref()?;
+        if recipient.contains("://") {
+            let uri = mimi_core::uri::MimiUri::parse(recipient).ok()?;
+            (uri.kind == Some(mimi_core::uri::MimiKind::User) && uri.is_local_to(&events.domain))
+                .then(|| mimi_core::uri::canonical(recipient))
+        } else {
+            (!recipient.is_empty() && !recipient.contains('/'))
+                .then(|| format!("mimi://{}/u/{recipient}", events.domain))
+        }
+    }
+
+    /// Who a consent change concerns, among this provider's users, when the stream is on: the target of a request (to
+    /// decide it, or to see it withdrawn), and the requester of a decision.
+    fn consent_event_users(&self, requester: &str, target: &str, state: &str) -> Vec<String> {
+        let party = match state {
+            "requested" | "withdrawn" => target,
+            _ => requester,
+        };
+        self.event_user(party).into_iter().collect()
     }
 
     // ---- KeyPackages (K1/K2) ----
@@ -723,11 +802,40 @@ impl SqliteStore {
                 anyhow::bail!("consent table cap reached ({MAX_CONSENT_RECORDS})");
             }
         }
-        self.conn.execute(
-            "INSERT INTO consent (requester, target, room_key, state, ts) VALUES (?1,?2,?3,?4,?5) \
-             ON CONFLICT(requester, target, room_key) DO UPDATE SET state=excluded.state, ts=excluded.ts",
-            params![requester, target, room_key, state, now_unix as i64],
-        )?;
+        let users = self.consent_event_users(requester, target, state);
+        self.atomically(|| -> anyhow::Result<()> {
+            self.conn.execute(
+                "INSERT INTO consent (requester, target, room_key, state, ts) VALUES (?1,?2,?3,?4,?5) \
+                 ON CONFLICT(requester, target, room_key) DO UPDATE SET state=excluded.state, ts=excluded.ts",
+                params![requester, target, room_key, state, now_unix as i64],
+            )?;
+            self.consent_events_in(&users, requester, target, room_key, state, now_unix)
+        })??;
+        if !users.is_empty() {
+            self.wake_event_readers();
+        }
+        Ok(())
+    }
+
+    /// Add a consent change to the stream for each of `users` (none when the stream is off).
+    fn consent_events_in(
+        &self,
+        users: &[String],
+        requester: &str,
+        target: &str,
+        room_key: &str,
+        state: &str,
+        now_unix: u64,
+    ) -> anyhow::Result<()> {
+        let change = ConsentChange {
+            requester: requester.to_string(),
+            target: target.to_string(),
+            room: (!room_key.is_empty()).then(|| room_key.to_string()),
+            state: state.to_string(),
+        };
+        for user in users {
+            Self::append_consent_event_in(&self.conn, user, &change, now_unix)?;
+        }
         Ok(())
     }
 
@@ -744,11 +852,57 @@ impl SqliteStore {
         let target = target.as_str();
         let room_key = mimi_core::uri::canonical(room_key);
         let room_key = room_key.as_str();
-        let n = self.conn.execute(
+        self.remove_consent_row(
+            "DELETE FROM consent WHERE requester=?1 AND target=?2 AND room_key=?3 AND state='requested'",
             "DELETE FROM consent WHERE requester=?1 AND target=?2 AND room_key=?3",
-            params![requester, target, room_key],
-        )?;
-        Ok(n > 0)
+            requester,
+            target,
+            room_key,
+        )
+    }
+
+    /// Run `delete` on one consent record; when it removed a pending request (`pending` names one) and the stream is on,
+    /// the target is told the request was withdrawn. True when a row was removed.
+    fn remove_consent_row(
+        &self,
+        pending: &str,
+        delete: &str,
+        requester: &str,
+        target: &str,
+        room_key: &str,
+    ) -> anyhow::Result<bool> {
+        if self.events.is_none() {
+            let n = self
+                .conn
+                .execute(delete, params![requester, target, room_key])?;
+            return Ok(n > 0);
+        }
+        let users = self.consent_event_users(requester, target, "withdrawn");
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs());
+        let removed = self.atomically(|| -> anyhow::Result<bool> {
+            let was_pending = self
+                .conn
+                .query_row(
+                    &pending.replacen("DELETE FROM consent", "SELECT 1 FROM consent", 1),
+                    params![requester, target, room_key],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            let n = self
+                .conn
+                .execute(delete, params![requester, target, room_key])?;
+            if n > 0 && was_pending {
+                self.consent_events_in(&users, requester, target, room_key, "withdrawn", now_unix)?;
+            }
+            Ok(n > 0)
+        })??;
+        if removed && !users.is_empty() {
+            self.wake_event_readers();
+        }
+        Ok(removed)
     }
 
     /// Withdraw a pending request for an EXACT scope, and nothing else: a grant, a revoke or a preemptive denial the
@@ -765,11 +919,9 @@ impl SqliteStore {
         let target = target.as_str();
         let room_key = mimi_core::uri::canonical(room_key);
         let room_key = room_key.as_str();
-        let n = self.conn.execute(
-            "DELETE FROM consent WHERE requester=?1 AND target=?2 AND room_key=?3 AND state='requested'",
-            params![requester, target, room_key],
-        )?;
-        Ok(n > 0)
+        let pending =
+            "DELETE FROM consent WHERE requester=?1 AND target=?2 AND room_key=?3 AND state='requested'";
+        self.remove_consent_row(pending, pending, requester, target, room_key)
     }
 
     /// The raw consent state for an EXACT scope (requester, target, room_key). None if no record.
@@ -1126,10 +1278,19 @@ impl SqliteStore {
         now_unix: u64,
         room: Option<&str>,
     ) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            room.is_none() || table == "welcomes",
-            "only a Welcome names a room"
-        );
+        if self.events.is_some() {
+            let kind = if table == "welcomes" {
+                EventKind::Welcome
+            } else {
+                EventKind::Message
+            };
+            let Some(user) = self.event_user(recipient) else {
+                return Err(QueueRefused("recipient is not a user of this provider".into()).into());
+            };
+            return self.append_events(kind, &user, room, items, now_unix);
+        }
+        // Only the welcomes table keeps a room; a message's room reaches only the event stream.
+        let room = if table == "welcomes" { room } else { None };
         let recipient = mimi_core::uri::canonical(recipient);
         let recipient = recipient.as_str();
         if recipient.is_empty() || recipient.len() > RECIPIENT_MAX_LEN {
@@ -1306,20 +1467,23 @@ impl SqliteStore {
         self.conn.execute_batch("DROP TABLE messages").unwrap();
     }
 
-    /// Queue several messages for `recipient` in order, all or none (see [`Self::enqueue_all`]).
+    /// Queue several messages of `room` for `recipient` in order, all or none (see [`Self::enqueue_all`]). The room
+    /// reaches the event stream; a per-user message queue does not keep it.
     pub fn enqueue_messages(
         &self,
         recipient: &str,
+        room: Option<&str>,
         messages: &[&[u8]],
         now_unix: u64,
     ) -> anyhow::Result<()> {
+        let room = room.map(mimi_core::uri::canonical);
         self.enqueue_all(
             "messages",
             recipient,
             messages,
             MAX_QUEUE_MESSAGES,
             now_unix,
-            None,
+            room.as_deref(),
         )
     }
 

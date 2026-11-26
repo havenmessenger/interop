@@ -82,3 +82,112 @@ fn a_fan_out_store_error_is_a_failure_not_an_acceptance() {
         "PLANT-ROOM-FANOUT-ERROR: a message nothing queued was not reported as the hub's failure"
     );
 }
+
+/// Alice and Dave of a peer provider, members of a room here whose tree the hub keeps.
+const PEER_ALICE: &str = "mimi://example.com/u/alice";
+const PEER_DAVE: &str = "mimi://example.com/u/dave";
+
+/// A hub tracking `ROOM` (Alice and Dave of `example.com`, seeded at epoch 1), and Alice's group with Alice.
+fn tracked_room() -> (
+    Provider,
+    openmls::prelude::MlsGroup,
+    crate::mls_fixtures::Member,
+) {
+    use mimi_core::protocol_wire::{GroupInfoOption, GroupInfoRepresentation};
+    let p = room_of(&[PEER_ALICE, PEER_DAVE]);
+    let alice = crate::mls_fixtures::Member::new(PEER_ALICE);
+    let dave = crate::mls_fixtures::Member::new(PEER_DAVE);
+    let mut group = alice.create_group(b"mimi://example.com/g/room");
+    let (_commit, group_info, tree) = crate::mls_fixtures::add_commit(&mut group, &alice, &[&dave]);
+    p.seed_room_tree(
+        ROOM,
+        0,
+        Some(&crate::peer::PeerIdentity::signed("example.com")),
+        &GroupInfoOption {
+            representation: GroupInfoRepresentation::Full,
+            payload: group_info,
+        },
+        &[&[1u8][..], &tree].concat(),
+    );
+    assert!(
+        p.room_tracking(ROOM).unwrap().is_some(),
+        "the room is tracked"
+    );
+    (p, group, alice)
+}
+
+fn application(
+    group: &mut openmls::prelude::MlsGroup,
+    by: &crate::mls_fixtures::Member,
+    text: &[u8],
+) -> Vec<u8> {
+    use openmls::prelude::tls_codec::Serialize as _;
+    group
+        .create_message(&by.provider, &by.signer, text)
+        .unwrap()
+        .tls_serialize_detached()
+        .unwrap()
+}
+
+/// In a tracked room, a message framed for the room's group at its epoch is delivered; one framed for another group,
+/// or for an epoch the room has not reached, or that is no MLS message, reaches no one. Revert check: skip the framing
+/// check, and the other group's message goes out to the members' provider.
+#[test]
+fn a_tracked_room_takes_only_messages_framed_for_its_group() {
+    let (p, mut group, alice) = tracked_room();
+    let fits = application(&mut group, &alice, b"hello");
+    assert_eq!(
+        p.accept_application_message(ROOM, PEER_ALICE, &fits, 10),
+        Acceptance::Accepted
+    );
+    assert_eq!(
+        fanned_out(&p),
+        1,
+        "the fitting message went out to the members' provider"
+    );
+
+    let mut other = alice.create_group(b"mimi://example.com/g/other");
+    let elsewhere = application(&mut other, &alice, b"framed for another group");
+    assert_eq!(
+        p.accept_application_message(ROOM, PEER_ALICE, &elsewhere, 11),
+        Acceptance::WrongGroup,
+        "PLANT-FRAMING-GROUP: a message framed for another group was taken"
+    );
+
+    // Alice moves her group on without the hub: her next message is from an epoch the room has not reached.
+    group
+        .self_update(&alice.provider, &alice.signer, Default::default())
+        .unwrap();
+    group.merge_pending_commit(&alice.provider).unwrap();
+    let ahead = application(&mut group, &alice, b"from a later epoch");
+    assert_eq!(
+        p.accept_application_message(ROOM, PEER_ALICE, &ahead, 12),
+        Acceptance::WrongGroup,
+        "PLANT-FRAMING-EPOCH: a message from a later epoch was taken"
+    );
+    assert_eq!(
+        p.accept_application_message(ROOM, PEER_ALICE, b"not an MLS message", 13),
+        Acceptance::WrongGroup
+    );
+    assert_eq!(fanned_out(&p), 1, "nothing more went out");
+}
+
+/// A room whose tree the hub does not keep has no group to compare with: its messages are taken as before.
+#[test]
+fn an_untracked_room_is_not_framing_checked() {
+    let p = room_of(&[ALICE, DAVE]);
+    assert_eq!(
+        p.accept_application_message(ROOM, ALICE, b"opaque", 10),
+        Acceptance::Accepted
+    );
+}
+
+/// How many fan-outs wait in the outbox for other providers.
+fn fanned_out(p: &Provider) -> usize {
+    p.store
+        .outbox_queues()
+        .unwrap()
+        .iter()
+        .map(|queue| usize::try_from(queue.depth).unwrap())
+        .sum()
+}

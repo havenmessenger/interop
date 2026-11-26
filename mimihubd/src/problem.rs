@@ -181,10 +181,38 @@ pub const KEY_MATERIAL_RATE_LIMITED: ProblemType = ProblemType {
     detail: "The hub takes a bounded number of keyMaterial requests from one requesting provider for one target user in an hour. Retry after an hour.",
 };
 
+/// A client-lane call for the other delivery mode: a per-user inbox call to a hub that delivers through the provider
+/// event stream, or an event stream call to a hub that delivers through per-user inboxes.
+pub const DELIVERY_MODE: ProblemType = ProblemType {
+    anchor: "delivery-mode",
+    title: "This hub delivers the other way",
+    status: StatusCode::CONFLICT,
+    detail: "The operator chose per-user inboxes or the provider event stream, and this call belongs to the other. The lane's info call says which.",
+};
+
+/// An event stream acknowledgement past the last event written.
+pub const ACK_PAST_END: ProblemType = ProblemType {
+    anchor: "ack-past-end",
+    title: "The acknowledgement is past the last event",
+    status: StatusCode::BAD_REQUEST,
+    detail: "An acknowledgement names a seq the hub has written. Nothing was acknowledged.",
+};
+
+/// A message for a room whose tree the hub keeps, framed for another group or for an epoch the room has not reached.
+pub const GROUP_MISMATCH: ProblemType = ProblemType {
+    anchor: "group-mismatch",
+    title: "The message is framed for another group",
+    status: StatusCode::BAD_REQUEST,
+    detail: "Its MLS framing names a group other than the room's, or an epoch past the room's. Nothing was delivered.",
+};
+
 /// Every problem type, for the page check and the fallback.
-pub const ALL: [&ProblemType; 19] = [
+pub const ALL: [&ProblemType; 22] = [
     &CLIENT_NOT_AUTHENTICATED,
     &CLIENT_RATE_LIMITED,
+    &DELIVERY_MODE,
+    &ACK_PAST_END,
+    &GROUP_MISMATCH,
     &KEY_MATERIAL_RATE_LIMITED,
     &NO_LOCAL_MEMBER,
     &MALFORMED_REQUEST,

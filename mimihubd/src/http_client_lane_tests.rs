@@ -91,7 +91,11 @@ fn lane_dir(test: &str) -> std::path::PathBuf {
 }
 
 /// A lane over `hub`, a provider the test opened.
-fn lane_over(test: &str, hub: Provider, rooms: crate::client_lane_rooms::LaneRoomProfile) -> Lane {
+pub(super) fn lane_over(
+    test: &str,
+    hub: Provider,
+    rooms: crate::client_lane_rooms::LaneRoomProfile,
+) -> Lane {
     let key = Ed25519KeyPair::from_seed_unchecked(&[7u8; 32]).expect("seed");
     let dir = lane_dir(test);
     let path = dir.join("lane_keys.json");

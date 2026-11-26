@@ -304,6 +304,8 @@ the file - see [`debian/mimihubd.toml.example`](debian/mimihubd.toml.example) an
 | `MIMI_LANE_KEY` | `lane_key` | with the lane | none | PEM path, the lane listener's TLS private key. |
 | `MIMI_LANE_ROOM_POLICY` | `lane_room_policy` | no | the neutral profile | TOML file of what a room the lane creates starts with: its room policy, the role its creator holds and whether it allows external Commits (format in `mimihubd/src/client_lane_rooms.rs`). A file the hub cannot read or that is not a valid profile stops the start. The neutral profile: admins add, remove, ban and change roles, members send and may leave, the creator is an admin, external Commits are refused. |
 | `MIMI_LANE_KEYS` | `lane_keys` | with the lane | none | Path of a JSON file of the client-facing service's signing keys, `{"<keyid>._mimi.client-lane": "<base64 Ed25519 public key>"}`, an empty value for a revoked key. |
+| `MIMI_LANE_DELIVERY` | `lane_delivery` | no | `inbox` | How the hub hands this provider's users what it holds for them: `inbox`, a queue per user read with `inboxFetch`/`inboxAck`, or `events`, one provider event stream read by pull on the lane or pushed (below, "Delivering to your server: push or pull"). `events` needs a reader: the lane, or `MIMI_EVENTS_PUSH_URL`. Any other value stops the start. |
+| `MIMI_EVENTS_PUSH_URL` | `events_push_url` | no | none | With `MIMI_LANE_DELIVERY=events`, the `https` URL of the provider's own server the hub pushes the event stream to; its host is the provider's domain or a subdomain of it, and it goes through the outbound gate like every outbound request. Needs `MIMI_SIGNING_KEY`: every push is signed. Unset means no push. |
 | `MIMI_POLICY` | `policy` | no | none | A TOML file of the deployment's choices, below. Unset means the drafts' defaults. A named file the hub cannot read, or one that is not a valid policy, stops the start. |
 | `MIMI_PEER_KEYS` | `peer_keys` | no | none | Path of a JSON file of peers' DNS-published signing keys, `{"<keyid>._mimi.<domain>": "<base64 Ed25519 public key>"}`, an empty value for a revoked key. Re-read when it changes. Without it, no signature verifies and only a client certificate admits a peer. |
 | `MIMI_ACTIVITY_LOG` | `activity_log` | no | off | `1` prints one line per request on the peer-facing listener to stderr: `[mimi-activity] method=POST route=/mimi/pl/update/:room_id status=200`. The route is the template the request matched (`route=unmatched` when none did), so no path, query string, header, certificate or body appears in it. Any other value, or none, leaves it off. The directory-only listener is not logged. |
@@ -448,10 +450,10 @@ A refused request is a 401 `client-not-authenticated`; past 600 requests a minut
 | `publishKeyPackages` | `{key_packages}` → `{count}` | Adds KeyPackages for the user (at most 32 a request; the hub keeps 64 a user, dropping the oldest one-time ones). Each passes the suite gate and names the user, exactly, in its basic credential. One-time KeyPackages are handed out first, once each; a last-resort one (draft-ietf-mls-extensions) only when none is left, once, or again and again when `MIMI_LAST_RESORT_REUSE` is `true`; the newest replaces the one before. |
 | `keyPackageCount` | `{}` → `{one_time, last_resort}` | How many unexpired one-time KeyPackages the user has here, and whether a last-resort one is: what the client reads to know when to publish more. |
 | `withdrawKeyPackages` | `{}` → `{count}` | Removes them; no one can claim the user's KeyPackages after. |
-| `inboxFetch` | `{after_welcome, after_message, limit}` → `{welcomes, messages, more}` | Reads the user's queued Welcomes and messages after the cursors, oldest first (at most 256 of each), without removing them. Each item is `{seq, bytes, received_at}`; a Welcome's also has `room`, the room it joins, when the hub queued it for one (a room it hosts, or the room a hub's notify named). |
+| `inboxFetch` | `{after_welcome, after_message, limit}` → `{welcomes, messages, more}` | With `MIMI_LANE_DELIVERY=inbox` (the default; a hub delivering through the event stream answers this and `inboxAck` with 409 `delivery-mode`). Reads the user's queued Welcomes and messages after the cursors, oldest first (at most 256 of each), without removing them. Each item is `{seq, bytes, received_at}`; a Welcome's also has `room`, the room it joins, when the hub queued it for one (a room it hosts, or the room a hub's notify named). |
 | `inboxAck` | `{welcomes_up_to, messages_up_to}` → `{welcomes, messages}` | Removes the user's items up to the cursors. |
 | `createRoom` | `{}` → 201 `{room, creator_role, components}` | A room hosted here under a fresh URI, with the user as its only participant, in the creator role, room policy and external-Commit setting of the deployment's profile (`MIMI_LANE_ROOM_POLICY`); the client names none of them. The answer gives the role the user holds and the room's components (`[{id, data}]`, `data` base64: its `roles_list`, `base_room_policy` and operational policy): the client's group starts with them and a participant list naming the user in `creator_role`. Once the creator's group is tracked, its own components are the room's state; a first Commit whose GroupInfo would seed the tree with other components is refused (`notAllowed`), so a room keeps the profile it was created with. |
-| `submitMessage` | `{room, message}` → `{}` | An application message into the room, from the user. In a room hosted here: 403 `not-permitted` unless the user is an active participant whose role may send; fanned out as from a peer. In a room on another hub: sent to that hub's `submitMessage` as this provider, naming the user as the sender (protocol-07 §3.4), and answered as it answers (403 for its refusal, 502 `upstream-failed` when it cannot be reached or this hub has no outbound client). |
+| `submitMessage` | `{room, message}` → `{}` | An application message into the room, from the user. In a room hosted here: 403 `not-permitted` unless the user is an active participant whose role may send; in a room whose tree the hub keeps, 400 `group-mismatch` unless the message's MLS framing names the room's group at an epoch the room has reached (no message is decrypted; an earlier epoch is taken); fanned out as from a peer. In a room on another hub: sent to that hub's `submitMessage` as this provider, naming the user as the sender (protocol-07 §3.4), and answered as it answers (403 for its refusal, 502 `upstream-failed` when it cannot be reached or this hub has no outbound client). |
 | `update` | `{room, update}` → `{answer, ...}` | `update` is the UpdateRequest as the wire carries it (a Commit bundle, or a leave's proposals). The same checks as the provider path's `update`, with the user as the requester: a leave removes only the user, an external Commit joins only the user, a GroupInfo seeding the room's tree is signed by the user. The answer is the wire's: `success` (with the room's `epoch`), `wrongEpoch` (with `current_epoch`), `notAllowed` or `invalidProposal` (with a `description`). For a room on another hub the update is sent to that hub's `update` as this provider, and its answer passed on (`success` with no `epoch`; 502 when it cannot be reached). |
 | `keyMaterial` | `{request}` → `{response}` | `request` is the client's `KeyMaterialRequest` (protocol-07 §5.2) naming the room, signed with the user's MLS key; its `requestingUser` and its credential must be the user and its signature must verify (403 otherwise). The MLS signature shows the request was made with the key it names; that the request is the user's is what the lane signature on it says, as on every lane request. For a room hosted here it is answered as the provider path answers it (a user of another provider's through that provider); for a room on another hub it is sent there, the room's hub (§5.2: "MUST be sent via the hub provider of whatever room"). `response` is the `KeyMaterialResponse`. At most 30 a minute per user, and 5 an hour per user for one target user (429 `client-rate-limited`). |
 | `consent` | `{requester \| provider, room?, decision}` → `{notified}` | The user's consent (protocol-07 §8) to a requesting user fetching their KeyPackages: `decision` is `grant` or `revoke`, for any room or for `room`. It is recorded at this hub, where it gates the user's KeyPackages, replacing a pending request of the same scope; a revoke with no request is a preemptive one. A grant to a user of another provider is sent to that provider as `updateConsent`, a revoke only when the policy's `consent_revoke_notifies` says so; `notified` is whether that provider took it, and the decision stands either way. `provider` (a domain) decides for every user of that provider, for any room, only when the policy's `consent_provider_grants` is on (403 otherwise); a user's own decision is read before it. |
@@ -459,6 +461,97 @@ A refused request is a 401 `client-not-authenticated`; past 600 requests a minut
 | `consentRequests` | `{after?, limit?}` → `{requests: [{seq, requester, room?, at}]}` | The requests made of the user that are still pending, oldest first, after `seq` `after`, at most 100. A request leaves the list when the user decides, when the requester cancels, or after the policy's `consent_request_days`. |
 | `consentReceived` | `{}` → `{grants: [{target, room?, at}]}` | The grants the user holds from other users, a user of another provider's from its `updateConsent`. A revoke is never listed. |
 | `optOut` | `{}` → `{count, cleared}` | Withdraws the user's KeyPackages, as `withdrawKeyPackages`, and, unless the policy's `consent_kept_at_opt_out`, clears the user's consent decisions and the requests made of them: `count` KeyPackages, `cleared` consent records. |
+
+#### Delivering to your server: push or pull
+
+A hub with `MIMI_LANE_DELIVERY=events` keeps one stream of everything it holds for the provider's users, in place of a
+queue per user, and the provider's own server reads it, much as a mail server hands mail to a delivery agent. Each event
+has a `seq`, one more than the event before it, across every user and room: Welcomes, room messages and consent
+changes come in the order the hub took them, one ordering for the whole provider, stricter than ordering per room. The
+server reads the stream one of two ways, the same events in the same order with the same cursor either way:
+
+- **Pull.** The server opens every connection. It waits for events, fetches them, and acknowledges what it handled.
+- **Push.** The hub posts the events to the server's URL (`MIMI_EVENTS_PUSH_URL`), one batch at a time, and a `2xx`
+  acknowledges it.
+
+Which one a deployment uses is its own choice: a hub placed where it may not open connections to the provider's network
+pulls, and one that may can push. An operator can switch between them at any time: the cursor is the hub's, so nothing
+past the last acknowledged `seq` is lost or delivered twice by the switch.
+
+An event, as `events/fetch` answers it and a push posts it (`{events: [...], more}`, at most 256 events and 4 MiB of
+payload past the first event; `more` says further events were waiting):
+
+| Field | What it is |
+|---|---|
+| `seq` | Its place in the stream. |
+| `kind` | `welcome`, `message` (an MLSMessage for the room: a Commit, a proposal or an application message, as the hub took it) or `consent`. |
+| `user` | The user it is for, as a URI on this provider's domain. |
+| `room` | The room: for a message, always; for a Welcome, when the hub knew which room it joins; for a consent change, when it is for one room. |
+| `bytes` | The MLS object, base64, for `welcome` and `message`. The hub never reads it. |
+| `consent` | For `consent`: `{requester, target, room?, state}`, `state` being `requested` (for the target to decide), `granted` or `revoked` (for the requester), or `withdrawn` (a pending request its requester took back, for the target). |
+| `received_at` | When the hub took it, in Unix seconds. |
+
+Delivery is at least once: a batch is posted again if its acknowledgement is lost. The server keeps the highest `seq`
+it has handled and skips any event at or below it. Events stay until they are acknowledged. A user's backlog is bounded
+as a user's queue is (32 Welcomes, 256 messages, 256 consent changes); past it, a new item for that user is refused and
+takes no `seq`, so the stream has no gaps.
+
+**Pull.** Three provider-level calls on the lane, each signed with a lane key as the provider's server signing for
+itself: tag `mimi-client-lane-provider`, covering `@method`, `@target-uri` and `content-digest` (no user or device
+header), with the same `created`, `nonce` and age rules as a user's request. A signature for a user is not accepted on
+these routes, nor one for the provider on a user's route.
+
+| Path | Body → answer | What it does |
+|---|---|---|
+| `events/wait` | `{after_seq, timeout_ms}` → `{latest_seq, users}` | Held until an event past `after_seq` exists, then answered at once with the last `seq` and the users with events past `after_seq`; at `timeout_ms` (at most 25000) answered with no users. |
+| `events/fetch` | `{after_seq, limit}` → `{events, more}` | The events past `after_seq`, in `seq` order, left in place. |
+| `events/ack` | `{up_to_seq}` → `{acked_through}` | Takes every event up to `up_to_seq` out of the stream and moves the cursor there. The cursor only moves forward; `up_to_seq` past the last event is refused with 400 `ack-past-end`, so an acknowledgement can never skip an event written later. |
+| `info` | `{}` → `{lane_version, delivery, push}` | The lane's contract version (`1`), `inbox` or `events`, and whether the hub pushes. |
+
+A server's loop: `events/wait` from its last handled `seq`; when `latest_seq` is past it, `events/fetch`, handle the
+events in order, `events/ack` the last one; repeat.
+
+**Push.** With `MIMI_EVENTS_PUSH_URL` set, the hub posts each batch to that URL as `application/json`, signed like every
+request the hub makes (`MIMI_SIGNING_KEY`, RFC 9421, the key published at `<selector>._mimi.<domain>`; plus the client
+certificate when one is configured), so the server knows it came from its hub. One batch is in flight at a time, in
+`seq` order.
+
+- A `2xx` acknowledges through the batch's last `seq`, and the next batch follows.
+- Any other answer, or none, is retried after 1 s, doubling to at most 5 minutes, or later when the server's
+  `Retry-After` asks for it.
+- No answer causes a batch to be skipped, a `4xx` included: a skipped batch would be lost events.
+- After a restart the hub resumes from the last acknowledged `seq`.
+
+The URL's host must be the provider's domain or a subdomain of it, and its addresses pass the outbound gate
+(`MIMI_OUTBOUND_ALLOW` for a server on a private address; `MIMI_OUTBOUND_PROXY` applies too).
+
+```toml
+# The hub posts the stream to the provider's own server.
+lane_delivery = "events"
+events_push_url = "https://app.example.com/mimi-events"
+signing_key = "/etc/mimihubd/signing.key"
+signing_selector = "hub1"
+```
+
+```text
+POST /mimi-events HTTP/1.1
+Host: app.example.com
+Content-Type: application/json
+Content-Digest: sha-256=:...:
+Signature-Input: mimi=("@method" "@target-uri" "content-digest" "from");created=...;nonce="...";keyid="hub1";tag="mimi"
+Signature: mimi=:...:
+
+{"events":[{"seq":41,"kind":"welcome","user":"mimi://example.com/u/bob","room":"mimi://example.com/r/1f..","bytes":"AAEA..","received_at":1767225600},
+           {"seq":42,"kind":"message","user":"mimi://example.com/u/bob","room":"mimi://example.com/r/1f..","bytes":"AAEA..","received_at":1767225601}],
+ "more":false}
+```
+
+A pulling deployment sets `lane_delivery = "events"` and no push URL, and its server calls the routes above on the lane.
+
+With `MIMI_LANE_DELIVERY=events`, the per-user queues are not written: `inboxFetch` and `inboxAck` answer 409
+`delivery-mode`, and the operator's deliver-once `operator/welcome` and `operator/message` find nothing. A hub
+delivering per user (the default) writes no events, and the `events/*` routes answer 409 `delivery-mode`. Changing a
+running hub from one mode to the other leaves what the other mode holds where it is, so drain it first.
 
 The operator's routes are served only on the loopback listener `MIMI_ADMIN_BIND_ADDR` names, never to a peer. They are
 not MIMI routes; a peer changes a room's roster or policy through `update`.

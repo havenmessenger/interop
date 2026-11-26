@@ -34,6 +34,11 @@
 //!   MIMI_LANE_KEYS         JSON file of the service's keys ("<keyid>._mimi.client-lane": base64 Ed25519 public key)
 //!   MIMI_LANE_ROOM_POLICY  optional; TOML file of what a room the lane creates starts with (see `client_lane_rooms`);
 //!                          unset means the neutral profile. A file that is not a valid profile stops the start
+//!   MIMI_LANE_DELIVERY     optional; `inbox` (default: per-user queues, read with inboxFetch/inboxAck) or `events`
+//!                          (one provider event stream, pulled with events/wait, fetch and ack, or pushed); any other
+//!                          value stops the start
+//!   MIMI_EVENTS_PUSH_URL   optional, with MIMI_LANE_DELIVERY=events; an https URL on the provider's domain the hub
+//!                          pushes the event stream to, signed with MIMI_SIGNING_KEY (required with it)
 //!   MIMI_PEER_KEYS         optional; JSON file of DNS-published peer keys ("<keyid>._mimi.<domain>": base64), kept
 //!                          current by a job on the host; without it only a client certificate admits a peer
 //!   MIMI_OUTBOUND_ALLOW    optional; comma-separated addr/len ranges an outbound request may reach although they are
@@ -225,7 +230,36 @@ async fn main() -> anyhow::Result<()> {
     } else {
         eprintln!("[mimihubd] no MIMI_HUB_MLS_KEY: groupInfo requests are answered notAuthorized");
     }
+    let delivers_events = config::lane_delivers_events(resolved["MIMI_LANE_DELIVERY"].as_deref())?;
+    let push_url = resolved["MIMI_EVENTS_PUSH_URL"].clone();
+    if delivers_events {
+        provider = provider.with_event_delivery();
+        if push_url.is_none() && lane.is_none() {
+            anyhow::bail!(
+                "MIMI_LANE_DELIVERY=events needs a reader: the client lane (pull) or MIMI_EVENTS_PUSH_URL (push)"
+            );
+        }
+    }
+    if push_url.is_some() {
+        if !delivers_events {
+            anyhow::bail!("MIMI_EVENTS_PUSH_URL needs MIMI_LANE_DELIVERY=events");
+        }
+        if resolved["MIMI_SIGNING_KEY"].is_none() {
+            anyhow::bail!(
+                "MIMI_EVENTS_PUSH_URL needs MIMI_SIGNING_KEY: a pushed batch is signed by the hub"
+            );
+        }
+        provider = provider.with_event_push()?;
+    }
     let shared = Arc::new(Mutex::new(provider));
+    if let Some(url) = push_url.as_deref() {
+        let pusher =
+            mimihubd::event_push::EventPusher::new(shared.clone(), access.client.clone(), url)?;
+        pusher.spawn();
+        eprintln!("[mimihubd] the provider event stream is pushed to {url}");
+    } else if delivers_events {
+        eprintln!("[mimihubd] the provider event stream is read by pull on the client lane");
+    }
     let outbox = mimihubd::outbox::OutboxWorker::new(
         shared.clone(),
         access.client.clone(),

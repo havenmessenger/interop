@@ -90,7 +90,8 @@ impl Provider {
         }
         let message = message_of(&fanout.message_and_tail).unwrap_or(&fanout.message_and_tail);
         // A member whose queue refuses the message is skipped (and logged); the others still get it.
-        let (queued, _skipped) = self.queue_for_members(&members, &[message], now_unix)?;
+        let (queued, _skipped) =
+            self.queue_for_members(&members, room_uri, &[message], now_unix)?;
         Ok(FollowedDelivery::Delivered(queued))
     }
 }

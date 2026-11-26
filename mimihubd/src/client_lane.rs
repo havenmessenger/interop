@@ -56,6 +56,21 @@ pub const LANE: VerifyProfile = VerifyProfile {
     domain: SignedDomain::Fixed(KEY_DOMAIN),
 };
 
+/// What a provider-level lane request's signature must cover: the provider's server acting for itself, not for one of
+/// its users (the event stream's `events/*` and `info`). Its own tag, so a signature made for a user's request is never
+/// accepted as one made for the provider, or the other way round.
+pub const LANE_PROVIDER: VerifyProfile = VerifyProfile {
+    tag: "mimi-client-lane-provider",
+    strict_tag: true,
+    required_with_body: &["@method", "@target-uri", "content-digest"],
+    required_without_body: &["@method", "@target-uri", "content-digest"],
+    digest_always: true,
+    nonce_required: true,
+    max_age_secs: 30,
+    max_skew_secs: 30,
+    domain: SignedDomain::Fixed(KEY_DOMAIN),
+};
+
 /// Why a lane request was not accepted, beyond the signature's own refusals.
 #[derive(Debug, PartialEq, Eq)]
 pub enum LaneRefusal {
@@ -115,6 +130,29 @@ impl ClientLaneAuth {
             user: mimi_core::uri::canonical(&user),
             device,
         })
+    }
+}
+
+impl ClientLaneAuth {
+    /// Accept a provider-level lane request ([`LANE_PROVIDER`]), or say why not. Records the nonce of one that verifies.
+    pub fn verify_provider(
+        &self,
+        request: &SignedRequest<'_>,
+        now: SystemTime,
+    ) -> Result<(), LaneRefusal> {
+        let verified = verify_with(request, now, &self.keys, &LANE_PROVIDER)
+            .map_err(LaneRefusal::Signature)?;
+        if verified.created < self.started_unix {
+            return Err(LaneRefusal::BeforeStart);
+        }
+        let seconds = now
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |since| {
+                i64::try_from(since.as_secs()).unwrap_or(i64::MAX)
+            });
+        self.nonces
+            .record(&verified, seconds)
+            .map_err(LaneRefusal::Signature)
     }
 }
 

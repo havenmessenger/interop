@@ -27,6 +27,8 @@ const KNOWN_KEYS: &[&str] = &[
     "lane_key",
     "lane_keys",
     "lane_room_policy",
+    "lane_delivery",
+    "events_push_url",
     "policy",
     "public_base_url",
     "activity_log",
@@ -67,6 +69,11 @@ pub struct ConfigFile {
     pub lane_keys: Option<String>,
     /// The lane room profile (see `client_lane_rooms.rs`). Unset means the neutral profile.
     pub lane_room_policy: Option<String>,
+    /// How the hub delivers to this provider's users: `inbox` (per-user queues, the default) or `events` (the provider
+    /// event stream; see `client_lane_events.rs`).
+    pub lane_delivery: Option<String>,
+    /// Where the hub pushes the provider event stream (an https URL on the provider's domain); unset means no push.
+    pub events_push_url: Option<String>,
     /// The policy file (see `policy.rs`). Unset means the drafts' defaults.
     pub policy: Option<String>,
     pub public_base_url: Option<String>,
@@ -96,6 +103,16 @@ pub struct ConfigFile {
     pub signing_selector: Option<String>,
     /// The file holding the hub's own MLS signing key (a base64 32-byte Ed25519 seed), which signs GroupInfoResponses.
     pub hub_mls_key: Option<String>,
+}
+
+/// `MIMI_LANE_DELIVERY`: `events` delivers through the provider event stream, `inbox` or no value through per-user
+/// queues. Any other value is an error, so a mistyped setting stops the start.
+pub fn lane_delivers_events(value: Option<&str>) -> anyhow::Result<bool> {
+    match value {
+        None | Some("inbox") => Ok(false),
+        Some("events") => Ok(true),
+        Some(other) => anyhow::bail!("MIMI_LANE_DELIVERY must be inbox or events, not {other:?}"),
+    }
 }
 
 /// `MIMI_LAST_RESORT_REUSE`: `true` keeps a claimed last-resort KeyPackage to hand out again, `false` or no value hands
@@ -150,6 +167,8 @@ impl ConfigFile {
             "lane_key" => self.lane_key.as_ref(),
             "lane_keys" => self.lane_keys.as_ref(),
             "lane_room_policy" => self.lane_room_policy.as_ref(),
+            "lane_delivery" => self.lane_delivery.as_ref(),
+            "events_push_url" => self.events_push_url.as_ref(),
             "policy" => self.policy.as_ref(),
             "public_base_url" => self.public_base_url.as_ref(),
             "activity_log" => self.activity_log.as_ref(),
@@ -320,6 +339,16 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
     m.insert(
         "MIMI_LANE_ROOM_POLICY",
         resolve("MIMI_LANE_ROOM_POLICY", "lane_room_policy", file, None),
+    );
+    // No default: per-user inboxes unless an operator chooses the event stream.
+    m.insert(
+        "MIMI_LANE_DELIVERY",
+        resolve("MIMI_LANE_DELIVERY", "lane_delivery", file, None),
+    );
+    // No default: the event stream is pushed only where an operator names the provider server's URL.
+    m.insert(
+        "MIMI_EVENTS_PUSH_URL",
+        resolve("MIMI_EVENTS_PUSH_URL", "events_push_url", file, None),
     );
     // No default: without a policy file the hub follows the drafts' defaults.
     m.insert("MIMI_POLICY", resolve("MIMI_POLICY", "policy", file, None));

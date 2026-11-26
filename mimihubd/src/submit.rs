@@ -1,6 +1,11 @@
 //! Accepting an application message for a room this hub hosts, from either path: a peer's `submitMessage` for one of
 //! its users, or the client lane's for its verified user. The caller has already bound `sender` to whoever asked.
 
+use openmls::framing::MlsMessageIn;
+use openmls::group::PublicGroup;
+use openmls::prelude::tls_codec::Deserialize as _;
+use openmls::prelude::GroupId;
+
 use crate::Provider;
 
 /// What became of a submitted application message.
@@ -11,6 +16,9 @@ pub enum Acceptance {
     /// Not taken: the sender may not send here, or the message is empty or larger than one queued item. Nothing is
     /// queued.
     Refused,
+    /// Not taken: the room's tree is kept here, and the message's framing names another group, or an epoch past the
+    /// room's. Nothing is queued.
+    WrongGroup,
     /// The fan-out failed on a store error, the hub's own fault: never reported as accepted.
     Failed,
 }
@@ -43,6 +51,17 @@ impl Provider {
             eprintln!("[mimihubd] submitMessage: notAllowed (the message is empty or larger than a queued item)");
             return Acceptance::Refused;
         }
+        match self.framing_fits(room_uri, message) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[mimihubd] submitMessage: notAllowed (the framing names another group, or an epoch past the room's)");
+                return Acceptance::WrongGroup;
+            }
+            Err(error) => {
+                eprintln!("[mimihubd] submitMessage: cannot read the room's tree: {error}");
+                return Acceptance::Failed;
+            }
+        }
         let fanout = self.fan_out_application(room_uri, sender, message, now_unix);
         let outcome = if fanout.is_ok() {
             Acceptance::Accepted
@@ -51,6 +70,36 @@ impl Provider {
         };
         crate::log_fanout("application message", room_uri, fanout);
         outcome
+    }
+}
+
+impl Provider {
+    /// Whether `message`'s cleartext framing fits `room_uri`. In a room whose tree the hub keeps, it must be an MLS
+    /// message naming the room's group, at an epoch no later than the room's: a member routes an incoming message to a
+    /// chat by its group id, and treats one from a later epoch as a sign it missed a Commit, so a message framed for
+    /// another group, or for an epoch the room has not reached, must not reach any member. An earlier epoch is let
+    /// through: a message sent just before a Commit the hub took first is still one its members can read. No message is
+    /// decrypted; a room whose tree the hub does not keep has no group to compare with, and is not checked.
+    pub fn framing_fits(&self, room_uri: &str, message: &[u8]) -> anyhow::Result<bool> {
+        let Some(tracking) = self.store.room_tree(room_uri)? else {
+            return Ok(true);
+        };
+        let Some(framing) = MlsMessageIn::tls_deserialize_exact(message)
+            .ok()
+            .and_then(|message| message.try_into_protocol_message().ok())
+        else {
+            return Ok(false);
+        };
+        if framing.group_id().as_slice() != tracking.group_id.as_slice() {
+            return Ok(false);
+        }
+        let groups = self.store.groups();
+        let Some(group) = PublicGroup::load(&groups, &GroupId::from_slice(&tracking.group_id))
+            .map_err(|error| anyhow::anyhow!("the room's group: {error:?}"))?
+        else {
+            anyhow::bail!("a tracked room with no stored group");
+        };
+        Ok(framing.epoch() <= group.group_context().epoch())
     }
 }
 

@@ -594,7 +594,9 @@ async fn submit_message_wire(
             crate::submit::Acceptance::Accepted => SubmitMessageResponse::Accepted {
                 accepted_timestamp: now_unix_millis(),
             },
-            crate::submit::Acceptance::Refused => SubmitMessageResponse::NotAllowed,
+            crate::submit::Acceptance::Refused | crate::submit::Acceptance::WrongGroup => {
+                SubmitMessageResponse::NotAllowed
+            }
             crate::submit::Acceptance::Failed => return crate::problem::INTERNAL_ERROR.response(),
         };
     (StatusCode::OK, outcome.encode()).into_response()
@@ -1232,6 +1234,12 @@ mod client_lane_tests;
 #[cfg(test)]
 #[path = "http_client_lane_two_hubs_tests.rs"]
 mod client_lane_two_hubs_tests;
+#[cfg(test)]
+#[path = "http_events_parity_tests.rs"]
+mod events_parity_tests;
+#[cfg(test)]
+#[path = "http_events_tests.rs"]
+mod events_tests;
 #[cfg(test)]
 #[path = "http_key_material_binding_tests.rs"]
 mod key_material_binding_tests;

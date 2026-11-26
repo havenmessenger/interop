@@ -6,6 +6,19 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimihubd`: the provider event stream, a second way for the client lane to deliver (`MIMI_LANE_DELIVERY=events`;
+  per-user inboxes stay the default and are unchanged). Welcomes, room messages and consent changes for every user of
+  the provider go into one sequence, numbered by `seq` without gaps. The provider's server reads it by pull
+  (`events/wait`, `events/fetch`, `events/ack` on the lane, signed for the provider with the tag
+  `mimi-client-lane-provider`) or has the hub push it (`MIMI_EVENTS_PUSH_URL`: signed batches, one in flight, retried
+  until a `2xx`, resumed from the acknowledged cursor after a restart). Both transports share one cursor, so an operator
+  can switch between them without losing or repeating an event. A test plays one scenario through both and requires the
+  same events from each. The lane's `info` states its contract version (`1`) and how the hub delivers. Two new problem
+  types: `delivery-mode` and `ack-past-end`. The store gains the `events` and `event_cursor` tables.
+- `mimihubd`: in a room whose tree the hub keeps, `submitMessage` refuses a message whose MLS framing names another
+  group, or an epoch the room has not reached (`group-mismatch` on the lane, `notAllowed` on the provider path). Members
+  route an incoming message by its group id, and read a later epoch as a missed Commit, so such a message reaches no
+  one. A message from an earlier epoch is still taken.
 - `mimihubd`: a Welcome in the client lane's inbox names the room it joins (`inboxFetch`'s `room`): the room this hub
   fanned it out for, or the room a hub's `notify` named. A Welcome queued before this, or by the compatibility lane's
   relay, names none. The `welcomes` table gains a `room` column, added when an older store is opened.

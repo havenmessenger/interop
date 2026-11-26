@@ -84,6 +84,41 @@ retry, with a fresh signature.
 The client lane takes a bounded number of requests per user per minute, a backstop to the client-facing service's own
 limits. Retry after a minute.
 
+## delivery-mode
+
+| field | value |
+|---|---|
+| `type` | `https://github.com/havenmessenger/interop/blob/main/docs/problems.md#delivery-mode` |
+| `title` | This hub delivers the other way |
+| `status` | 409 |
+
+The hub's operator chose how the client lane delivers: per-user inboxes (`inboxFetch`, `inboxAck`) or the provider event
+stream (`events/wait`, `events/fetch`, `events/ack`, or push). The call belongs to the mode the hub is not in. The
+lane's `info` call says which mode it is in.
+
+## ack-past-end
+
+| field | value |
+|---|---|
+| `type` | `https://github.com/havenmessenger/interop/blob/main/docs/problems.md#ack-past-end` |
+| `title` | The acknowledgement is past the last event |
+| `status` | 400 |
+
+An `events/ack` named a `seq` later than the last event the hub has written. Nothing was acknowledged: an
+acknowledgement can only cover events that exist, so it can never skip one written later.
+
+## group-mismatch
+
+| field | value |
+|---|---|
+| `type` | `https://github.com/havenmessenger/interop/blob/main/docs/problems.md#group-mismatch` |
+| `title` | The message is framed for another group |
+| `status` | 400 |
+
+A `submitMessage` for a room whose tree the hub keeps carried an MLS message whose cleartext framing names a group other
+than the room's, or an epoch the room has not reached. Members route a message to a chat by its group id and read a
+later epoch as a missed Commit, so such a message is delivered to no one. A message from an earlier epoch is taken.
+
 ## key-material-rate-limited
 
 | field | value |

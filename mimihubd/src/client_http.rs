@@ -56,6 +56,8 @@ impl UserCap {
 
 #[path = "client_http_consent.rs"]
 mod consent;
+#[path = "client_http_events.rs"]
+mod events;
 
 #[derive(Clone)]
 struct LaneState {
@@ -104,7 +106,53 @@ pub fn build_client_router(
         )
         .route("/mimi/client/v1/optOut", post(consent::opt_out))
         .layer(middleware::from_fn_with_state(state.clone(), gate))
+        .merge(events::router(state.clone()))
         .with_state(state)
+}
+
+/// Run `check` on the request as its signature sees it: the method, the target URI, the headers and the body.
+fn with_signed_request<R>(
+    parts: &axum::http::request::Parts,
+    body: &Bytes,
+    check: impl FnOnce(&SignedRequest<'_>) -> R,
+) -> R {
+    let host = parts
+        .uri
+        .authority()
+        .map(|a| a.as_str().to_string())
+        .or_else(|| {
+            parts
+                .headers
+                .get(axum::http::header::HOST)
+                .and_then(|h| h.to_str().ok())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    let path_and_query = parts
+        .uri
+        .path_and_query()
+        .map(|p| p.as_str())
+        .unwrap_or("/");
+    let target_uri = format!("https://{host}{path_and_query}");
+    let headers = parts.headers.clone();
+    let header = move |name: &str| -> Option<String> {
+        let values: Vec<&str> = headers
+            .get_all(name)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .map(str::trim)
+            .collect();
+        (!values.is_empty()).then(|| values.join(", "))
+    };
+    check(&SignedRequest {
+        method: parts.method.as_str(),
+        target_uri: &target_uri,
+        authority: &host,
+        path: parts.uri.path(),
+        query: parts.uri.query(),
+        header: &header,
+        body,
+    })
 }
 
 /// Authenticate the request for one user, or answer 401; then hold the user to the per-user cap.
@@ -113,48 +161,9 @@ async fn gate(State(state): State<LaneState>, request: Request, next: Next) -> R
     let Ok(body) = axum::body::to_bytes(body, MAX_LANE_BODY).await else {
         return crate::problem::BODY_TOO_LARGE.response();
     };
-    let verdict = {
-        let host = parts
-            .uri
-            .authority()
-            .map(|a| a.as_str().to_string())
-            .or_else(|| {
-                parts
-                    .headers
-                    .get(axum::http::header::HOST)
-                    .and_then(|h| h.to_str().ok())
-                    .map(str::to_string)
-            })
-            .unwrap_or_default();
-        let path_and_query = parts
-            .uri
-            .path_and_query()
-            .map(|p| p.as_str())
-            .unwrap_or("/");
-        let target_uri = format!("https://{host}{path_and_query}");
-        let headers = parts.headers.clone();
-        let header = move |name: &str| -> Option<String> {
-            let values: Vec<&str> = headers
-                .get_all(name)
-                .iter()
-                .filter_map(|v| v.to_str().ok())
-                .map(str::trim)
-                .collect();
-            (!values.is_empty()).then(|| values.join(", "))
-        };
-        state.auth.verify(
-            &SignedRequest {
-                method: parts.method.as_str(),
-                target_uri: &target_uri,
-                authority: &host,
-                path: parts.uri.path(),
-                query: parts.uri.query(),
-                header: &header,
-                body: &body,
-            },
-            SystemTime::now(),
-        )
-    };
+    let verdict = with_signed_request(&parts, &body, |request| {
+        state.auth.verify(request, SystemTime::now())
+    });
     let user = match verdict {
         Ok(user) => user,
         Err(refusal) => {
@@ -308,6 +317,9 @@ async fn inbox_fetch(
     let Some(request) = parse::<FetchRequest>(&body) else {
         return crate::problem::MALFORMED_REQUEST.response();
     };
+    if crate::http::lock(&state.provider).delivers_events() {
+        return crate::problem::DELIVERY_MODE.response();
+    }
     let page = match crate::http::lock(&state.provider).lane_inbox(
         &user.user,
         request.after_welcome,
@@ -360,6 +372,9 @@ async fn inbox_ack(
     let Some(request) = parse::<AckRequest>(&body) else {
         return crate::problem::MALFORMED_REQUEST.response();
     };
+    if crate::http::lock(&state.provider).delivers_events() {
+        return crate::problem::DELIVERY_MODE.response();
+    }
     match crate::http::lock(&state.provider).lane_ack(
         &user.user,
         request.welcomes_up_to,
@@ -457,6 +472,7 @@ async fn submit_message(
     ) {
         crate::submit::Acceptance::Accepted => Json(Empty {}).into_response(),
         crate::submit::Acceptance::Refused => crate::problem::NOT_PERMITTED.response(),
+        crate::submit::Acceptance::WrongGroup => crate::problem::GROUP_MISMATCH.response(),
         crate::submit::Acceptance::Failed => crate::problem::INTERNAL_ERROR.response(),
     }
 }
