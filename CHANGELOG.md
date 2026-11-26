@@ -10,7 +10,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   a time. It creates a room's group from a lane `createRoom` answer, makes a Commit that adds a member to the group and
   the participant list together (with a Full GroupInfo and the tree, as a room's first Commit needs), lets the joiner
   join from its Welcome, and makes application messages. A walk submits them through its own lane client, for example
-  to see a room's policy refuse an add from a member whose role may not add.
+  to see a room's policy refuse an add from a member whose role may not add. For a member of another provider it also
+  makes a KeyPackage to publish there, a signed keyMaterial request (protocol-07 §5.2), and the join from the Welcome
+  that provider delivers. Handshake messages go out as PublicMessage, application messages as PrivateMessage.
 - `mimihubd-api`, a new library crate: the client lane, version 1, for a provider's own server. It has the request and
   answer types (the event stream's among them), the request signatures of both lane profiles and of the provider (RFC
   9421, Ed25519), and the check of an event batch the hub pushed. It is synchronous and links no HTTP stack or

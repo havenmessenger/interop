@@ -4,7 +4,9 @@
 //! certificate, and each answer handled as the worker does (`201` delivered, a refusal for good dropped).
 //!
 //! A claims Bob's KeyPackage from B here by recording the claim, as A's keyMaterial client does when it fetches one from
-//! another provider (`associate_claimed_keypackage`); the lane's own keyMaterial for a remote user is not built yet.
+//! another provider (`associate_claimed_keypackage`), so this test stays in one process. The lane's own keyMaterial
+//! sends a request for a remote user on to that user's provider (`client_lane_relay.rs`), tested in
+//! `http_client_lane_relay_peer_tests.rs`.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};

@@ -4,18 +4,30 @@
 //!
 //! ```text
 //! {"op":"create","room":"<room URI>","creator":"<user URI>","creator_role":2,"components":[{"id":1,"data":"<b64>"}]}
-//! {"op":"add","by":"<user URI>","joiner":"<user URI>","role":3}   -> {"ok":true,"bytes":"<UpdateRequest, b64>"}
+//! {"op":"add","by":"<user URI>","joiner":"<user URI>","role":3}   -> {"ok":true,"bytes":"<UpdateRequest, b64>",
+//!                                                                     "commit":"<the Commit alone, b64>"}
 //! {"op":"accepted","by":"<user URI>"}   the hub took by's pending Commit: merge it, and let its joiner join
 //! {"op":"refused","by":"<user URI>"}    the hub refused it: clear it
 //! {"op":"message","by":"<user URI>","text":"..."}                 -> {"ok":true,"bytes":"<MLSMessage, b64>"}
+//! {"op":"key_package","user":"<user URI>"}                          -> {"ok":true,"bytes":"<KeyPackage, b64>"}
+//! {"op":"km_request","by":"<user URI>","target":"<user URI>","room":"<room URI>"} -> a signed KeyMaterialRequest
+//! {"op":"km_response","joiner":"<user URI>","response":"<b64>"}    the KeyPackage a keyMaterial answer gave, for an add
+//! {"op":"join","user":"<user URI>","welcome":"<b64>"}              join from a Welcome a member's provider delivered
 //! ```
+//!
+//! An `accepted` with `"remote": true` settles an add whose joiner is a member of another provider: it joins later, from
+//! the Welcome its own provider delivers (`join`). The group carries its ratchet tree in the Welcome, so a joiner needs
+//! nothing else.
 //!
 //! The room's group starts as the hub's `createRoom` answer says: its app data components, and a participant list
 //! naming the creator in `creator_role`. An `add` is one Commit adding the joiner's client and the joiner to the
 //! participant list together, sent with a Full GroupInfo and the full ratchet tree, as a room's first Commit must be to
-//! give the hub its tree. A member who is not in the group yet joins from the Welcome of the Commit that added it. Every
-//! message is sent as a PublicMessage (the hub reads a Commit's changes); a refused Commit's committer is dropped from
-//! the lab, since it applied its Commit before the hub answered.
+//! give the hub its tree. A member who is not in the group yet joins from the Welcome of the Commit that added it. A
+//! refused Commit's committer is dropped from the lab, since it applied its Commit before the hub answered.
+//!
+//! Wire formats (RFC 9420 §6): handshake messages go out as PublicMessage, so the hub can read a Commit's changes, and
+//! application messages as PrivateMessage, which openmls's `create_message` always produces; a member takes either in.
+//! The groups' policy is openmls's `MIXED_PLAINTEXT_WIRE_FORMAT_POLICY` for that reason.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -27,7 +39,7 @@ use mimi_core::participant_list::{
     ParticipantListUpdate, UserRolePair,
 };
 use mimi_core::protocol_wire::{GroupInfoOption, GroupInfoRepresentation, HandshakeBundle};
-use openmls::prelude::tls_codec::Serialize as _;
+use openmls::prelude::tls_codec::{Deserialize as _, Serialize as _};
 use openmls::prelude::*;
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::signatures::{Signer, SignerError};
@@ -119,6 +131,8 @@ fn list(pairs: &[(String, u32)]) -> Result<Vec<u8>, String> {
 struct Lab {
     members: HashMap<String, Member>,
     listed: Vec<(String, u32)>,
+    /// KeyPackages a keyMaterial answer gave, by the user they are for, for that user's add.
+    fetched: HashMap<String, KeyPackage>,
 }
 
 impl Lab {
@@ -149,7 +163,8 @@ impl Lab {
         let _ = dictionary.insert(PARTICIPANT_LIST_COMPONENT, list(&self.listed)?);
         let config = MlsGroupCreateConfig::builder()
             .ciphersuite(SUITE)
-            .wire_format_policy(PURE_PLAINTEXT_WIRE_FORMAT_POLICY)
+            .wire_format_policy(MIXED_PLAINTEXT_WIRE_FORMAT_POLICY)
+            .use_ratchet_tree_extension(true)
             .capabilities(capabilities())
             .with_group_context_extensions(
                 Extensions::single(Extension::AppDataDictionary(
@@ -176,7 +191,10 @@ impl Lab {
         let joiner = text(request, "joiner")?;
         let role =
             u32::try_from(request["role"].as_u64().ok_or("role")?).map_err(|e| e.to_string())?;
-        let key_package = self.member(&joiner)?.key_package()?;
+        let key_package = match self.fetched.remove(&joiner) {
+            Some(fetched) => fetched,
+            None => self.member(&joiner)?.key_package()?,
+        };
         let mut after = self.listed.clone();
         after.push((joiner.clone(), role));
         let list_after = list(&after)?;
@@ -254,7 +272,11 @@ impl Lab {
         .encode()
         .map_err(|e| format!("{e:?}"))?;
         member.pending = Some((welcome, joiner, role));
-        Ok(json!({"ok": true, "bytes": STANDARD.encode(bundle)}))
+        Ok(
+            json!({"ok": true, "bytes": STANDARD.encode(bundle), "commit": STANDARD.encode(
+                commit.tls_serialize_detached().map_err(|e| format!("{e:?}"))?
+            )}),
+        )
     }
 
     /// The hub took `by`'s Commit: its group is already at the new epoch; the joiner joins from the Welcome.
@@ -262,6 +284,10 @@ impl Lab {
         let by = text(request, "by")?;
         let member = self.member(&by)?;
         let (welcome, joiner, role) = member.pending.take().ok_or("nothing pending")?;
+        if request["remote"].as_bool() == Some(true) {
+            self.listed.push((joiner, role));
+            return Ok(json!({"ok": true, "listed": self.listed.len()}));
+        }
         let tree = member
             .group
             .as_ref()
@@ -271,7 +297,7 @@ impl Lab {
         let group = StagedWelcome::new_from_welcome(
             &joining.provider,
             &MlsGroupJoinConfig::builder()
-                .wire_format_policy(PURE_PLAINTEXT_WIRE_FORMAT_POLICY)
+                .wire_format_policy(MIXED_PLAINTEXT_WIRE_FORMAT_POLICY)
                 .build(),
             welcome,
             Some(tree.into()),
@@ -294,6 +320,88 @@ impl Lab {
         Ok(
             json!({"ok": true, "note": "the committer's group is dropped: it moved on without the hub"}),
         )
+    }
+
+    /// A KeyPackage for `user`, its private keys kept here for the join, to publish through its provider.
+    fn key_package(&mut self, request: &Value) -> Result<Value, String> {
+        let user = text(request, "user")?;
+        let key_package = self.member(&user)?.key_package()?;
+        Ok(json!({"ok": true, "bytes": STANDARD.encode(
+            key_package.tls_serialize_detached().map_err(|e| format!("{e:?}"))?
+        )}))
+    }
+
+    /// `by`'s keyMaterial request for `target` in `room` (protocol-07 §5.2), signed with `by`'s MLS key.
+    fn km_request(&mut self, request: &Value) -> Result<Value, String> {
+        let by = text(request, "by")?;
+        let target = text(request, "target")?;
+        let room = text(request, "room")?;
+        let member = self.member(&by)?;
+        let mut km = mimi_core::protocol_wire::KeyMaterialRequest::minimal(&by, &target)
+            .map_err(|e| format!("{e:?}"))?;
+        km.room_id = mimi_core::protocol_wire::IdentifierUri(room);
+        km.requester_signature_key = member.credential.signature_key.clone();
+        km.requester_credential = member.credential.credential.clone();
+        km.sign(&member.signer).map_err(|e| format!("{e:?}"))?;
+        Ok(
+            json!({"ok": true, "bytes": STANDARD.encode(km.encode().map_err(|e| format!("{e:?}"))?)}),
+        )
+    }
+
+    /// Read a keyMaterial answer: keep the KeyPackage it gave for `joiner`'s add.
+    fn km_response(&mut self, request: &Value) -> Result<Value, String> {
+        let joiner = text(request, "joiner")?;
+        let bytes = STANDARD
+            .decode(text(request, "response")?)
+            .map_err(|e| e.to_string())?;
+        let response = mimi_core::protocol_wire::KeyMaterialResponse::decode(&bytes, &[0x0001])
+            .map_err(|e| format!("{e:?}"))?;
+        let mimi_core::protocol_wire::KeyMaterialResponse::Success { key_package, .. } = response
+        else {
+            return Err(format!("no KeyPackage: {response:?}"));
+        };
+        let key_package_in = KeyPackageIn::tls_deserialize_exact(key_package.as_slice())
+            .map_err(|e| format!("{e:?}"))?;
+        let validated = key_package_in
+            .validate(
+                OpenMlsRustCrypto::default().crypto(),
+                ProtocolVersion::Mls10,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        self.fetched.insert(joiner, validated);
+        Ok(json!({"ok": true}))
+    }
+
+    /// `user` joins from a Welcome its provider delivered (bare, or as an MLSMessage).
+    fn join(&mut self, request: &Value) -> Result<Value, String> {
+        let user = text(request, "user")?;
+        let bytes = STANDARD
+            .decode(text(request, "welcome")?)
+            .map_err(|e| e.to_string())?;
+        let welcome = match MlsMessageIn::tls_deserialize_exact(bytes.as_slice()) {
+            Ok(message) => match message.extract() {
+                MlsMessageBodyIn::Welcome(welcome) => welcome,
+                _ => return Err("not a Welcome".into()),
+            },
+            Err(_) => {
+                Welcome::tls_deserialize_exact(bytes.as_slice()).map_err(|e| format!("{e:?}"))?
+            }
+        };
+        let joining = self.member(&user)?;
+        let group = StagedWelcome::new_from_welcome(
+            &joining.provider,
+            &MlsGroupJoinConfig::builder()
+                .wire_format_policy(MIXED_PLAINTEXT_WIRE_FORMAT_POLICY)
+                .build(),
+            welcome,
+            None,
+        )
+        .map_err(|e| format!("{e:?}"))?
+        .into_group(&joining.provider)
+        .map_err(|e| format!("{e:?}"))?;
+        let epoch = group.epoch().as_u64();
+        joining.group = Some(group);
+        Ok(json!({"ok": true, "epoch": epoch}))
     }
 
     fn message(&mut self, request: &Value) -> Result<Value, String> {
@@ -321,6 +429,7 @@ fn main() {
     let mut lab = Lab {
         members: HashMap::new(),
         listed: Vec::new(),
+        fetched: HashMap::new(),
     };
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
@@ -333,6 +442,10 @@ fn main() {
                 Some("accepted") => lab.accepted(&request),
                 Some("refused") => lab.refused(&request),
                 Some("message") => lab.message(&request),
+                Some("key_package") => lab.key_package(&request),
+                Some("km_request") => lab.km_request(&request),
+                Some("km_response") => lab.km_response(&request),
+                Some("join") => lab.join(&request),
                 other => Err(format!("unknown op {other:?}")),
             },
             Err(error) => Err(error.to_string()),
