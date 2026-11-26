@@ -119,6 +119,18 @@ A `submitMessage` for a room whose tree the hub keeps carried an MLS message who
 than the room's, or an epoch the room has not reached. Members route a message to a chat by its group id and read a
 later epoch as a missed Commit, so such a message is delivered to no one. A message from an earlier epoch is taken.
 
+## not-an-application-message
+
+| field | value |
+|---|---|
+| `type` | `https://github.com/havenmessenger/interop/blob/main/docs/problems.md#not-an-application-message` |
+| `title` | Not an application message |
+| `status` | 400 |
+
+A `submitMessage` carried something other than an application message as RFC 9420 §6 has one: an MLSMessage carrying a
+PrivateMessage whose content type is `application`. A PublicMessage, a Commit, a proposal, or bytes that are no MLS
+message are refused and delivered to no one. A Commit or a proposal goes to `update`.
+
 ## key-material-rate-limited
 
 | field | value |

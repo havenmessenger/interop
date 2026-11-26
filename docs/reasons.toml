@@ -63,6 +63,15 @@ divergence = "DIV-19"
 reason = "An event stream acknowledgement names a seq past the last event written, which would skip events not yet written."
 
 [[reason]]
+id = "not-an-application-message"
+surfaces_as = "problem not-an-application-message, 400"
+spec = "RFC 9420"
+section = "6"
+quote = "Applications MUST use PrivateMessage to encrypt application messages"
+divergence = ""
+reason = "A submitMessage that is not a PrivateMessage carrying application content: a PublicMessage, a handshake message, or bytes that are no MLS message."
+
+[[reason]]
 id = "group-mismatch"
 surfaces_as = "problem group-mismatch, 400"
 spec = "local"

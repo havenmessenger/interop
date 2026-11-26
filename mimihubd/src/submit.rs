@@ -1,10 +1,10 @@
 //! Accepting an application message for a room this hub hosts, from either path: a peer's `submitMessage` for one of
 //! its users, or the client lane's for its verified user. The caller has already bound `sender` to whoever asked.
 
-use openmls::framing::MlsMessageIn;
+use openmls::framing::{MlsMessageIn, WireFormat};
 use openmls::group::PublicGroup;
 use openmls::prelude::tls_codec::Deserialize as _;
-use openmls::prelude::GroupId;
+use openmls::prelude::{ContentType, GroupId};
 
 use crate::Provider;
 
@@ -19,6 +19,10 @@ pub enum Acceptance {
     /// Not taken: the room's tree is kept here, and the message's framing names another group, or an epoch past the
     /// room's. Nothing is queued.
     WrongGroup,
+    /// Not taken: the message is not an application message as RFC 9420 §6 has one, a PrivateMessage carrying
+    /// application content (a PublicMessage, a Commit or a proposal, or bytes that are no MLS message). Nothing is
+    /// queued.
+    NotApplication,
     /// The fan-out failed on a store error, the hub's own fault: never reported as accepted.
     Failed,
 }
@@ -51,6 +55,10 @@ impl Provider {
             eprintln!("[mimihubd] submitMessage: notAllowed (the message is empty or larger than a queued item)");
             return Acceptance::Refused;
         }
+        if !is_application_message(message) {
+            eprintln!("[mimihubd] submitMessage: notAllowed (not a PrivateMessage carrying application content)");
+            return Acceptance::NotApplication;
+        }
         match self.framing_fits(room_uri, message) {
             Ok(true) => {}
             Ok(false) => {
@@ -71,6 +79,20 @@ impl Provider {
         crate::log_fanout("application message", room_uri, fanout);
         outcome
     }
+}
+
+/// Whether `message` is an application message as RFC 9420 §6 has one: an MLSMessage carrying a PrivateMessage whose
+/// content type, which its framing carries in the clear, is `application`. "Applications MUST use PrivateMessage to
+/// encrypt application messages"; a handshake message (a Commit, a proposal) goes to `update`, not here. Nothing is
+/// decrypted.
+pub fn is_application_message(message: &[u8]) -> bool {
+    MlsMessageIn::tls_deserialize_exact(message)
+        .ok()
+        .and_then(|message| message.try_into_protocol_message().ok())
+        .is_some_and(|framing| {
+            framing.wire_format() == WireFormat::PrivateMessage
+                && framing.content_type() == ContentType::Application
+        })
 }
 
 impl Provider {

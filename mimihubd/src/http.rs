@@ -594,9 +594,9 @@ async fn submit_message_wire(
             crate::submit::Acceptance::Accepted => SubmitMessageResponse::Accepted {
                 accepted_timestamp: now_unix_millis(),
             },
-            crate::submit::Acceptance::Refused | crate::submit::Acceptance::WrongGroup => {
-                SubmitMessageResponse::NotAllowed
-            }
+            crate::submit::Acceptance::Refused
+            | crate::submit::Acceptance::WrongGroup
+            | crate::submit::Acceptance::NotApplication => SubmitMessageResponse::NotAllowed,
             crate::submit::Acceptance::Failed => return crate::problem::INTERNAL_ERROR.response(),
         };
     (StatusCode::OK, outcome.encode()).into_response()
@@ -1261,6 +1261,9 @@ mod peer_deposit_tests;
 #[cfg(test)]
 #[path = "http_peer_path_users_tests.rs"]
 mod peer_path_users_tests;
+#[cfg(test)]
+#[path = "http_private_only_tests.rs"]
+mod private_only_tests;
 #[cfg(test)]
 #[path = "http_problem_tests.rs"]
 mod problem_tests;

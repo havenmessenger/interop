@@ -206,13 +206,22 @@ pub const GROUP_MISMATCH: ProblemType = ProblemType {
     detail: "Its MLS framing names a group other than the room's, or an epoch past the room's. Nothing was delivered.",
 };
 
+/// A message for a room that is not an application message: not a PrivateMessage carrying application content.
+pub const NOT_AN_APPLICATION_MESSAGE: ProblemType = ProblemType {
+    anchor: "not-an-application-message",
+    title: "Not an application message",
+    status: StatusCode::BAD_REQUEST,
+    detail: "submitMessage takes a PrivateMessage carrying application content (RFC 9420 §6). A Commit or a proposal goes to update.",
+};
+
 /// Every problem type, for the page check and the fallback.
-pub const ALL: [&ProblemType; 22] = [
+pub const ALL: [&ProblemType; 23] = [
     &CLIENT_NOT_AUTHENTICATED,
     &CLIENT_RATE_LIMITED,
     &DELIVERY_MODE,
     &ACK_PAST_END,
     &GROUP_MISMATCH,
+    &NOT_AN_APPLICATION_MESSAGE,
     &KEY_MATERIAL_RATE_LIMITED,
     &NO_LOCAL_MEMBER,
     &MALFORMED_REQUEST,

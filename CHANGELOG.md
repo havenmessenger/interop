@@ -6,6 +6,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimihubd`: `submitMessage`, on the wire and on the client lane, takes only an application message as RFC 9420 §6
+  has one, a PrivateMessage whose content type is `application`, read from its framing without decrypting. A
+  PublicMessage, a Commit or a proposal, or bytes that are no MLS message are refused and reach no one (`notAllowed` on
+  the wire, 400 `not-an-application-message` on the lane), in every room, its tree kept or not.
 - `mimihubd/examples/mls_lab.rs`: an MLS client for lab walks against a hub, driven over stdin/stdout one JSON line at
   a time. It creates a room's group from a lane `createRoom` answer, makes a Commit that adds a member to the group and
   the participant list together (with a Full GroupInfo and the tree, as a room's first Commit needs), lets the joiner

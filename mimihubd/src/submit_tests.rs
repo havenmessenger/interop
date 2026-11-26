@@ -1,6 +1,9 @@
 //! A room takes every message its members may send, however many: nothing collects under the room itself, so its
 //! members' own queues are what bound delivery.
 
+use openmls::prelude::tls_codec::Deserialize as _;
+use openmls::prelude::{ContentType, MlsMessageIn};
+
 use super::Acceptance;
 use crate::Provider;
 
@@ -22,15 +25,16 @@ fn room_of(members: &[&str]) -> Provider {
 #[test]
 fn a_room_takes_more_messages_than_a_queue_holds_while_its_members_read_them() {
     let p = room_of(&[ALICE, DAVE]);
+    let mut sender = crate::mls_fixtures::Sender::new();
     let count = u64::try_from(crate::store::MAX_QUEUE_MESSAGES).unwrap() + 44;
     for n in 0..count {
-        let body = format!("m{n}");
+        let body = sender.message(format!("m{n}").as_bytes());
         assert_eq!(
-            p.accept_application_message(ROOM, ALICE, body.as_bytes(), 10 + n),
+            p.accept_application_message(ROOM, ALICE, &body, 10 + n),
             Acceptance::Accepted,
             "PLANT-ROOM-QUEUE: message {n} of {count} was refused"
         );
-        assert_eq!(p.fetch_message(DAVE).unwrap(), Some(body.into_bytes()));
+        assert_eq!(p.fetch_message(DAVE).unwrap(), Some(body));
     }
     assert!(
         p.fetch_message(ROOM).unwrap().is_none(),
@@ -53,7 +57,13 @@ fn an_empty_or_oversize_message_is_refused_and_reaches_no_one() {
     );
     assert!(p.fetch_message(DAVE).unwrap().is_none());
     assert_eq!(
-        p.accept_application_message(ROOM, ALICE, &vec![7u8; crate::store::MAX_ITEM_BYTES], 12),
+        p.accept_application_message(
+            ROOM,
+            ALICE,
+            &crate::mls_fixtures::Sender::new()
+                .message(&vec![7u8; crate::store::MAX_ITEM_BYTES - 1024]),
+            12
+        ),
         Acceptance::Accepted
     );
 }
@@ -77,7 +87,12 @@ fn a_fan_out_store_error_is_a_failure_not_an_acceptance() {
     let p = room_of(&[ALICE, DAVE]);
     p.store.break_message_queue_for_test();
     assert_eq!(
-        p.accept_application_message(ROOM, ALICE, b"hello", 10),
+        p.accept_application_message(
+            ROOM,
+            ALICE,
+            &crate::mls_fixtures::Sender::new().message(b"hello"),
+            10
+        ),
         Acceptance::Failed,
         "PLANT-ROOM-FANOUT-ERROR: a message nothing queued was not reported as the hub's failure"
     );
@@ -167,7 +182,7 @@ fn a_tracked_room_takes_only_messages_framed_for_its_group() {
     );
     assert_eq!(
         p.accept_application_message(ROOM, PEER_ALICE, b"not an MLS message", 13),
-        Acceptance::WrongGroup
+        Acceptance::NotApplication
     );
     assert_eq!(fanned_out(&p), 1, "nothing more went out");
 }
@@ -177,7 +192,55 @@ fn a_tracked_room_takes_only_messages_framed_for_its_group() {
 fn an_untracked_room_is_not_framing_checked() {
     let p = room_of(&[ALICE, DAVE]);
     assert_eq!(
-        p.accept_application_message(ROOM, ALICE, b"opaque", 10),
+        p.accept_application_message(
+            ROOM,
+            ALICE,
+            &crate::mls_fixtures::Sender::new().message(b"opaque"),
+            10
+        ),
+        Acceptance::Accepted
+    );
+}
+
+/// Only a PrivateMessage carrying application content is an application message (RFC 9420 §6): a PublicMessage with
+/// application content, a Commit, and bytes that are no MLS message are refused and reach no one, in any room. Revert
+/// check: skip the check, and the PublicMessage is delivered.
+#[test]
+fn only_a_private_message_carrying_application_content_is_taken() {
+    let p = room_of(&[ALICE, DAVE]);
+    let public = crate::mls_fixtures::public_application_message(b"mimi://example.com/g/room", 0);
+    assert!(
+        MlsMessageIn::tls_deserialize_exact(public.as_slice())
+            .ok()
+            .and_then(|m| m.try_into_protocol_message().ok())
+            .is_some_and(|m| m.content_type() == ContentType::Application),
+        "the hand-built PublicMessage is well-formed, with application content"
+    );
+    assert_eq!(
+        p.accept_application_message(ROOM, ALICE, &public, 10),
+        Acceptance::NotApplication,
+        "PLANT-PRIVATE-ONLY: a PublicMessage was taken as an application message"
+    );
+    let alice = crate::mls_fixtures::Member::new(PEER_ALICE);
+    let dave = crate::mls_fixtures::Member::new(PEER_DAVE);
+    let mut group = alice.create_group(b"mimi://example.com/g/room");
+    let (commit, _, _) = crate::mls_fixtures::add_commit(&mut group, &alice, &[&dave]);
+    assert_eq!(
+        p.accept_application_message(ROOM, ALICE, &commit, 11),
+        Acceptance::NotApplication,
+        "a Commit is not an application message"
+    );
+    assert_eq!(
+        p.accept_application_message(ROOM, ALICE, b"not an MLS message", 12),
+        Acceptance::NotApplication
+    );
+    assert!(
+        p.fetch_message(DAVE).unwrap().is_none(),
+        "nothing reached Dave"
+    );
+    let private = crate::mls_fixtures::Sender::new().message(b"hello");
+    assert_eq!(
+        p.accept_application_message(ROOM, ALICE, &private, 13),
         Acceptance::Accepted
     );
 }

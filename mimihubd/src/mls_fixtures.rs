@@ -270,3 +270,51 @@ pub(crate) fn group_info_after(group: &MlsGroup, by: &Member) -> Vec<u8> {
         other => panic!("not a GroupInfo: {other:?}"),
     }
 }
+
+/// One member's own group, for tests that need real application messages (PrivateMessages) and no particular room.
+pub(crate) struct Sender {
+    member: Member,
+    group: MlsGroup,
+}
+
+impl Sender {
+    pub(crate) fn new() -> Self {
+        let member = Member::new("mimi://example.com/u/sender");
+        let group = member.create_group(b"mimi://example.com/g/sender");
+        Self { member, group }
+    }
+
+    /// An application message carrying `text`, as an MLSMessage: a PrivateMessage, as RFC 9420 §6 has one.
+    pub(crate) fn message(&mut self, text: &[u8]) -> Vec<u8> {
+        self.group
+            .create_message(&self.member.provider, &self.member.signer, text)
+            .unwrap()
+            .tls_serialize_detached()
+            .unwrap()
+    }
+}
+
+/// An MLSMessage carrying a PublicMessage with application content, built by hand: openmls makes application messages
+/// only as PrivateMessages. Its signature and membership tag are zeros; it is well-formed, not valid.
+pub(crate) fn public_application_message(group_id: &[u8], epoch: u64) -> Vec<u8> {
+    fn opaque(out: &mut Vec<u8>, bytes: &[u8]) {
+        // RFC 9420 §2.1.2 variable-size length: one byte below 64, two (0b01 prefix) below 16384.
+        if bytes.len() < 64 {
+            out.push(u8::try_from(bytes.len()).unwrap());
+        } else {
+            out.extend_from_slice(&(0x4000u16 | u16::try_from(bytes.len()).unwrap()).to_be_bytes());
+        }
+        out.extend_from_slice(bytes);
+    }
+    let mut out = vec![0, 1, 0, 1]; // mls10, public_message
+    opaque(&mut out, group_id);
+    out.extend_from_slice(&epoch.to_be_bytes());
+    out.push(1); // sender_type member
+    out.extend_from_slice(&0u32.to_be_bytes()); // leaf_index
+    opaque(&mut out, b""); // authenticated_data
+    out.push(1); // content_type application
+    opaque(&mut out, b"in the clear");
+    opaque(&mut out, &[0u8; 64]); // signature
+    opaque(&mut out, &[0u8; 32]); // membership_tag
+    out
+}

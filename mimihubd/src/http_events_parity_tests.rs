@@ -36,6 +36,8 @@ const DAVE: &str = "mimi://havenmessenger.com/u/dave";
 struct Inputs {
     welcome: Vec<u8>,
     commit: Vec<u8>,
+    /// The application messages, PrivateMessages of one sender's group, by their text.
+    messages: std::collections::HashMap<&'static str, Vec<u8>>,
 }
 
 fn inputs() -> Inputs {
@@ -49,7 +51,12 @@ fn inputs() -> Inputs {
             &[bob.key_package_bundle().key_package().clone()],
         )
         .unwrap();
+    let mut sender = crate::mls_fixtures::Sender::new();
     Inputs {
+        messages: ["a1", "b1", "a2", "b2"]
+            .into_iter()
+            .map(|text| (text, sender.message(text.as_bytes())))
+            .collect(),
         welcome: welcome.tls_serialize_detached().unwrap(),
         commit: bundle_of(commit_of(0, &[by_value_change(&list_change(&[DAVE], &[]))])),
     }
@@ -95,9 +102,9 @@ async fn scenario(l: &Lane, inputs: &Inputs) -> Vec<String> {
         )
     };
     for (user, room, message) in [
-        (ALICE, &rooms[0], &b"a1"[..]),
-        (ALICE, &rooms[1], b"b1"),
-        (ALICE, &rooms[0], b"a2"),
+        (ALICE, &rooms[0], inputs.messages["a1"].as_slice()),
+        (ALICE, &rooms[1], &inputs.messages["b1"]),
+        (ALICE, &rooms[0], &inputs.messages["a2"]),
     ] {
         let (status, body) = call(&l.router, send(user, room, message)).await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -113,7 +120,7 @@ async fn scenario(l: &Lane, inputs: &Inputs) -> Vec<String> {
     let ask = format!(r#"{{"target":"{ALICE}"}}"#);
     let (status, body) = call(&l.router, signed(&l.key, "requestConsent", BOB, &ask)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let (status, body) = call(&l.router, send(BOB, &rooms[1], b"b2")).await;
+    let (status, body) = call(&l.router, send(BOB, &rooms[1], &inputs.messages["b2"])).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     rooms
 }

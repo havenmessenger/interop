@@ -473,6 +473,9 @@ async fn submit_message(
         crate::submit::Acceptance::Accepted => Json(Empty {}).into_response(),
         crate::submit::Acceptance::Refused => crate::problem::NOT_PERMITTED.response(),
         crate::submit::Acceptance::WrongGroup => crate::problem::GROUP_MISMATCH.response(),
+        crate::submit::Acceptance::NotApplication => {
+            crate::problem::NOT_AN_APPLICATION_MESSAGE.response()
+        }
         crate::submit::Acceptance::Failed => crate::problem::INTERNAL_ERROR.response(),
     }
 }

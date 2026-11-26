@@ -96,6 +96,8 @@ async fn a_participant_sends_and_a_non_participant_is_refused() {
         p.add_participant(&room, BOB, 1).unwrap();
         p.set_member_role(&room, BOB, ROLE_MEMBER).unwrap();
     }
+    let mut sender = crate::mls_fixtures::Sender::new();
+    let (one, two) = (sender.message(b"one"), sender.message(b"two"));
     let send = |message: &[u8]| {
         format!(
             r#"{{"room":"{room}","message":"{}"}}"#,
@@ -104,13 +106,13 @@ async fn a_participant_sends_and_a_non_participant_is_refused() {
     };
     let (status, body) = call(
         &l.router,
-        signed(&l.key, "submitMessage", ALICE, &send(b"one")),
+        signed(&l.key, "submitMessage", ALICE, &send(&one)),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, _) = call(
         &l.router,
-        signed(&l.key, "submitMessage", DAVE, &send(b"two")),
+        signed(&l.key, "submitMessage", DAVE, &send(&two)),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -119,7 +121,7 @@ async fn a_participant_sends_and_a_non_participant_is_refused() {
     let bobs: Vec<Vec<u8>> = bobs.into_iter().map(|item| item.bytes).collect();
     assert_eq!(
         bobs,
-        vec![b"one".to_vec()],
+        vec![one.clone()],
         "PLANT-LANE-SUBMIT: a non-participant's message was delivered"
     );
     assert!(p.lane_inbox(ALICE, 0, 0, 10).unwrap().messages.is_empty());
