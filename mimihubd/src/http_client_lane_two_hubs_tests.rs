@@ -145,12 +145,12 @@ async fn a_user_of_another_hub_is_welcomed_and_reads_the_room_through_their_lane
     );
     let (_, body) = call(&a.router, signed(&a.key, "update", ALICE, &request)).await;
     assert_eq!(body["answer"], "success", "{body}");
-    // To B the Commit goes first and is refused for good (B has no member of the room until the Welcome), then the
-    // Welcome is delivered.
+    // To B only the Welcome goes: B had no member of the room before this Commit, and its user joins from the Welcome
+    // (protocol-07 Figures 3 and 5), so nothing is sent that B would refuse.
     assert_eq!(
         deliver_outbox(&a, &b_peer).await,
-        (1, 1),
-        "the Welcome reached B"
+        (1, 0),
+        "the Welcome reached B, and nothing was refused"
     );
 
     // Alice sends a message; it reaches B the same way.

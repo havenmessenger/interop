@@ -44,11 +44,11 @@ fn domains(p: &Provider) -> Vec<String> {
     queued(p).into_iter().map(|(domain, _)| domain).collect()
 }
 
-/// A Commit goes to the provider of every participant before or after it, so the provider of a member it removed is
-/// told, and to every local member's queue; its tail is an empty `externalProposals`. Revert check: fan out to the
-/// list after the Commit only, and the removed member's provider is not told.
+/// A Commit goes to the provider of every participant before it, so the provider of a member it removed is told, and
+/// to every local member's queue; its tail is an empty `externalProposals`. Revert check: fan out to the list after the
+/// Commit only, and the removed member's provider is not told.
 #[test]
-fn a_commit_reaches_the_providers_before_and_after_it_and_the_local_members() {
+fn a_commit_reaches_the_providers_before_it_and_the_local_members() {
     let p = hub_with(&[ALICE, BOB, CAROL]);
     let before = p.store.list_participant_rows(ROOM).unwrap();
     p.remove_participant(ROOM, CAROL).unwrap();
@@ -162,6 +162,80 @@ fn an_unrecorded_welcome_goes_to_the_added_users_providers() {
         .map(|(domain, _)| domain)
         .collect();
     assert_eq!(welcome_domains, ["b.example"]);
+}
+
+/// Every outbox row, oldest first in each queue, as (domain, the FanoutMessage's message and tail): each queue's head
+/// is taken and removed until none is left.
+fn drained(p: &Provider) -> Vec<(String, Vec<u8>)> {
+    let mut rows = Vec::new();
+    loop {
+        let heads = p.store.due_outbox_heads(u64::MAX, &[]).unwrap();
+        if heads.is_empty() {
+            return rows;
+        }
+        for row in heads {
+            p.store.remove_outbox_row(row.id).unwrap();
+            rows.push((row.domain, row.body[8..].to_vec()));
+        }
+    }
+}
+
+/// An MLSMessage carrying a Welcome (wire format 3), as a FanoutMessage holds one.
+fn is_welcome(message_and_tail: &[u8]) -> bool {
+    message_and_tail.starts_with(&[0, 1, 0, 3])
+}
+
+/// A provider whose only users in the room are the ones a Commit adds gets their Welcome and not the Commit, and a
+/// local user the Commit adds gets no Commit in its queue: they join from the Welcome, at the epoch after it
+/// (protocol-07 §5.5, Figures 3 and 5). Revert check: fan the Commit out to the list after it too, and Bob's provider
+/// gets the Commit first, which it would refuse, having no member of the room yet.
+#[test]
+fn the_joiners_provider_gets_only_the_welcome() {
+    let (commit, welcome, _) = commit_adding_bob();
+    let p = hub_with(&[ALICE]);
+    let before = p.store.list_participant_rows(ROOM).unwrap();
+    // The Commit lists Bob, of b.example, and Dave, of this hub, after it.
+    p.add_participant(ROOM, BOB, 2).unwrap();
+    p.add_participant(ROOM, DAVE, 2).unwrap();
+    p.fan_out_commit(ROOM, &commit, Some((&welcome, b"\x01TREE")), &before, 10)
+        .unwrap();
+    let to_b: Vec<bool> = drained(&p)
+        .into_iter()
+        .filter(|(domain, _)| domain == "b.example")
+        .map(|(_, body)| is_welcome(&body))
+        .collect();
+    assert_eq!(
+        to_b,
+        vec![true],
+        "PLANT-FANOUT-JOINER: the joiner's provider got the Commit too"
+    );
+    assert!(
+        p.fetch_message(DAVE).unwrap().is_none(),
+        "a local joiner gets no Commit"
+    );
+    assert_eq!(
+        p.fetch_message(ALICE).unwrap().as_deref(),
+        Some(commit.as_slice()),
+        "a member before the Commit gets it"
+    );
+}
+
+/// A provider with a member in the room before a Commit that also adds one of its users gets both, the Commit first and
+/// then the Welcome, in its one queue for the room.
+#[test]
+fn a_provider_with_a_member_gets_the_commit_then_the_welcome() {
+    let (commit, welcome, _) = commit_adding_bob();
+    let p = hub_with(&[ALICE, "mimi://b.example/u/beth"]);
+    let before = p.store.list_participant_rows(ROOM).unwrap();
+    p.add_participant(ROOM, BOB, 2).unwrap();
+    p.fan_out_commit(ROOM, &commit, Some((&welcome, b"\x01TREE")), &before, 10)
+        .unwrap();
+    let to_b: Vec<bool> = drained(&p)
+        .into_iter()
+        .filter(|(domain, _)| domain == "b.example")
+        .map(|(_, body)| is_welcome(&body))
+        .collect();
+    assert_eq!(to_b, vec![false, true], "the Commit, then the Welcome");
 }
 
 /// One local member whose queue is full does not stop the message reaching the members after it: they get it, the

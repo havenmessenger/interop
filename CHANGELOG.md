@@ -6,6 +6,11 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimihubd`: a Commit is fanned out to the providers and local members of the room's participants before it, no longer
+  also to those it adds. protocol-07 §5.5 sends a Commit to "providers with active participants", and its Figures 3 and 5
+  send the provider of a user being added only the Welcome; that provider has no member of the room until the Welcome,
+  so it refused the Commit (404 `no-local-member`) and the hub dropped it. A provider with a member before the Commit
+  still gets it, then the Welcome; the provider of a member the Commit removes is still told.
 - `mimihubd`: `submitMessage`, on the wire and on the client lane, takes only an application message as RFC 9420 §6
   has one, a PrivateMessage whose content type is `application`, read from its framing without decrypting. A
   PublicMessage, a Commit or a proposal, or bytes that are no MLS message are refused and reach no one (`notAllowed` on

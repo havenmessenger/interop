@@ -4,8 +4,9 @@
 //! (`store_outbox.rs`) as one FanoutMessage, which the outbox worker posts to that provider's `notify`. Local members get
 //! the message itself in their queue. What goes out:
 //!
-//! - **A Commit**, to the providers and local members of the room's participants before and after it, so a member the
-//!   Commit removes is told (§5.5 SHOULD). Its `externalProposals` is empty.
+//! - **A Commit**, to the providers and local members of the room's participants before it, so a member the Commit
+//!   removes is told (§5.5 SHOULD), and not to one whose only users in the room are the ones it adds: they get the
+//!   Welcome (protocol-07 Figures 3 and 5). Its `externalProposals` is empty.
 //! - **A Welcome** in the Commit's bundle, with the bundle's `RatchetTreeOption`: to the provider recorded for each
 //!   `KeyPackageRef` in its secrets when the hub served that KeyPackage, and, for a ref with no record, to the providers
 //!   of the users the Commit adds. A local new member gets it in its own queue. The submitter's provider is not skipped.
@@ -118,8 +119,10 @@ impl Provider {
         before: &[ParticipantRow],
         now_unix: u64,
     ) -> anyhow::Result<FanoutReport> {
-        let after = self.store.list_participant_rows(room_uri)?;
-        let (providers, local) = self.split_rows(before.iter().chain(&after));
+        // The room's list before the Commit, so the provider of a member it removes is told (§5.5 SHOULD), and not the
+        // list after it: a provider whose only users in the room are the ones this Commit adds gets their Welcome and
+        // nothing else, as protocol-07's Figures 3 and 5 have it (the joiner starts at the epoch after this Commit).
+        let (providers, local) = self.split_rows(before.iter());
         let timestamp = crate::outbox::now_ms();
         self.enqueue_fanout(
             room_uri,
