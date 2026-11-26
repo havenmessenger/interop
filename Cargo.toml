@@ -26,8 +26,8 @@ license = "Apache-2.0"
 # clippy`/`cargo fmt --check` at the repo root would silently skip mimihubd, in CI and for anyone
 # cloning the repo, without ever failing loudly.
 [workspace]
-members = ["mimihubd"]
-default-members = [".", "mimihubd"]
+members = ["mimihubd", "mimihubd-api"]
+default-members = [".", "mimihubd", "mimihubd-api"]
 # tools/vc-vectors-xcheck is EXCLUDED, not a member: it depends on a git-pinned openmls-main fork
 # (see its own Cargo.toml comment), which would enter this root Cargo.lock as a member and trip the
 # manifest-purity guard (crates.io and one OpenMLS revision only, for the audited library). Excluding keeps it buildable on its

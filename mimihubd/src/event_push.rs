@@ -19,7 +19,6 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use serde::Serialize;
 use tokio::sync::Notify;
 
 use crate::client_lane_events::MAX_EVENTS_PAGE;
@@ -44,21 +43,7 @@ pub enum PushAttempt {
     },
 }
 
-/// How the push stands, as the lane's `info` reports it: enough to see a push that is stuck, and why, without any
-/// event's content.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct PushStatus {
-    /// The last `seq` the provider's server acknowledged by push.
-    pub acked_through: i64,
-    /// Failed attempts since the last one that went through.
-    pub failures: u32,
-    /// Why the last attempt failed, while the push is failing.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
-    /// When the last attempt was made, in Unix seconds.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_attempt_at: Option<i64>,
-}
+pub use mimihubd_api::wire::PushStatus;
 
 /// The pusher. [`EventPusher::spawn`] runs it.
 pub struct EventPusher {

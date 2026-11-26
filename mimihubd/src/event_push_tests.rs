@@ -33,7 +33,13 @@ pub(crate) fn push_client(
     addr: SocketAddr,
     signer: Option<Arc<crate::request_signing::RequestSigner>>,
 ) -> PeerClient {
-    let peers = pki.settings(AddressPolicy::default(), None, true, signer);
+    let mut peers = pki.settings(AddressPolicy::default(), None, true, signer);
+    // As the daemon builds it: requests name the provider's own domain (`From: mimi@<domain>`); the server is on a
+    // subdomain of it.
+    peers.own_domain = host
+        .split_once('.')
+        .map(|(_, domain)| domain.to_string())
+        .unwrap();
     PeerClient::new(
         peers.for_event_push(AddressPolicy::parse_allowlist("127.0.0.0/8").unwrap()),
         resolver(host, &[addr]),

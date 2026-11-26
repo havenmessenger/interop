@@ -1830,6 +1830,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "mimi-core",
+ "mimihubd-api",
  "openmls",
  "openmls_rust_crypto",
  "openmls_traits",
@@ -1854,6 +1855,17 @@ dependencies = [
  "tokio-rustls",
  "toml",
  "tower",
+]
+
+[[package]]
+name = "mimihubd-api"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]

@@ -510,6 +510,9 @@ these routes, nor one for the provider on a user's route.
 | `events/ack` | `{up_to_seq}` → `{acked_through}` | Takes every event up to `up_to_seq` out of the stream and moves the cursor there. The cursor only moves forward; `up_to_seq` past the last event is refused with 400 `ack-past-end`, so an acknowledgement can never skip an event written later. |
 | `info` | `{}` → `{lane_version, delivery, push, stream?, push_status?}` | The lane's contract version (`1`), `inbox` or `events`, and whether the hub pushes. For `events`, `stream` is `{last_seq, acked_through}`. For a hub that pushes, `push_status` is `{acked_through, failures, last_error?, last_attempt_at?}`: a push the server keeps refusing shows its failures and why, never an event's content. |
 
+A server written in Rust can link `mimihubd-api` (in this repository), the lane as a library: its types, the signing
+of both lane profiles, and the check of a pushed batch. mimihubd uses the same library for its own side.
+
 A server's loop: `events/wait` from its last handled `seq`; when `latest_seq` is past it, `events/fetch`, handle the
 events in order, `events/ack` the last one; repeat.
 

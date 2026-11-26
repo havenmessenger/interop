@@ -14,12 +14,13 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
+use mimihubd_api::wire::{
+    AckAnswer, AckRequest, Delivery, FetchRequest, Info, StreamCursor, WaitRequest,
+};
+use serde::Deserialize;
 
 use super::{internal, parse, with_signed_request, LaneState, MAX_LANE_BODY};
-use crate::client_lane_events::{
-    wait_for_events, EventsRefusal, LANE_VERSION, MAX_EVENTS_PAGE, MAX_WAIT_MS,
-};
+use crate::client_lane_events::{wait_for_events, EventsRefusal, LANE_VERSION, MAX_WAIT_MS};
 use crate::store::EventAck;
 
 /// The provider-level routes, with their own gate in front.
@@ -62,21 +63,6 @@ fn refused(refusal: EventsRefusal) -> Response {
 #[serde(deny_unknown_fields)]
 struct InfoRequest {}
 
-#[derive(Serialize)]
-struct InfoAnswer {
-    lane_version: u32,
-    /// `inbox` (per-user queues: `inboxFetch`/`inboxAck`) or `events` (the provider event stream).
-    delivery: &'static str,
-    /// Whether the hub pushes the event stream to the provider's server.
-    push: bool,
-    /// Where the stream stands, for a hub delivering through it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stream: Option<crate::store::EventCursor>,
-    /// How the push stands, for a hub that pushes: what a stuck push looks like from outside. No payload appears in it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    push_status: Option<crate::event_push::PushStatus>,
-}
-
 /// The lane's version and how this hub delivers.
 async fn info(State(state): State<LaneState>, body: Bytes) -> Response {
     if parse::<InfoRequest>(&body).is_none() {
@@ -97,31 +83,21 @@ async fn info(State(state): State<LaneState>, body: Bytes) -> Response {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
     });
-    Json(InfoAnswer {
+    Json(Info {
         lane_version: LANE_VERSION,
         delivery: if provider.delivers_events() {
-            "events"
+            Delivery::Events
         } else {
-            "inbox"
+            Delivery::Inbox
         },
         push: provider.pushes_events(),
-        stream,
+        stream: stream.map(|cursor| StreamCursor {
+            last_seq: cursor.last_seq,
+            acked_through: cursor.acked_through,
+        }),
         push_status,
     })
     .into_response()
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WaitRequest {
-    #[serde(default)]
-    after_seq: i64,
-    #[serde(default = "default_wait_ms")]
-    timeout_ms: u64,
-}
-
-fn default_wait_ms() -> u64 {
-    MAX_WAIT_MS
 }
 
 /// Answer as soon as an event past `after_seq` exists, or at the timeout with no users.
@@ -137,19 +113,6 @@ async fn wait(State(state): State<LaneState>, body: Bytes) -> Response {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FetchRequest {
-    #[serde(default)]
-    after_seq: i64,
-    #[serde(default = "default_limit")]
-    limit: usize,
-}
-
-fn default_limit() -> usize {
-    MAX_EVENTS_PAGE
-}
-
 /// The events after `after_seq`, in `seq` order, left in place until acknowledged.
 async fn fetch(State(state): State<LaneState>, body: Bytes) -> Response {
     let Some(request) = parse::<FetchRequest>(&body) else {
@@ -160,17 +123,6 @@ async fn fetch(State(state): State<LaneState>, body: Bytes) -> Response {
         Ok(Err(refusal)) => refused(refusal),
         Err(error) => internal("events/fetch", error),
     }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AckRequest {
-    up_to_seq: i64,
-}
-
-#[derive(Serialize)]
-struct AckAnswer {
-    acked_through: i64,
 }
 
 /// Acknowledge every event up to `up_to_seq`. Past the last `seq` written, nothing changes and the answer is a problem.

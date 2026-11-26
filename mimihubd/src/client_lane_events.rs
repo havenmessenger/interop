@@ -15,19 +15,18 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
 use crate::http::SharedProvider;
-use crate::store::{ConsentChange, EventAck, EventCursor, EventKind, EventRow};
+use crate::store::{EventAck, EventCursor, EventRow};
 use crate::Provider;
 
-/// The version of the client lane's contract this hub serves.
-pub const LANE_VERSION: u32 = 1;
+pub use mimihubd_api::wire::{Event as WireEvent, EventBatch, WaitAnswer};
+pub use mimihubd_api::LANE_VERSION;
 
 /// The most events one fetch or one pushed batch carries.
 // LIMIT-REASON: wire-cost: one answer stays bounded; the stream itself is not capped, a reader takes it in pages
-pub const MAX_EVENTS_PAGE: usize = 256;
+pub const MAX_EVENTS_PAGE: usize = mimihubd_api::wire::FetchRequest::MAX_LIMIT;
 
 /// The most payload bytes one fetch or one pushed batch carries beyond its first event.
 // LIMIT-REASON: wire-cost: a page of base64 MLS objects stays a few megabytes
@@ -35,25 +34,9 @@ pub const MAX_EVENTS_PAGE_BYTES: usize = 4 * 1024 * 1024;
 
 /// The longest an `events/wait` is held.
 // LIMIT-REASON: wire-cost: under common proxy and load-balancer idle timeouts (30 s and up)
-pub const MAX_WAIT_MS: u64 = 25_000;
+pub const MAX_WAIT_MS: u64 = mimihubd_api::wire::WaitRequest::MAX_TIMEOUT_MS;
 
-/// One event on the wire. `bytes` is the MLS object, base64 (standard alphabet), for `welcome` and `message`;
-/// `consent` is the change, for `consent`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct WireEvent {
-    pub seq: i64,
-    pub kind: EventKind,
-    pub user: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub room: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bytes: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub consent: Option<ConsentChange>,
-    pub received_at: i64,
-}
-
+/// A stored event as the lane writes it: the MLS object in base64.
 impl From<EventRow> for WireEvent {
     fn from(row: EventRow) -> Self {
         Self {
@@ -66,23 +49,6 @@ impl From<EventRow> for WireEvent {
             received_at: row.received_at,
         }
     }
-}
-
-/// A page of events: what `events/fetch` answers and what a push posts. `more` says further events were waiting when
-/// the page was read.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EventBatch {
-    pub events: Vec<WireEvent>,
-    pub more: bool,
-}
-
-/// What `events/wait` answers: the last `seq` written and the users with events past the caller's cursor. Empty
-/// `users` and the caller's own cursor mean the wait timed out with nothing new.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WaitAnswer {
-    pub latest_seq: i64,
-    pub users: Vec<String>,
 }
 
 /// Why an events call was refused.

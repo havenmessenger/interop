@@ -33,22 +33,10 @@ pub const MAX_HEADER_VALUE_LEN: usize = 512;
 
 /// What a lane request's signature must cover and how old it may be.
 pub const LANE: VerifyProfile = VerifyProfile {
-    tag: "mimi-client-lane",
+    tag: mimihubd_api::sign::LANE_USER_TAG,
     strict_tag: true,
-    required_with_body: &[
-        "@method",
-        "@target-uri",
-        "content-digest",
-        "mimi-client-user",
-        "mimi-client-device",
-    ],
-    required_without_body: &[
-        "@method",
-        "@target-uri",
-        "content-digest",
-        "mimi-client-user",
-        "mimi-client-device",
-    ],
+    required_with_body: mimihubd_api::sign::LANE_USER_COMPONENTS,
+    required_without_body: mimihubd_api::sign::LANE_USER_COMPONENTS,
     digest_always: true,
     nonce_required: true,
     max_age_secs: 30,
@@ -60,10 +48,10 @@ pub const LANE: VerifyProfile = VerifyProfile {
 /// its users (the event stream's `events/*` and `info`). Its own tag, so a signature made for a user's request is never
 /// accepted as one made for the provider, or the other way round.
 pub const LANE_PROVIDER: VerifyProfile = VerifyProfile {
-    tag: "mimi-client-lane-provider",
+    tag: mimihubd_api::sign::LANE_PROVIDER_TAG,
     strict_tag: true,
-    required_with_body: &["@method", "@target-uri", "content-digest"],
-    required_without_body: &["@method", "@target-uri", "content-digest"],
+    required_with_body: mimihubd_api::sign::LANE_PROVIDER_COMPONENTS,
+    required_without_body: mimihubd_api::sign::LANE_PROVIDER_COMPONENTS,
     digest_always: true,
     nonce_required: true,
     max_age_secs: 30,

@@ -249,12 +249,40 @@ async fn push(l: &Lane) -> Vec<WireEvent> {
         PushAttempt::Idle,
         "PLANT-EVENTS-ORDER/PLANT-EVENTS-ACK: push left events past the cursor"
     );
+    // The receiver checks each push as a provider's server does, with the library: the hub's key, once.
+    let verifier = mimihubd_api::push::PushVerifier::new(
+        mimihubd_api::sign::SigningKey::from_seed(&[9u8; 32], "hub1")
+            .unwrap()
+            .public_key(),
+        "hub1",
+        DOMAIN,
+    );
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    )
+    .unwrap();
+    let target = format!("https://{SERVER}:{}/events", addr.port());
     let bodies: Vec<Vec<u8>> = seen
         .lock()
         .unwrap()
         .iter()
         .filter(|seen| seen.head.starts_with("POST "))
-        .map(|seen| seen.body.clone())
+        .map(|seen| {
+            let headers: std::collections::HashMap<String, String> = seen
+                .head
+                .lines()
+                .skip(1)
+                .filter_map(|line| line.split_once(':'))
+                .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_string()))
+                .collect();
+            verifier
+                .verify(&target, |name| headers.get(name).cloned(), &seen.body, now)
+                .expect("the push carries the hub's signature, checked by the library");
+            seen.body.clone()
+        })
         .collect();
     bodies
         .iter()

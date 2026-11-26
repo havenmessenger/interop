@@ -12,7 +12,7 @@
 //! - `user` is always the user's canonical URI. MLS bytes are kept as they arrived and never read.
 
 use rusqlite::{params, OptionalExtension};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::{QueueRefused, SqliteStore};
 
@@ -43,55 +43,34 @@ pub const MAX_PENDING_MESSAGES: i64 = super::MAX_QUEUE_MESSAGES;
 // LIMIT-REASON: input: consent changes come from peers; a user's backlog of them is bounded like their messages
 pub const MAX_PENDING_CONSENT: i64 = super::MAX_QUEUE_MESSAGES;
 
-/// What an event carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum EventKind {
-    /// A Welcome, with the room it joins when the hub knew it.
-    Welcome,
-    /// An MLSMessage for a room: a Commit, a proposal or an application message, as the hub accepted it.
-    Message,
-    /// A change to a consent record that concerns the user.
-    Consent,
-}
+pub use mimihubd_api::wire::{ConsentChange, EventKind};
 
-impl EventKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Welcome => "welcome",
-            Self::Message => "message",
-            Self::Consent => "consent",
-        }
-    }
-
-    fn parse(text: &str) -> Option<Self> {
-        match text {
-            "welcome" => Some(Self::Welcome),
-            "message" => Some(Self::Message),
-            "consent" => Some(Self::Consent),
-            _ => None,
-        }
-    }
-
-    fn cap(self) -> i64 {
-        match self {
-            Self::Welcome => MAX_PENDING_WELCOMES,
-            Self::Message => MAX_PENDING_MESSAGES,
-            Self::Consent => MAX_PENDING_CONSENT,
-        }
+/// How a kind is stored.
+fn kind_str(kind: EventKind) -> &'static str {
+    match kind {
+        EventKind::Welcome => "welcome",
+        EventKind::Message => "message",
+        EventKind::Consent => "consent",
     }
 }
 
-/// A consent change as the stream carries it: the directional record and its new state. `room` is the room URI of a
-/// room-scoped record, absent for a global one. `state` is `requested`, `granted`, `revoked` or `withdrawn` (a pending
-/// request its requester took back).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConsentChange {
-    pub requester: String,
-    pub target: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub room: Option<String>,
-    pub state: String,
+/// A stored kind, read back.
+fn kind_parse(text: &str) -> Option<EventKind> {
+    match text {
+        "welcome" => Some(EventKind::Welcome),
+        "message" => Some(EventKind::Message),
+        "consent" => Some(EventKind::Consent),
+        _ => None,
+    }
+}
+
+/// The most events of a kind one user may have waiting.
+fn kind_cap(kind: EventKind) -> i64 {
+    match kind {
+        EventKind::Welcome => MAX_PENDING_WELCOMES,
+        EventKind::Message => MAX_PENDING_MESSAGES,
+        EventKind::Consent => MAX_PENDING_CONSENT,
+    }
 }
 
 /// One event as a reader sees it.
@@ -228,7 +207,7 @@ impl SqliteStore {
                 break;
             }
             size = size.saturating_add(len);
-            let kind = EventKind::parse(&kind)
+            let kind = kind_parse(&kind)
                 .ok_or_else(|| anyhow::anyhow!("event {seq} has an unknown kind"))?;
             let consent = consent_json
                 .map(|json| serde_json::from_str::<ConsentChange>(&json))
@@ -328,15 +307,15 @@ fn append_in(
     let room = room.map(mimi_core::uri::canonical);
     let depth: i64 = tx.query_row(
         "SELECT COUNT(*) FROM events WHERE user_uri = ?1 AND kind = ?2",
-        params![user, kind.as_str()],
+        params![user, kind_str(kind)],
         |r| r.get(0),
     )?;
     let wanted = i64::try_from(rows.len()).unwrap_or(i64::MAX);
-    if depth.saturating_add(wanted) > kind.cap() {
+    if depth.saturating_add(wanted) > kind_cap(kind) {
         return Err(QueueRefused(format!(
             "events full for recipient (cap {} {})",
-            kind.cap(),
-            kind.as_str()
+            kind_cap(kind),
+            kind_str(kind)
         ))
         .into());
     }
@@ -352,7 +331,7 @@ fn append_in(
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 seq,
-                kind.as_str(),
+                kind_str(kind),
                 user,
                 room,
                 bytes,

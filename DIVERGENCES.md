@@ -731,6 +731,13 @@ out (`consent_kept_at_opt_out`, off), and how long a request stays pending (`con
 
 How the lane hands a user what the hub holds for them is the provider's choice too, and the lane offers two (`mimihubd/README.md`, "Delivering to your server: push or pull"). Per-user inboxes, the default, are read with `inboxFetch` and `inboxAck`. The provider event stream is one sequence of Welcomes, room messages and consent changes for every user of the provider, each with a `seq`. The provider's server reads it by pull (`events/wait`, `events/fetch`, `events/ack`, signed for the provider rather than a user) or has the hub push it to the server's URL. Push and pull carry the same events in the same order and share one cursor, and the hub's tests play one scenario through both and require the same events from each. Neither is a MIMI route: protocol-07 has a hub notify another provider's hub, and leaves how a provider's own server receives what is for its users to that provider.
 
+A known gap in the hub's framing check. In a room whose ratchet tree the hub keeps, `submitMessage` refuses a message
+whose MLS framing names another group, or an epoch the room has not reached. A room whose tree the hub does not keep
+has no group to compare with, so its messages are not checked: a lane room is such a room from `createRoom` until its
+creator's first Commit seeds the tree. In that window a participant could submit bytes framed for another group, and a
+member who routes by group id would read them as that group's. Recording the group a room is created for would close
+it; the hub does not do that yet.
+
 ## DIV-21 - several participant-list updates in one Commit: the order their additions are appended in
 
 protocol-07 §7.5 says every `ParticipantListUpdate` in a Commit indexes the list as it stood before the Commit ("This

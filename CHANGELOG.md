@@ -6,6 +6,11 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimihubd-api`, a new library crate: the client lane, version 1, for a provider's own server. It has the request and
+  answer types (the event stream's among them), the request signatures of both lane profiles and of the provider (RFC
+  9421, Ed25519), and the check of an event batch the hub pushed. It is synchronous and links no HTTP stack or
+  runtime. mimihubd uses it for its own side: its request signer, its lane profiles and its event stream types are
+  the library's, so both ends of the lane share one implementation.
 - `mimihubd`: the provider event stream, a second way for the client lane to deliver (`MIMI_LANE_DELIVERY=events`;
   per-user inboxes stay the default and are unchanged). Welcomes, room messages and consent changes for every user of
   the provider go into one sequence, numbered by `seq` without gaps. The modes are `inbox` (per-user, legacy) and
@@ -17,7 +22,8 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   transports share one cursor, so an operator
   can switch between them without losing or repeating an event. A test plays one scenario through both and requires the
   same events from each. The lane's `info` states its contract version (`1`) and how the hub delivers. Two new problem
-  types: `delivery-mode` and `ack-past-end`. The store gains the `events` and `event_cursor` tables.
+  types: `delivery-mode` and `ack-past-end`. The store gains the `events` and `event_cursor` tables, created when any
+  store is opened, an `inbox` hub's included (additive; nothing is written to them in `inbox` mode).
 - `mimihubd`: in a room whose tree the hub keeps, `submitMessage` refuses a message whose MLS framing names another
   group, or an epoch the room has not reached (`group-mismatch` on the lane, `notAllowed` on the provider path). Members
   route an incoming message by its group id, and read a later epoch as a missed Commit, so such a message reaches no

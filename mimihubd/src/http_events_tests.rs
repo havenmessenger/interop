@@ -1,7 +1,6 @@
 //! The provider event stream's lane routes: the version and mode `info` states, which calls each mode takes, the
 //! provider-level signature kept apart from a user's, the acknowledgement bound, and switching transport mid-stream.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -9,10 +8,9 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ring::signature::Ed25519KeyPair;
-use sha2::{Digest, Sha256};
 
 use super::client_lane_tests::{call, lane, lane_over, signed, Lane};
 use crate::client_lane_events::EventBatch;
@@ -26,40 +24,45 @@ const HOST: &str = "hub.example:8450";
 const ALICE: &str = "mimi://havenmessenger.com/u/alice";
 const ROOM: &str = "mimi://havenmessenger.com/r/room";
 
-static NONCES: AtomicU64 = AtomicU64::new(0);
-
-/// A provider-level request to `route`, signed with `key` as the provider's server signs one for itself.
-pub(super) fn provider_signed(key: &Ed25519KeyPair, route: &str, body: &str) -> Request<Body> {
-    let path = format!("/mimi/client/v1/{route}");
-    let digest = format!(
-        "sha-256=:{}:",
-        STANDARD.encode(Sha256::digest(body.as_bytes()))
+/// A lane request to `route` signed by `mimihubd_api` (the library a provider's server links), acting as `acting`, with
+/// the lane fixture's key: the hub's own verifier checks the library's signature.
+pub(super) fn api_signed(
+    lane_key: &Ed25519KeyPair,
+    route: &str,
+    acting: &mimihubd_api::sign::Acting,
+    body: &str,
+) -> Request<Body> {
+    let key = mimihubd_api::sign::SigningKey::from_seed(&[7u8; 32], "lane1").unwrap();
+    assert_eq!(
+        key.public_key().as_slice(),
+        ring::signature::KeyPair::public_key(lane_key).as_ref(),
+        "the lane fixture's key"
     );
-    let count = NONCES.fetch_add(1, Ordering::Relaxed);
-    let nonce = URL_SAFE_NO_PAD.encode(Sha256::digest(
-        format!("provider{route}{body}{count}").as_bytes(),
-    ))[..22]
-        .to_string();
+    let path = format!("{}{route}", mimihubd_api::LANE_PATH_PREFIX);
     let created = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let params = format!(
-        r#"("@method" "@target-uri" "content-digest");created={created};nonce="{nonce}";keyid="lane1";tag="mimi-client-lane-provider""#
+    let headers = key.sign_lane(
+        &format!("https://{HOST}{path}"),
+        body.as_bytes(),
+        acting,
+        created,
+        &mimihubd_api::sign::fresh_nonce().unwrap(),
     );
-    let base = format!(
-        "\"@method\": POST\n\"@target-uri\": https://{HOST}{path}\n\"content-digest\": {digest}\n\"@signature-params\": {params}"
-    );
-    let signature = STANDARD.encode(key.sign(base.as_bytes()).as_ref());
-    Request::builder()
+    let mut request = Request::builder()
         .method("POST")
         .uri(&path)
-        .header("host", HOST)
-        .header("content-digest", digest)
-        .header("signature-input", format!("srv={params}"))
-        .header("signature", format!("srv=:{signature}:"))
-        .body(Body::from(body.to_string()))
-        .expect("request")
+        .header("host", HOST);
+    for (name, value) in headers {
+        request = request.header(name, value);
+    }
+    request.body(Body::from(body.to_string())).expect("request")
+}
+
+/// A provider-level request to `route`, as the provider's server signs one for itself.
+pub(super) fn provider_signed(lane_key: &Ed25519KeyPair, route: &str, body: &str) -> Request<Body> {
+    api_signed(lane_key, route, &mimihubd_api::sign::Acting::Provider, body)
 }
 
 fn events_lane(test: &str) -> Lane {
@@ -275,5 +278,27 @@ async fn an_inbox_hub_is_unchanged() {
     assert_eq!(
         l.provider.lock().unwrap().events_cursor().unwrap().last_seq,
         0
+    );
+}
+
+/// A user's request signed by the library is taken on a user route, as the hub's own fixture's is.
+#[tokio::test]
+async fn the_librarys_user_signature_is_taken_on_a_user_route() {
+    let l = lane("events-api-user");
+    let acting = mimihubd_api::sign::Acting::User {
+        user: ALICE.into(),
+        device: "dev-1".into(),
+    };
+    let (status, body) = call(
+        &l.router,
+        api_signed(&l.key, "keyPackageCount", &acting, "{}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = call(&l.router, api_signed(&l.key, "events/fetch", &acting, "{}")).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a user's signature on a provider route"
     );
 }

@@ -43,7 +43,7 @@ def main() -> int:
     # (Cargo.toml `[workspace] members = ["mimihubd"]`). Both are legitimate local packages —
     # this guard exists to catch a path/git dependency reaching OUTSIDE the workspace, not to
     # forbid a same-repo workspace member.
-    expected_local = {"mimi-core", "mimihubd"}
+    expected_local = {"mimi-core", "mimihubd", "mimihubd-api"}
     actual_local = local_package_names(text)
     unexpected = actual_local - expected_local
     if unexpected:
@@ -69,7 +69,7 @@ def main() -> int:
         print(f"MANIFEST-PURITY VIOLATION: non-crates.io sources found: {bad_sources}", file=sys.stderr)
         return 1
 
-    print("manifest-purity: OK (deps resolve to crates.io or OpenMLS at a revision; only mimi-core/mimihubd are local)")
+    print("manifest-purity: OK (deps resolve to crates.io or OpenMLS at a revision; only mimi-core/mimihubd/mimihubd-api are local)")
     return 0
 
 
