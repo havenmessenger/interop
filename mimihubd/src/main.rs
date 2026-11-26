@@ -39,6 +39,11 @@
 //!                          value stops the start
 //!   MIMI_EVENTS_PUSH_URL   optional, with MIMI_LANE_DELIVERY=events; an https URL on the provider's domain the hub
 //!                          pushes the event stream to, signed with MIMI_SIGNING_KEY (required with it)
+//!   MIMI_EVENTS_PUSH_ALLOW optional, with MIMI_EVENTS_PUSH_URL; comma-separated addr/len ranges the push
+//!                          destination may be at although they are special (loopback, private, ...). It applies to
+//!                          the push alone: MIMI_OUTBOUND_ALLOW, the peers' allowlist, does not apply to the push, and
+//!                          this one never applies to a peer. The push connects directly, never through
+//!                          MIMI_OUTBOUND_PROXY
 //!   MIMI_PEER_KEYS         optional; JSON file of DNS-published peer keys ("<keyid>._mimi.<domain>": base64), kept
 //!                          current by a job on the host; without it only a client certificate admits a peer
 //!   MIMI_OUTBOUND_ALLOW    optional; comma-separated addr/len ranges an outbound request may reach although they are
@@ -152,7 +157,12 @@ async fn main() -> anyhow::Result<()> {
     let tls_config = tls::build_mtls_server_config(&server_cert, &server_key, &client_ca)?;
     // The outbound client and the peer map, checked here like the listener's settings: a value that does not parse
     // stops the start.
-    let outbound = outbound_client(&resolved, &domain, &server_cert, &server_key, &client_ca)?;
+    let outbound_settings =
+        outbound_settings(&resolved, &domain, &server_cert, &server_key, &client_ca)?;
+    let outbound = mimihubd::outbound::PeerClient::new(
+        outbound_settings.clone(),
+        Arc::new(mimihubd::outbound::SystemResolver),
+    )?;
     eprintln!("[mimihubd] outbound: {}", outbound.describe());
     let peer_bases = match resolved["MIMI_PEERS"].as_deref() {
         Some(path) => mimihubd::peer_directory::PeerBases::load(std::path::Path::new(path))?,
@@ -253,8 +263,20 @@ async fn main() -> anyhow::Result<()> {
     }
     let shared = Arc::new(Mutex::new(provider));
     if let Some(url) = push_url.as_deref() {
+        // The push destination is the operator's own server: its own address allowlist, never the peers'.
+        let allow = resolved["MIMI_EVENTS_PUSH_ALLOW"]
+            .as_deref()
+            .map(mimihubd::outbound::AddressPolicy::parse_allowlist)
+            .transpose()
+            .map_err(|why| anyhow::anyhow!("MIMI_EVENTS_PUSH_ALLOW: {why}"))?
+            .unwrap_or_default();
+        let push_client = mimihubd::outbound::PeerClient::new(
+            outbound_settings.for_event_push(allow),
+            Arc::new(mimihubd::outbound::SystemResolver),
+        )?;
+        eprintln!("[mimihubd] event push: {}", push_client.describe());
         let pusher =
-            mimihubd::event_push::EventPusher::new(shared.clone(), access.client.clone(), url)?;
+            mimihubd::event_push::EventPusher::new(shared.clone(), Arc::new(push_client), url)?;
         pusher.spawn();
         eprintln!("[mimihubd] the provider event stream is pushed to {url}");
     } else if delivers_events {
@@ -400,16 +422,14 @@ fn lane_settings(
 /// The outbound client from the resolved settings: `MIMI_CLIENT_CERT`/`KEY` as the client certificate, else the hub's
 /// server certificate and key; the client CA bundle as extra trust anchors; and the address allowlist, proxy and trust
 /// setting.
-fn outbound_client(
+fn outbound_settings(
     resolved: &config::Resolved,
     domain: &str,
     server_cert: &[u8],
     server_key: &[u8],
     client_ca: &[u8],
-) -> anyhow::Result<mimihubd::outbound::PeerClient> {
-    use mimihubd::outbound::{
-        AddressPolicy, OutboundSettings, PeerClient, PeerTrust, ProxyAddr, SystemResolver,
-    };
+) -> anyhow::Result<mimihubd::outbound::OutboundSettings> {
+    use mimihubd::outbound::{AddressPolicy, OutboundSettings, PeerTrust, ProxyAddr};
     let allow = resolved["MIMI_OUTBOUND_ALLOW"]
         .as_deref()
         .map(AddressPolicy::parse_allowlist)
@@ -457,18 +477,15 @@ fn outbound_client(
         (None, None) => None,
         _ => anyhow::bail!("MIMI_CLIENT_CERT and MIMI_CLIENT_KEY are set together or not at all"),
     };
-    PeerClient::new(
-        OutboundSettings {
-            own_domain: domain.to_string(),
-            client_certificate,
-            signer,
-            peer_bundle_pem: Some(client_ca.to_vec()),
-            trust,
-            addresses: AddressPolicy::with_allowlist(allow),
-            proxy,
-        },
-        Arc::new(SystemResolver),
-    )
+    Ok(OutboundSettings {
+        own_domain: domain.to_string(),
+        client_certificate,
+        signer,
+        peer_bundle_pem: Some(client_ca.to_vec()),
+        trust,
+        addresses: AddressPolicy::with_allowlist(allow),
+        proxy,
+    })
 }
 
 /// A required mTLS material path, resolved from env-or-file, logged with WHICH layer supplied it,

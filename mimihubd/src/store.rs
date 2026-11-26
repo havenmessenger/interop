@@ -46,8 +46,8 @@ pub struct SqliteStore {
 struct EventDelivery {
     domain: String,
     wake: std::sync::Arc<tokio::sync::Notify>,
-    /// Whether the hub pushes the stream to the provider's server (`event_push.rs`).
-    push: bool,
+    /// When the hub pushes the stream to the provider's server (`event_push.rs`), how the push stands.
+    push: Option<std::sync::Arc<std::sync::Mutex<crate::event_push::PushStatus>>>,
 }
 
 impl SqliteStore {
@@ -446,7 +446,7 @@ impl SqliteStore {
         self.events = Some(EventDelivery {
             domain: domain.to_ascii_lowercase(),
             wake,
-            push: false,
+            push: None,
         });
     }
 
@@ -455,13 +455,20 @@ impl SqliteStore {
         let events = self.events.as_mut().ok_or_else(|| {
             anyhow::anyhow!("event push needs event delivery (lane_delivery = \"events\")")
         })?;
-        events.push = true;
+        events.push = Some(std::sync::Arc::default());
         Ok(())
     }
 
     /// Whether the stream is pushed to the provider's server.
     pub fn pushes_events(&self) -> bool {
-        self.events.as_ref().is_some_and(|events| events.push)
+        self.push_status().is_some()
+    }
+
+    /// How the push stands, when the stream is pushed.
+    pub fn push_status(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<crate::event_push::PushStatus>>> {
+        self.events.as_ref().and_then(|events| events.push.clone())
     }
 
     /// Whether this store writes the provider event stream instead of per-user queues.

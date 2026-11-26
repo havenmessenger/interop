@@ -18,7 +18,7 @@ use super::client_lane_tests::{call, lane, lane_over, signed, Lane};
 use crate::client_lane_events::EventBatch;
 use crate::client_lane_rooms::LaneRoomProfile;
 use crate::event_push::{EventPusher, PushAttempt};
-use crate::outbound::tests::{answer, loopback_allowed, resolver, server_with, Pki};
+use crate::outbound::tests::{answer, server_with, Pki};
 use crate::Provider;
 
 const DOMAIN: &str = "havenmessenger.com";
@@ -112,10 +112,30 @@ async fn info_states_the_version_and_the_delivery_mode() {
         serde_json::json!({"lane_version": 1, "delivery": "inbox", "push": false})
     );
     let events = events_lane("events-info-events");
+    write(&events, &[b"1", b"2"]);
     let (_, body) = call(&events.router, provider_signed(&events.key, "info", "{}")).await;
     assert_eq!(
         body,
-        serde_json::json!({"lane_version": 1, "delivery": "events", "push": false})
+        serde_json::json!({
+            "lane_version": 1,
+            "delivery": "events",
+            "push": false,
+            "stream": {"last_seq": 2, "acked_through": 0}
+        })
+    );
+    // A hub that pushes says how the push stands; one that has not tried yet has failed nothing.
+    events
+        .provider
+        .lock()
+        .unwrap()
+        .store
+        .set_event_push()
+        .unwrap();
+    let (_, body) = call(&events.router, provider_signed(&events.key, "info", "{}")).await;
+    assert_eq!(body["push"], true);
+    assert_eq!(
+        body["push_status"],
+        serde_json::json!({"acked_through": 0, "failures": 0})
     );
 }
 
@@ -198,12 +218,14 @@ async fn switching_transport_mid_stream_loses_and_repeats_nothing() {
         answer("200 OK", "", b"")
     })
     .await;
+    l.provider.lock().unwrap().store.set_event_push().unwrap();
     let pusher = EventPusher::new(
         l.provider.clone(),
-        Arc::new(pki.client(
-            loopback_allowed(),
+        Arc::new(crate::event_push::tests::push_client(
+            &pki,
+            "app.havenmessenger.com",
+            addr,
             None,
-            resolver("app.havenmessenger.com", &[addr]),
         )),
         &format!("https://app.havenmessenger.com:{}/events", addr.port()),
     )

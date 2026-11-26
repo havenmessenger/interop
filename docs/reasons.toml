@@ -44,6 +44,33 @@ quote = ""
 divergence = "DIV-19"
 reason = "More client lane requests for one user in a minute than the hub takes."
 
+[[reason]]
+id = "delivery-mode"
+surfaces_as = "problem delivery-mode, 409"
+spec = "local"
+section = ""
+quote = ""
+divergence = "DIV-19"
+reason = "A client lane call for the delivery mode the hub is not in: a per-user inbox call to a hub that delivers through the provider event stream, or an event stream call to one that delivers per user."
+
+[[reason]]
+id = "ack-past-end"
+surfaces_as = "problem ack-past-end, 400"
+spec = "local"
+section = ""
+quote = ""
+divergence = "DIV-19"
+reason = "An event stream acknowledgement names a seq past the last event written, which would skip events not yet written."
+
+[[reason]]
+id = "group-mismatch"
+surfaces_as = "problem group-mismatch, 400"
+spec = "local"
+section = ""
+quote = ""
+divergence = ""
+reason = "A message for a room whose tree the hub keeps is framed for another group, or for an epoch the room has not reached, which a member would route to another chat or read as a missed Commit."
+
 # --- key material ------------------------------------------------------------------------------------------------
 
 [[reason]]

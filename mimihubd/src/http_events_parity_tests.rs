@@ -23,7 +23,7 @@ use super::update_leave_tests::{by_value_change, commit_of, list_change};
 use crate::client_lane_events::{EventBatch, WireEvent};
 use crate::client_lane_rooms::{LaneRoomProfile, ROLE_MEMBER};
 use crate::event_push::{EventPusher, PushAttempt};
-use crate::outbound::tests::{answer, loopback_allowed, resolver, server_with, Pki};
+use crate::outbound::tests::{answer, server_with, Pki};
 use crate::Provider;
 
 const DOMAIN: &str = "havenmessenger.com";
@@ -220,13 +220,8 @@ async fn push(l: &Lane) -> Vec<WireEvent> {
     let (addr, seen) = receiver(&pki).await;
     let signer =
         Arc::new(crate::request_signing::RequestSigner::from_seed(&[9u8; 32], "hub1").unwrap());
-    let client = pki.client_with(
-        loopback_allowed(),
-        None,
-        resolver(SERVER, &[addr]),
-        true,
-        Some(signer),
-    );
+    // Through the real outbound gate: the peers' settings with the push destination's own allowlist.
+    let client = crate::event_push::tests::push_client(&pki, SERVER, addr, Some(signer));
     let pusher = EventPusher::new(
         l.provider.clone(),
         Arc::new(client),

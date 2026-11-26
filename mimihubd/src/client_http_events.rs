@@ -69,6 +69,12 @@ struct InfoAnswer {
     delivery: &'static str,
     /// Whether the hub pushes the event stream to the provider's server.
     push: bool,
+    /// Where the stream stands, for a hub delivering through it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<crate::store::EventCursor>,
+    /// How the push stands, for a hub that pushes: what a stuck push looks like from outside. No payload appears in it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    push_status: Option<crate::event_push::PushStatus>,
 }
 
 /// The lane's version and how this hub delivers.
@@ -77,6 +83,20 @@ async fn info(State(state): State<LaneState>, body: Bytes) -> Response {
         return crate::problem::MALFORMED_REQUEST.response();
     }
     let provider = crate::http::lock(&state.provider);
+    let stream = if provider.delivers_events() {
+        match provider.events_cursor() {
+            Ok(cursor) => Some(cursor),
+            Err(error) => return internal("info", error),
+        }
+    } else {
+        None
+    };
+    let push_status = provider.push_status().map(|status| {
+        status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    });
     Json(InfoAnswer {
         lane_version: LANE_VERSION,
         delivery: if provider.delivers_events() {
@@ -85,6 +105,8 @@ async fn info(State(state): State<LaneState>, body: Bytes) -> Response {
             "inbox"
         },
         push: provider.pushes_events(),
+        stream,
+        push_status,
     })
     .into_response()
 }

@@ -448,6 +448,7 @@ impl ProxyAddr {
 }
 
 /// What the client is built from.
+#[derive(Clone)]
 pub struct OutboundSettings {
     /// This provider's domain, for `From: mimi@<domain>`.
     pub own_domain: String,
@@ -460,6 +461,21 @@ pub struct OutboundSettings {
     pub trust: PeerTrust,
     pub addresses: AddressPolicy,
     pub proxy: Option<ProxyAddr>,
+}
+
+impl OutboundSettings {
+    /// The settings for pushing the provider event stream to the provider's own server (`event_push.rs`): these, with
+    /// the address policy replaced by `allow` alone and no proxy. The provider's server is the operator's own
+    /// destination, often on a private or loopback address, so it gets an allowlist of its own; the peers' allowlist
+    /// (`MIMI_OUTBOUND_ALLOW`) does not apply to it, and nothing here widens what a peer-supplied destination may reach.
+    /// The push connects directly: a hub that reaches its provider's server only through a proxy pulls instead.
+    pub fn for_event_push(&self, allow: Vec<Cidr>) -> Self {
+        Self {
+            addresses: AddressPolicy::with_allowlist(allow),
+            proxy: None,
+            ..self.clone()
+        }
+    }
 }
 
 /// An answer from a peer.

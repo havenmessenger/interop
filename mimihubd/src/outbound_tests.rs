@@ -69,20 +69,31 @@ impl Pki {
         certificate: bool,
         signer: Option<Arc<crate::request_signing::RequestSigner>>,
     ) -> PeerClient {
-        let (cert, key) = issue(&self.ca, vec![HUB.into()], HUB);
         PeerClient::new(
-            OutboundSettings {
-                own_domain: HUB.into(),
-                client_certificate: certificate.then(|| (cert.into_bytes(), key.into_bytes())),
-                signer,
-                peer_bundle_pem: Some(self.ca_pem.clone().into_bytes()),
-                trust: PeerTrust::BundleOnly,
-                addresses,
-                proxy,
-            },
+            self.settings(addresses, proxy, certificate, signer),
             resolve,
         )
         .unwrap()
+    }
+
+    /// The settings [`Self::client_with`] builds its client from.
+    pub(crate) fn settings(
+        &self,
+        addresses: AddressPolicy,
+        proxy: Option<ProxyAddr>,
+        certificate: bool,
+        signer: Option<Arc<crate::request_signing::RequestSigner>>,
+    ) -> OutboundSettings {
+        let (cert, key) = issue(&self.ca, vec![HUB.into()], HUB);
+        OutboundSettings {
+            own_domain: HUB.into(),
+            client_certificate: certificate.then(|| (cert.into_bytes(), key.into_bytes())),
+            signer,
+            peer_bundle_pem: Some(self.ca_pem.clone().into_bytes()),
+            trust: PeerTrust::BundleOnly,
+            addresses,
+            proxy,
+        }
     }
 }
 

@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use super::*;
 use crate::client_lane_events::EventBatch;
-use crate::outbound::tests::{answer, loopback_allowed, resolver, server_with, Pki, Seen};
+use crate::outbound::tests::{answer, resolver, server_with, Pki, Seen};
+use crate::outbound::{AddressPolicy, PeerClient, PeerUrl};
 
 const DOMAIN: &str = "hub.example";
 /// The provider's own server, on a subdomain of the provider's domain.
@@ -18,8 +19,26 @@ fn hub() -> SharedProvider {
     Arc::new(Mutex::new(
         crate::Provider::in_memory(DOMAIN)
             .unwrap()
-            .with_event_delivery(),
+            .with_event_delivery()
+            .with_event_push()
+            .unwrap(),
     ))
+}
+
+/// The client a hub pushes with, made as the daemon makes it: from the peers' settings, whose address policy admits no
+/// special range, with the push destination's own allowlist (loopback, where the test server is) in its place.
+pub(crate) fn push_client(
+    pki: &Pki,
+    host: &str,
+    addr: SocketAddr,
+    signer: Option<Arc<crate::request_signing::RequestSigner>>,
+) -> PeerClient {
+    let peers = pki.settings(AddressPolicy::default(), None, true, signer);
+    PeerClient::new(
+        peers.for_event_push(AddressPolicy::parse_allowlist("127.0.0.0/8").unwrap()),
+        resolver(host, &[addr]),
+    )
+    .unwrap()
 }
 
 fn write(provider: &SharedProvider, items: &[&[u8]]) {
@@ -44,13 +63,7 @@ async fn server(pki: &Pki, statuses: Vec<&'static str>) -> (SocketAddr, Arc<Mute
 fn pusher(provider: SharedProvider, pki: &Pki, addr: SocketAddr) -> Arc<EventPusher> {
     let signer =
         Arc::new(crate::request_signing::RequestSigner::from_seed(&[7u8; 32], "hub1").unwrap());
-    let client = pki.client_with(
-        loopback_allowed(),
-        None,
-        resolver(SERVER, &[addr]),
-        true,
-        Some(signer),
-    );
+    let client = push_client(pki, SERVER, addr, Some(signer));
     EventPusher::new(
         provider,
         Arc::new(client),
@@ -170,7 +183,9 @@ async fn a_restarted_hub_resumes_from_the_acknowledged_cursor() {
         Arc::new(Mutex::new(
             crate::Provider::open(DOMAIN, path.to_str().unwrap())
                 .unwrap()
-                .with_event_delivery(),
+                .with_event_delivery()
+                .with_event_push()
+                .unwrap(),
         ))
     };
     {
@@ -195,13 +210,96 @@ async fn a_restarted_hub_resumes_from_the_acknowledged_cursor() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// A push URL off the provider's domain, or a hub that delivers per user, is refused when the pusher is made.
+/// A push URL off the provider's domain, a hub that delivers per user, or one not configured to push, is refused when
+/// the pusher is made.
 #[tokio::test]
 async fn a_pusher_needs_the_stream_and_a_url_on_the_providers_domain() {
     let pki = Pki::new();
-    let client = Arc::new(pki.client(loopback_allowed(), None, resolver(SERVER, &[])));
+    let addr: SocketAddr = "127.0.0.1:9".parse().unwrap();
+    let client = Arc::new(push_client(&pki, SERVER, addr, None));
     assert!(EventPusher::new(hub(), client.clone(), "https://elsewhere.example/events").is_err());
     assert!(EventPusher::new(hub(), client.clone(), "http://app.hub.example/events").is_err());
     let inbox = Arc::new(Mutex::new(crate::Provider::in_memory(DOMAIN).unwrap()));
-    assert!(EventPusher::new(inbox, client, "https://app.hub.example/events").is_err());
+    assert!(EventPusher::new(inbox, client.clone(), "https://app.hub.example/events").is_err());
+    let not_pushing = Arc::new(Mutex::new(
+        crate::Provider::in_memory(DOMAIN)
+            .unwrap()
+            .with_event_delivery(),
+    ));
+    assert!(EventPusher::new(not_pushing, client, "https://app.hub.example/events").is_err());
+}
+
+/// The push destination's allowlist admits the operator's own server on loopback, while a client made from the same
+/// peers' settings, the one every request to a peer goes through, still refuses that address: the push's allowlist
+/// widens nothing for a peer-supplied destination. Revert check: build the push client from the peers' settings
+/// unchanged, and the push to loopback is refused; widen the peers' settings instead, and the peer request goes through.
+#[tokio::test]
+async fn the_push_allowlist_does_not_widen_the_peer_gate() {
+    let pki = Pki::new();
+    let (addr, seen) = server(&pki, vec!["200 OK"]).await;
+    let url = PeerUrl::parse(&format!("https://{SERVER}:{}/x", addr.port()), DOMAIN).unwrap();
+    let peers = pki.settings(AddressPolicy::default(), None, true, None);
+    let push = PeerClient::new(
+        peers.for_event_push(AddressPolicy::parse_allowlist("127.0.0.0/8").unwrap()),
+        resolver(SERVER, &[addr]),
+    )
+    .unwrap();
+    let peer = PeerClient::new(peers.clone(), resolver(SERVER, &[addr])).unwrap();
+    assert_eq!(
+        push.post(&url, "application/json", b"{}".to_vec())
+            .await
+            .expect("the push reaches the configured destination")
+            .status,
+        200
+    );
+    let refused = peer
+        .post(&url, "application/json", b"{}".to_vec())
+        .await
+        .expect_err("PLANT-PUSH-WIDENS-PEERS: a peer request reached a loopback address");
+    assert!(
+        matches!(refused, crate::outbound::OutboundError::Refused { .. }),
+        "{refused}"
+    );
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "only the push reached the server"
+    );
+}
+
+/// A push the server keeps refusing is visible: failures counted, the last error kept, the acknowledged seq where it
+/// was; one that goes through again clears them.
+#[tokio::test]
+async fn a_stuck_push_is_visible_in_its_status() {
+    let pki = Pki::new();
+    let (addr, _seen) = server(
+        &pki,
+        vec![
+            "500 Internal Server Error",
+            "503 Service Unavailable",
+            "200 OK",
+        ],
+    )
+    .await;
+    let provider = hub();
+    write(&provider, &[b"one"]);
+    let pusher = pusher(provider.clone(), &pki, addr);
+    pusher.push_once().await;
+    pusher.push_once().await;
+    let status = pusher.status();
+    assert_eq!(status.failures, 2);
+    assert_eq!(status.last_error.as_deref(), Some("answered 503"));
+    assert_eq!(status.acked_through, 0);
+    let shared = crate::http::lock(&provider).push_status().unwrap();
+    assert_eq!(
+        *shared.lock().unwrap(),
+        status,
+        "the provider reports the pusher's own status"
+    );
+    pusher.push_once().await;
+    let status = pusher.status();
+    assert_eq!(
+        (status.failures, status.last_error, status.acked_through),
+        (0, None, 1)
+    );
 }

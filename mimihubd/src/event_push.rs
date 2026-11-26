@@ -16,9 +16,10 @@
 //! policy, and the request is signed with the provider's key (`request_signing.rs`), with the client certificate when one
 //! is configured. The server checks that signature to know the batch came from its hub.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use serde::Serialize;
 use tokio::sync::Notify;
 
 use crate::client_lane_events::MAX_EVENTS_PAGE;
@@ -43,12 +44,29 @@ pub enum PushAttempt {
     },
 }
 
+/// How the push stands, as the lane's `info` reports it: enough to see a push that is stuck, and why, without any
+/// event's content.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct PushStatus {
+    /// The last `seq` the provider's server acknowledged by push.
+    pub acked_through: i64,
+    /// Failed attempts since the last one that went through.
+    pub failures: u32,
+    /// Why the last attempt failed, while the push is failing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// When the last attempt was made, in Unix seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_attempt_at: Option<i64>,
+}
+
 /// The pusher. [`EventPusher::spawn`] runs it.
 pub struct EventPusher {
     provider: SharedProvider,
     client: Arc<PeerClient>,
     url: PeerUrl,
     wake: Arc<Notify>,
+    status: Arc<Mutex<PushStatus>>,
 }
 
 impl EventPusher {
@@ -59,12 +77,17 @@ impl EventPusher {
         client: Arc<PeerClient>,
         url: &str,
     ) -> anyhow::Result<Arc<Self>> {
-        let (domain, wake) = {
+        let (domain, wake, status) = {
             let provider = crate::http::lock(&provider);
             let wake = provider.event_waker().ok_or_else(|| {
                 anyhow::anyhow!("event push needs event delivery (lane_delivery = \"events\")")
             })?;
-            (provider.domain().to_string(), wake)
+            let status = provider.push_status().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "event push is not configured on this provider (Provider::with_event_push)"
+                )
+            })?;
+            (provider.domain().to_string(), wake, status)
         };
         let url = PeerUrl::parse(url, &domain)
             .map_err(|error| anyhow::anyhow!("events_push_url: {error}"))?;
@@ -73,6 +96,7 @@ impl EventPusher {
             client,
             url,
             wake,
+            status,
         }))
     }
 
@@ -82,30 +106,16 @@ impl EventPusher {
     }
 
     async fn run(self: Arc<Self>) {
-        let mut failures: u32 = 0;
         loop {
             let notified = self.wake.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
             match self.push_once().await {
-                PushAttempt::Delivered { more: true, .. } => {
-                    failures = 0;
-                    continue;
-                }
-                PushAttempt::Delivered { more: false, .. } => {
-                    failures = 0;
-                }
-                PushAttempt::Idle => {}
-                PushAttempt::Failed {
-                    why,
-                    retry_after_ms,
-                } => {
-                    let delay = retry_delay_ms(failures, retry_after_ms);
-                    failures = failures.saturating_add(1);
-                    eprintln!(
-                        "[mimihubd] events: push failed ({why}); attempt {failures}, next in {} s",
-                        delay / 1000
-                    );
+                PushAttempt::Delivered { more: true, .. } => continue,
+                PushAttempt::Delivered { more: false, .. } | PushAttempt::Idle => {}
+                PushAttempt::Failed { retry_after_ms, .. } => {
+                    let failures = self.status().failures;
+                    let delay = retry_delay_ms(failures.saturating_sub(1), retry_after_ms);
                     tokio::time::sleep(Duration::from_millis(delay)).await;
                     continue;
                 }
@@ -117,8 +127,61 @@ impl EventPusher {
         }
     }
 
-    /// Post the batch after the cursor, and acknowledge it when the server takes it.
+    /// How the push stands now.
+    pub fn status(&self) -> PushStatus {
+        self.status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Post the batch after the cursor, acknowledge it when the server takes it, and record how the push stands. A
+    /// line is logged when the push starts failing, when its reason changes, and when it goes through again; not on
+    /// every retry.
     pub async fn push_once(&self) -> PushAttempt {
+        let attempt = self.attempt().await;
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |since| {
+                i64::try_from(since.as_secs()).unwrap_or(i64::MAX)
+            });
+        let mut status = self
+            .status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match &attempt {
+            PushAttempt::Idle => {}
+            PushAttempt::Delivered { through, .. } => {
+                if status.failures > 0 {
+                    eprintln!(
+                        "[mimihubd] events: push recovered after {} failed attempt(s); acknowledged through {through}",
+                        status.failures
+                    );
+                }
+                *status = PushStatus {
+                    acked_through: *through,
+                    failures: 0,
+                    last_error: None,
+                    last_attempt_at: Some(now),
+                };
+            }
+            PushAttempt::Failed { why, .. } => {
+                if status.last_error.as_deref() != Some(why.as_str()) {
+                    eprintln!(
+                        "[mimihubd] events: push failing ({why}); acknowledged through {}, retrying with backoff",
+                        status.acked_through
+                    );
+                }
+                status.failures = status.failures.saturating_add(1);
+                status.last_error = Some(why.clone());
+                status.last_attempt_at = Some(now);
+            }
+        }
+        attempt
+    }
+
+    /// One attempt: post the batch after the cursor, and acknowledge it when the server takes it.
+    async fn attempt(&self) -> PushAttempt {
         let failed = |why: String| PushAttempt::Failed {
             why,
             retry_after_ms: None,
@@ -171,4 +234,4 @@ impl EventPusher {
 
 #[cfg(test)]
 #[path = "event_push_tests.rs"]
-mod tests;
+pub(crate) mod tests;

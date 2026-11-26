@@ -29,6 +29,7 @@ const KNOWN_KEYS: &[&str] = &[
     "lane_room_policy",
     "lane_delivery",
     "events_push_url",
+    "events_push_allow",
     "policy",
     "public_base_url",
     "activity_log",
@@ -74,6 +75,9 @@ pub struct ConfigFile {
     pub lane_delivery: Option<String>,
     /// Where the hub pushes the provider event stream (an https URL on the provider's domain); unset means no push.
     pub events_push_url: Option<String>,
+    /// Comma-separated `addr/len` ranges the push destination may be at although they are special (loopback, private);
+    /// for the push alone, never for a peer.
+    pub events_push_allow: Option<String>,
     /// The policy file (see `policy.rs`). Unset means the drafts' defaults.
     pub policy: Option<String>,
     pub public_base_url: Option<String>,
@@ -169,6 +173,7 @@ impl ConfigFile {
             "lane_room_policy" => self.lane_room_policy.as_ref(),
             "lane_delivery" => self.lane_delivery.as_ref(),
             "events_push_url" => self.events_push_url.as_ref(),
+            "events_push_allow" => self.events_push_allow.as_ref(),
             "policy" => self.policy.as_ref(),
             "public_base_url" => self.public_base_url.as_ref(),
             "activity_log" => self.activity_log.as_ref(),
@@ -349,6 +354,11 @@ pub fn resolve_all(file: Option<&ConfigFile>) -> Resolved {
     m.insert(
         "MIMI_EVENTS_PUSH_URL",
         resolve("MIMI_EVENTS_PUSH_URL", "events_push_url", file, None),
+    );
+    // No default: the push destination may be at no special address unless an operator names its range.
+    m.insert(
+        "MIMI_EVENTS_PUSH_ALLOW",
+        resolve("MIMI_EVENTS_PUSH_ALLOW", "events_push_allow", file, None),
     );
     // No default: without a policy file the hub follows the drafts' defaults.
     m.insert("MIMI_POLICY", resolve("MIMI_POLICY", "policy", file, None));

@@ -304,8 +304,9 @@ the file - see [`debian/mimihubd.toml.example`](debian/mimihubd.toml.example) an
 | `MIMI_LANE_KEY` | `lane_key` | with the lane | none | PEM path, the lane listener's TLS private key. |
 | `MIMI_LANE_ROOM_POLICY` | `lane_room_policy` | no | the neutral profile | TOML file of what a room the lane creates starts with: its room policy, the role its creator holds and whether it allows external Commits (format in `mimihubd/src/client_lane_rooms.rs`). A file the hub cannot read or that is not a valid profile stops the start. The neutral profile: admins add, remove, ban and change roles, members send and may leave, the creator is an admin, external Commits are refused. |
 | `MIMI_LANE_KEYS` | `lane_keys` | with the lane | none | Path of a JSON file of the client-facing service's signing keys, `{"<keyid>._mimi.client-lane": "<base64 Ed25519 public key>"}`, an empty value for a revoked key. |
-| `MIMI_LANE_DELIVERY` | `lane_delivery` | no | `inbox` | How the hub hands this provider's users what it holds for them: `inbox`, a queue per user read with `inboxFetch`/`inboxAck`, or `events`, one provider event stream read by pull on the lane or pushed (below, "Delivering to your server: push or pull"). `events` needs a reader: the lane, or `MIMI_EVENTS_PUSH_URL`. Any other value stops the start. |
-| `MIMI_EVENTS_PUSH_URL` | `events_push_url` | no | none | With `MIMI_LANE_DELIVERY=events`, the `https` URL of the provider's own server the hub pushes the event stream to; its host is the provider's domain or a subdomain of it, and it goes through the outbound gate like every outbound request. Needs `MIMI_SIGNING_KEY`: every push is signed. Unset means no push. |
+| `MIMI_LANE_DELIVERY` | `lane_delivery` | no | `inbox` | How the hub hands this provider's users what it holds for them: `inbox` (per-user, legacy), a queue per user read with `inboxFetch`/`inboxAck`, or `events` (provider stream), one stream for the whole provider read by pull on the lane or pushed (below, "Delivering to your server: push or pull"). `events` needs a reader: the lane, or `MIMI_EVENTS_PUSH_URL`. Any other value stops the start. |
+| `MIMI_EVENTS_PUSH_URL` | `events_push_url` | no | none | With `MIMI_LANE_DELIVERY=events`, the `https` URL of the provider's own server the hub pushes the event stream to; its host is the provider's domain or a subdomain of it, and its addresses pass the outbound gate under the push's own allowlist (`MIMI_EVENTS_PUSH_ALLOW`). Needs `MIMI_SIGNING_KEY`: every push is signed. Unset means no push. |
+| `MIMI_EVENTS_PUSH_ALLOW` | `events_push_allow` | no | none | Comma-separated `addr/len` ranges the push destination may be at although they are special (loopback, private, ...), for a provider server on its own network. It applies to the push alone: `MIMI_OUTBOUND_ALLOW` does not apply to the push, and this one never to a request to a peer. A value that does not parse stops the start. |
 | `MIMI_POLICY` | `policy` | no | none | A TOML file of the deployment's choices, below. Unset means the drafts' defaults. A named file the hub cannot read, or one that is not a valid policy, stops the start. |
 | `MIMI_PEER_KEYS` | `peer_keys` | no | none | Path of a JSON file of peers' DNS-published signing keys, `{"<keyid>._mimi.<domain>": "<base64 Ed25519 public key>"}`, an empty value for a revoked key. Re-read when it changes. Without it, no signature verifies and only a client certificate admits a peer. |
 | `MIMI_ACTIVITY_LOG` | `activity_log` | no | off | `1` prints one line per request on the peer-facing listener to stderr: `[mimi-activity] method=POST route=/mimi/pl/update/:room_id status=200`. The route is the template the request matched (`route=unmatched` when none did), so no path, query string, header, certificate or body appears in it. Any other value, or none, leaves it off. The directory-only listener is not logged. |
@@ -464,7 +465,8 @@ A refused request is a 401 `client-not-authenticated`; past 600 requests a minut
 
 #### Delivering to your server: push or pull
 
-A hub with `MIMI_LANE_DELIVERY=events` keeps one stream of everything it holds for the provider's users, in place of a
+A hub delivers in one of two modes: `inbox` (per-user, legacy), the default, a queue per user read with `inboxFetch`
+and `inboxAck`; or `events` (provider stream). A hub with `MIMI_LANE_DELIVERY=events` keeps one stream of everything it holds for the provider's users, in place of a
 queue per user, and the provider's own server reads it, much as a mail server hands mail to a delivery agent. Each event
 has a `seq`, one more than the event before it, across every user and room: Welcomes, room messages and consent
 changes come in the order the hub took them, one ordering for the whole provider, stricter than ordering per room. The
@@ -506,7 +508,7 @@ these routes, nor one for the provider on a user's route.
 | `events/wait` | `{after_seq, timeout_ms}` → `{latest_seq, users}` | Held until an event past `after_seq` exists, then answered at once with the last `seq` and the users with events past `after_seq`; at `timeout_ms` (at most 25000) answered with no users. |
 | `events/fetch` | `{after_seq, limit}` → `{events, more}` | The events past `after_seq`, in `seq` order, left in place. |
 | `events/ack` | `{up_to_seq}` → `{acked_through}` | Takes every event up to `up_to_seq` out of the stream and moves the cursor there. The cursor only moves forward; `up_to_seq` past the last event is refused with 400 `ack-past-end`, so an acknowledgement can never skip an event written later. |
-| `info` | `{}` → `{lane_version, delivery, push}` | The lane's contract version (`1`), `inbox` or `events`, and whether the hub pushes. |
+| `info` | `{}` → `{lane_version, delivery, push, stream?, push_status?}` | The lane's contract version (`1`), `inbox` or `events`, and whether the hub pushes. For `events`, `stream` is `{last_seq, acked_through}`. For a hub that pushes, `push_status` is `{acked_through, failures, last_error?, last_attempt_at?}`: a push the server keeps refusing shows its failures and why, never an event's content. |
 
 A server's loop: `events/wait` from its last handled `seq`; when `latest_seq` is past it, `events/fetch`, handle the
 events in order, `events/ack` the last one; repeat.
@@ -522,13 +524,23 @@ certificate when one is configured), so the server knows it came from its hub. O
 - No answer causes a batch to be skipped, a `4xx` included: a skipped batch would be lost events.
 - After a restart the hub resumes from the last acknowledged `seq`.
 
-The URL's host must be the provider's domain or a subdomain of it, and its addresses pass the outbound gate
-(`MIMI_OUTBOUND_ALLOW` for a server on a private address; `MIMI_OUTBOUND_PROXY` applies too).
+A push that keeps failing is never given up: the lane's `info` shows it (`push_status`), and the hub logs a line when
+the push starts failing, when the reason changes, and when it goes through again, not on every retry.
+
+The URL's host must be the provider's domain or a subdomain of it. Its addresses pass the outbound gate, which refuses
+loopback, private and the other special ranges, under an allowlist of the push's own: `MIMI_EVENTS_PUSH_ALLOW` names the
+ranges a provider server on its own network may be at. That allowlist is the operator's statement about one destination
+it configured, so it applies to the push and nothing else; `MIMI_OUTBOUND_ALLOW`, which widens what a peer-supplied
+destination may reach, does not apply to the push, and the push's allowlist never applies to a peer. The push connects
+directly, never through `MIMI_OUTBOUND_PROXY`: a hub that can reach its provider's server only through a proxy pulls
+instead.
 
 ```toml
 # The hub posts the stream to the provider's own server.
 lane_delivery = "events"
 events_push_url = "https://app.example.com/mimi-events"
+# The server is on the provider's own network: name its range, addr/len.
+events_push_allow = "<the server's range>"
 signing_key = "/etc/mimihubd/signing.key"
 signing_selector = "hub1"
 ```

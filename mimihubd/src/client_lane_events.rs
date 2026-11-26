@@ -112,6 +112,11 @@ impl Provider {
         self.store.pushes_events()
     }
 
+    /// How the push stands, when the hub pushes: what `info` reports and the pusher updates.
+    pub fn push_status(&self) -> Option<Arc<std::sync::Mutex<crate::event_push::PushStatus>>> {
+        self.store.push_status()
+    }
+
     /// Whether this hub delivers through the provider event stream.
     pub fn delivers_events(&self) -> bool {
         self.store.delivers_events()

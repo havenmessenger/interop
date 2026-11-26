@@ -8,10 +8,13 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 - `mimihubd`: the provider event stream, a second way for the client lane to deliver (`MIMI_LANE_DELIVERY=events`;
   per-user inboxes stay the default and are unchanged). Welcomes, room messages and consent changes for every user of
-  the provider go into one sequence, numbered by `seq` without gaps. The provider's server reads it by pull
+  the provider go into one sequence, numbered by `seq` without gaps. The modes are `inbox` (per-user, legacy) and
+  `events` (provider stream). The provider's server reads it by pull
   (`events/wait`, `events/fetch`, `events/ack` on the lane, signed for the provider with the tag
   `mimi-client-lane-provider`) or has the hub push it (`MIMI_EVENTS_PUSH_URL`: signed batches, one in flight, retried
-  until a `2xx`, resumed from the acknowledged cursor after a restart). Both transports share one cursor, so an operator
+  until a `2xx`, resumed from the acknowledged cursor after a restart; its destination has an address allowlist of its
+  own, `MIMI_EVENTS_PUSH_ALLOW`, which never applies to a peer, and its state, failures included, is in `info`). Both
+  transports share one cursor, so an operator
   can switch between them without losing or repeating an event. A test plays one scenario through both and requires the
   same events from each. The lane's `info` states its contract version (`1`) and how the hub delivers. Two new problem
   types: `delivery-mode` and `ack-past-end`. The store gains the `events` and `event_cursor` tables.
