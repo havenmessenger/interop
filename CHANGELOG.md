@@ -6,6 +6,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimihubd`'s lab MLS client (`examples/mls_lab.rs`) takes `--did-webvh`: its members carry did_webvh credentials, its
+  rooms the did_webvh_heads record and `app_components`, and each add the record update (or leaves it out with
+  `"record": false`), so a lab walk can run with did_webvh members end to end.
 - `mimihubd`'s tests read the did_webvh credential's interop vectors from its reference implementation (generated
   independently of its Rust code) and the DIF did:webvh test suite's logs, `tests/vectors/didwebvh/` with their
   provenance, through the hub's own credential and group-rule code: every log, binding, Commit and join vector gets the

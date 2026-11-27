@@ -15,6 +15,12 @@
 //! {"op":"join","user":"<user URI>","welcome":"<b64>"}              join from a Welcome a member's provider delivered
 //! ```
 //!
+//! `mls_lab --did-webvh` gives every member a `did_webvh` credential (draft-atwood-mls-didwebvh-credential) in place of
+//! a Basic one: a one-entry did:webvh log authorizing the member's MLS signature key and naming its user URI in
+//! `alsoKnownAs`. Its leaves then list the `did_webvh` credential type and name the `did_webvh_heads` record in their
+//! `app_components`; `create` adds `app_components` and a record holding the creator's head to the components it is
+//! given; an `add` carries the record update with the joiner's head, or leaves it out with `"record": false`.
+//!
 //! An `accepted` with `"remote": true` settles an add whose joiner is a member of another provider: it joins later, from
 //! the Welcome its own provider delivers (`join`). The group carries its ratchet tree in the Welcome, so a joiner needs
 //! nothing else.
@@ -45,10 +51,66 @@ use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::signatures::{Signer, SignerError};
 use openmls_traits::OpenMlsProvider;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 const SUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 /// The participant list's app data component (protocol-07 §7.5).
 const PARTICIPANT_LIST_COMPONENT: u16 = 0x0022;
+/// The `app_components` component (mls-extensions §7.5): the components a group's members implement.
+const APP_COMPONENTS: u16 = 0x0001;
+/// The `did_webvh` code points the hub reads by default, the reference implementation's.
+const DID_WEBVH: mls_didwebvh::CodePoints = mls_didwebvh::CodePoints::DEFAULT;
+
+/// An `app_components` value naming `ids`: `ComponentID component_ids<V>`.
+fn app_components(ids: &[u16]) -> Vec<u8> {
+    let mut out = vec![u8::try_from(ids.len() * 2).unwrap_or(u8::MAX)];
+    for id in ids {
+        out.extend_from_slice(&id.to_be_bytes());
+    }
+    out
+}
+
+/// A `did_webvh` credential for `uri` authorizing `signature_key`: a one-entry log at the URI's host, its path the URI's
+/// last segment, written under an update key derived from the URI.
+fn did_webvh_credential(uri: &str, signature_key: &[u8]) -> Result<Credential, String> {
+    use mls_didwebvh::controller::{DidLog, Parameters, UpdateKey};
+    let rest = uri.strip_prefix("mimi://").ok_or("not a mimi: URI")?;
+    let host = rest.split('/').next().unwrap_or_default();
+    let path = rest.rsplit('/').next().unwrap_or_default();
+    let key = UpdateKey::from_seed(&Sha256::digest(uri.as_bytes()).into());
+    let device: mls_didwebvh::PublicKey = signature_key
+        .try_into()
+        .map_err(|_| "an Ed25519 signature key")?;
+    let log = DidLog::create_also_known_as(
+        host,
+        path,
+        "2026-11-26T10:00:00Z",
+        &Parameters {
+            update_keys: Some(vec![key.multikey()]),
+            next_key_hashes: None,
+        },
+        &key,
+        &[device],
+        &[uri.to_string()],
+    )
+    .map_err(|e| format!("{e}"))?;
+    let credential = log.credential().map_err(|e| format!("{e}"))?;
+    Ok(Credential::new(
+        CredentialType::Other(DID_WEBVH.credential_type()),
+        credential.encode().map_err(|e| format!("{e}"))?,
+    ))
+}
+
+/// The head a `did_webvh` credential's log verifies to, as the record holds it; `None` for any other credential.
+fn head_of(credential: &Credential) -> Result<Option<mls_didwebvh::DidWebvhHead>, String> {
+    if credential.credential_type() != CredentialType::Other(DID_WEBVH.credential_type()) {
+        return Ok(None);
+    }
+    let decoded = mls_didwebvh::DidWebvhCredential::decode(credential.serialized_content())
+        .map_err(|e| format!("{e}"))?;
+    let log = mls_didwebvh::verify_credential(&decoded).map_err(|e| format!("{e:?}"))?;
+    Ok(Some(mls_didwebvh::DidWebvhHead::from_log(&log)))
+}
 
 struct KeySigner(Vec<u8>);
 
@@ -70,22 +132,27 @@ struct Member {
     signer: KeySigner,
     credential: CredentialWithKey,
     group: Option<MlsGroup>,
-    /// The Welcome, the joiner and its role of this member's Commit the hub has not answered yet.
-    pending: Option<(Welcome, String, u32)>,
+    /// The Welcome, the joiner, its role and the record after it, of this member's Commit the hub has not answered yet.
+    pending: Option<(Welcome, String, u32, Option<mls_didwebvh::DidWebvhHeads>)>,
 }
 
 impl Member {
-    fn new(uri: &str) -> Result<Self, String> {
+    fn new(uri: &str, did_webvh: bool) -> Result<Self, String> {
         let provider = OpenMlsRustCrypto::default();
         let (private, public) = provider
             .crypto()
             .signature_key_gen(SignatureScheme::ED25519)
             .map_err(|e| format!("{e:?}"))?;
+        let credential = if did_webvh {
+            did_webvh_credential(uri, &public)?
+        } else {
+            BasicCredential::new(uri.as_bytes().to_vec()).into()
+        };
         Ok(Self {
             provider,
             signer: KeySigner(private),
             credential: CredentialWithKey {
-                credential: BasicCredential::new(uri.as_bytes().to_vec()).into(),
+                credential,
                 signature_key: SignaturePublicKey::from(public),
             },
             group: None,
@@ -93,9 +160,28 @@ impl Member {
         })
     }
 
+    fn is_did_webvh(&self) -> bool {
+        self.credential.credential.credential_type()
+            == CredentialType::Other(DID_WEBVH.credential_type())
+    }
+
     fn key_package(&self) -> Result<KeyPackage, String> {
-        Ok(KeyPackage::builder()
-            .leaf_node_capabilities(capabilities())
+        let mut builder =
+            KeyPackage::builder().leaf_node_capabilities(capabilities(self.is_did_webvh()));
+        if self.is_did_webvh() {
+            let mut dictionary = AppDataDictionary::new();
+            let _ = dictionary.insert(
+                APP_COMPONENTS,
+                app_components(&[DID_WEBVH.heads_component()]),
+            );
+            builder = builder.leaf_node_extensions(
+                Extensions::single(Extension::AppDataDictionary(
+                    AppDataDictionaryExtension::new(dictionary),
+                ))
+                .map_err(|e| format!("{e:?}"))?,
+            );
+        }
+        Ok(builder
             .build(SUITE, &self.provider, &self.signer, self.credential.clone())
             .map_err(|e| format!("{e:?}"))?
             .key_package()
@@ -103,14 +189,19 @@ impl Member {
     }
 }
 
-/// What every leaf advertises: the suite, the app data dictionary and AppDataUpdate, basic credentials.
-fn capabilities() -> Capabilities {
+/// What every leaf advertises: the suite, the app data dictionary and AppDataUpdate, Basic credentials, and the
+/// `did_webvh` credential type too for a `did_webvh` client.
+fn capabilities(did_webvh: bool) -> Capabilities {
+    let types = [
+        CredentialType::Basic,
+        CredentialType::Other(DID_WEBVH.credential_type()),
+    ];
     Capabilities::new(
         None,
         Some(&[SUITE]),
         Some(&[ExtensionType::AppDataDictionary]),
         Some(&[ProposalType::AppDataUpdate]),
-        Some(&[CredentialType::Basic]),
+        Some(if did_webvh { &types[..] } else { &types[..1] }),
     )
 }
 
@@ -133,12 +224,17 @@ struct Lab {
     listed: Vec<(String, u32)>,
     /// KeyPackages a keyMaterial answer gave, by the user they are for, for that user's add.
     fetched: HashMap<String, KeyPackage>,
+    /// Whether members carry `did_webvh` credentials (`--did-webvh`).
+    did_webvh: bool,
+    /// The room's `did_webvh_heads` record, as its group holds it (did_webvh mode).
+    heads: mls_didwebvh::DidWebvhHeads,
 }
 
 impl Lab {
     fn member(&mut self, uri: &str) -> Result<&mut Member, String> {
         if !self.members.contains_key(uri) {
-            self.members.insert(uri.to_string(), Member::new(uri)?);
+            self.members
+                .insert(uri.to_string(), Member::new(uri, self.did_webvh)?);
         }
         self.members
             .get_mut(uri)
@@ -161,11 +257,25 @@ impl Lab {
         }
         self.listed = vec![(creator.clone(), role)];
         let _ = dictionary.insert(PARTICIPANT_LIST_COMPONENT, list(&self.listed)?);
+        let did_webvh = self.did_webvh;
+        if did_webvh {
+            let head = head_of(&self.member(&creator)?.credential.credential)?.ok_or("no head")?;
+            self.heads = mls_didwebvh::DidWebvhHeads::new();
+            self.heads.insert(head);
+            let _ = dictionary.insert(
+                APP_COMPONENTS,
+                app_components(&[DID_WEBVH.heads_component()]),
+            );
+            let _ = dictionary.insert(
+                DID_WEBVH.heads_component(),
+                self.heads.encode().map_err(|e| format!("{e}"))?,
+            );
+        }
         let config = MlsGroupCreateConfig::builder()
             .ciphersuite(SUITE)
             .wire_format_policy(MIXED_PLAINTEXT_WIRE_FORMAT_POLICY)
             .use_ratchet_tree_extension(true)
-            .capabilities(capabilities())
+            .capabilities(capabilities(did_webvh))
             .with_group_context_extensions(
                 Extensions::single(Extension::AppDataDictionary(
                     AppDataDictionaryExtension::new(dictionary),
@@ -195,6 +305,15 @@ impl Lab {
             Some(fetched) => fetched,
             None => self.member(&joiner)?.key_package()?,
         };
+        // The record after the add: the joiner's head beside the members', unless the request leaves it out.
+        let record = match head_of(key_package.leaf_node().credential())? {
+            Some(head) if request["record"].as_bool() != Some(false) => {
+                let mut after = self.heads.clone();
+                after.insert(head);
+                Some(after)
+            }
+            _ => None,
+        };
         let mut after = self.listed.clone();
         after.push((joiner.clone(), role));
         let list_after = list(&after)?;
@@ -208,12 +327,22 @@ impl Lab {
         .map_err(|e| format!("{e:?}"))?;
         let member = self.member(&by)?;
         let group = member.group.as_mut().ok_or("not in the group")?;
+        let record_bytes = record
+            .as_ref()
+            .map(|record| record.encode().map_err(|e| format!("{e}")))
+            .transpose()?;
+        let mut proposals = vec![Proposal::AppDataUpdate(Box::new(
+            AppDataUpdateProposal::update(PARTICIPANT_LIST_COMPONENT, update),
+        ))];
+        if let Some(bytes) = &record_bytes {
+            proposals.push(Proposal::AppDataUpdate(Box::new(
+                AppDataUpdateProposal::update(DID_WEBVH.heads_component(), bytes.clone()),
+            )));
+        }
         let mut stage = group
             .commit_builder()
             .propose_adds([key_package])
-            .add_proposals([Proposal::AppDataUpdate(Box::new(
-                AppDataUpdateProposal::update(PARTICIPANT_LIST_COMPONENT, update),
-            ))])
+            .add_proposals(proposals)
             .load_psks(member.provider.storage())
             .map_err(|e| format!("{e:?}"))?;
         let mut updater = stage.app_data_dictionary_updater();
@@ -221,6 +350,12 @@ impl Lab {
             PARTICIPANT_LIST_COMPONENT,
             list_after.into(),
         ));
+        if let Some(bytes) = record_bytes {
+            updater.set(openmls::component::ComponentData::from_parts(
+                DID_WEBVH.heads_component(),
+                bytes.into(),
+            ));
+        }
         stage.with_app_data_dictionary_updates(updater.changes());
         let (commit, welcome, _) = stage
             .build(
@@ -271,7 +406,7 @@ impl Lab {
         }
         .encode()
         .map_err(|e| format!("{e:?}"))?;
-        member.pending = Some((welcome, joiner, role));
+        member.pending = Some((welcome, joiner, role, record));
         Ok(
             json!({"ok": true, "bytes": STANDARD.encode(bundle), "commit": STANDARD.encode(
                 commit.tls_serialize_detached().map_err(|e| format!("{e:?}"))?
@@ -283,16 +418,19 @@ impl Lab {
     fn accepted(&mut self, request: &Value) -> Result<Value, String> {
         let by = text(request, "by")?;
         let member = self.member(&by)?;
-        let (welcome, joiner, role) = member.pending.take().ok_or("nothing pending")?;
-        if request["remote"].as_bool() == Some(true) {
-            self.listed.push((joiner, role));
-            return Ok(json!({"ok": true, "listed": self.listed.len()}));
-        }
+        let (welcome, joiner, role, record) = member.pending.take().ok_or("nothing pending")?;
         let tree = member
             .group
             .as_ref()
             .ok_or("not in the group")?
             .export_ratchet_tree();
+        if let Some(record) = record {
+            self.heads = record;
+        }
+        if request["remote"].as_bool() == Some(true) {
+            self.listed.push((joiner, role));
+            return Ok(json!({"ok": true, "listed": self.listed.len()}));
+        }
         let joining = self.member(&joiner)?;
         let group = StagedWelcome::new_from_welcome(
             &joining.provider,
@@ -430,6 +568,8 @@ fn main() {
         members: HashMap::new(),
         listed: Vec::new(),
         fetched: HashMap::new(),
+        did_webvh: std::env::args().any(|arg| arg == "--did-webvh"),
+        heads: mls_didwebvh::DidWebvhHeads::new(),
     };
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
