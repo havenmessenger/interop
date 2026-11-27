@@ -55,6 +55,10 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 openmls = { git = "https://github.com/openmls/openmls", rev = "ba267737b9511e538a77a41f4480fbed28ff4e83", features = ["extensions-draft"] }
 openmls_rust_crypto = { git = "https://github.com/openmls/openmls", rev = "ba267737b9511e538a77a41f4480fbed28ff4e83", features = ["extensions-draft"] }
 openmls_traits = { git = "https://github.com/openmls/openmls", rev = "ba267737b9511e538a77a41f4480fbed28ff4e83" }
+# The did_webvh credential of draft-atwood-mls-didwebvh-credential: its log verification and group rules, from the
+# reference implementation (Apache-2.0), with no MLS library of its own. Pinned to one revision of its repository until it
+# is released on crates.io; the root manifest takes its did:webvh verifier, jmap-did-types, from crates.io.
+mls-didwebvh = { git = "https://github.com/MarkAtwood/mimid", rev = "7089317472af8ac5c1da05e36dd8f071e6c32256" }
 # OTLP export (feature `otlp`, off by default): traces and metrics over OTLP/HTTP with protobuf bodies, sent with
 # hyper and the ring rustls provider this crate already uses.
 opentelemetry = { version = "=0.33.1", optional = true, default-features = false, features = ["trace", "metrics"] }

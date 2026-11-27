@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Guard 1 (manifest-purity): fail if Cargo.lock resolves any package from outside
 crates.io (a stray path/git dependency reaching outside this workspace would show up here),
-apart from OpenMLS pinned to one exact revision.
+apart from OpenMLS pinned to one exact revision and the mls-didwebvh crate pinned to one exact
+revision of its repository.
 
 This workspace is meant to build from a bare checkout with no path or git dependencies
 reaching outside it but that one. A dependency that resolves fine inside a larger context can silently
@@ -18,6 +19,10 @@ CRATES_IO_SOURCE = 'source = "registry+https://github.com/rust-lang/crates.io-in
 NAME_RE = re.compile(r'^name = "([^"]+)"$')
 # OpenMLS tracks its main branch, always at an exact revision, so a build is reproducible.
 OPENMLS_AT_A_REVISION = re.compile(r"^git\+https://github\.com/openmls/openmls\?rev=([0-9a-f]{40})#\1$")
+# mls-didwebvh, the did_webvh credential's reference crate, is not released on crates.io yet. It is taken from its
+# repository at an exact revision, and only that one crate may come from there.
+DIDWEBVH_AT_A_REVISION = re.compile(r"^git\+https://github\.com/MarkAtwood/mimid\?rev=([0-9a-f]{40})#\1$")
+FROM_DIDWEBVH_REPOSITORY = {"mls-didwebvh"}
 
 
 def local_package_names(lockfile: str) -> set[str]:
@@ -58,18 +63,26 @@ def main() -> int:
     bad_sources = set()
     for block in text.split("[[package]]"):
         source_match = re.search(r'^source = "([^"]+)"$', block, re.MULTILINE)
-        if (
-            source_match
-            and not source_match.group(1).startswith("registry+https://github.com/rust-lang/crates.io-index")
-            and not OPENMLS_AT_A_REVISION.match(source_match.group(1))
-        ):
-            name_match = re.search(r'^name = "([^"]+)"$', block, re.MULTILINE)
-            bad_sources.add((name_match.group(1) if name_match else "?", source_match.group(1)))
+        if not source_match:
+            continue
+        source = source_match.group(1)
+        name_match = re.search(r'^name = "([^"]+)"$', block, re.MULTILINE)
+        name = name_match.group(1) if name_match else "?"
+        allowed = (
+            source.startswith("registry+https://github.com/rust-lang/crates.io-index")
+            or OPENMLS_AT_A_REVISION.match(source)
+            or (DIDWEBVH_AT_A_REVISION.match(source) and name in FROM_DIDWEBVH_REPOSITORY)
+        )
+        if not allowed:
+            bad_sources.add((name, source))
     if bad_sources:
         print(f"MANIFEST-PURITY VIOLATION: non-crates.io sources found: {bad_sources}", file=sys.stderr)
         return 1
 
-    print("manifest-purity: OK (deps resolve to crates.io or OpenMLS at a revision; only mimi-core/mimihubd/mimihubd-api are local)")
+    print(
+        "manifest-purity: OK (deps resolve to crates.io, OpenMLS at a revision, or mls-didwebvh at a revision; "
+        "only mimi-core/mimihubd/mimihubd-api are local)"
+    )
     return 0
 
 

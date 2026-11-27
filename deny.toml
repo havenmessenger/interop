@@ -19,6 +19,11 @@ yanked = "deny"
 unmaintained = "all"
 unused-ignored-advisory = "deny"
 ignore = [
+    # `crypto-bigint` 0.5 timing variability in operations meant to be constant-time. Chain: crypto-bigint 0.5 <-
+    # elliptic-curve 0.13 <- k256 / p256 0.13 <- jmap-did-types 0.6 <- mls-didwebvh <- mimihubd. jmap-did-types uses
+    # k256 and p256 in its did:plc verifier only, to verify signatures with public keys; its did:webvh verifier, the one
+    # mls-didwebvh calls, uses ed25519-dalek alone, so mimihubd never runs them and holds no secret in them.
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 under jmap-did-types' did:plc verifier, which mimihubd never calls; public-key verification only. until: release jmap-did-types requires k256 ^0.14" },
     # `proc-macro-error2` unmaintained, no known vulnerability. Chain: proc-macro-error2 <- hax-lib-macros 0.3 <-
     # hax-lib 0.3 <- core-models <- libcrux-intrinsics <- libcrux-sha3 <- hpke-rs <- openmls_rust_crypto. A procedural
     # macro, run at build time only. hax-lib-macros 0.5 has dropped it; libcrux-intrinsics, newest release, still

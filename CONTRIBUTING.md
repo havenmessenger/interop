@@ -17,8 +17,8 @@ protocol behavior are held to the same bar as the spec itself.
 2. `cargo fmt`, `cargo clippy --lib --bins -- -D warnings`, `cargo test`, and
    `cargo deny --locked --workspace check -D unknown-advisory -D advisory-not-detected advisories`
    must pass. An advisory ignore goes in `deny.toml` with its reason and an `until:` condition
-   (`scripts/check_advisory_conditions.py`). CI also runs a manifest-purity check (no stray dependency on Haven's closed
-   crates), a one-way-dependency check, and a tell-scan for internal references that should
+   (`scripts/check_advisory_conditions.py`). CI also runs a manifest-purity check (every dependency from crates.io, apart from OpenMLS and
+   `mls-didwebvh`, each at one exact revision; no stray dependency on Haven's closed crates), a one-way-dependency check, and a tell-scan for internal references that should
    not appear in a public repo.
 
 ## License

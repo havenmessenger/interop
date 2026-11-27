@@ -6,6 +6,11 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimihubd` links `mls-didwebvh`, the did_webvh credential's log verification and group rules from its reference
+  implementation (draft-atwood-mls-didwebvh-credential), at one revision of its repository until it is on crates.io;
+  its did:webvh verifier, jmap-did-types, comes from crates.io. Nothing reads it yet. The manifest-purity check allows
+  that one crate from that one repository at an exact revision. RUSTSEC-2026-0387 (crypto-bigint 0.5, under
+  jmap-did-types' did:plc verifier, which the hub never calls) is ignored with its reason and condition.
 - CI: the advisory check (`cargo deny`) reads every workspace member's dependencies, mimihubd's and mimihubd-api's
   included; it had read mimi-core's only. Two advisories it then found are fixed: tokio moves to 1.54.1
   (RUSTSEC-2026-0386, `AsyncFd::new`), and rustls-pemfile, unmaintained (RUSTSEC-2025-0134), is no longer used:

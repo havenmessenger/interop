@@ -110,3 +110,16 @@ fn no_other_module_reads_a_credential() {
         "PLANT-CREDENTIAL-GUARD: credential reads outside credential.rs: {found:?}"
     );
 }
+
+/// The did_webvh code points the linked mls-didwebvh crate defaults to: credential type 0x0008 and record component
+/// 0xF013. The draft asks IANA for "TBD1 (suggested value 0x0008)" and has implementations "use the suggested value
+/// 0xF013" until IANA assigns one; the crate, and the implementation built on it, use 0x0008. A new revision that
+/// changes either is a deliberate change of what this hub interoperates with.
+#[test]
+fn the_did_webvh_crate_gives_its_code_points() {
+    let points = mls_didwebvh::CodePoints::DEFAULT;
+    assert_eq!(
+        (points.credential_type(), points.heads_component()),
+        (0x0008, 0xF013)
+    );
+}

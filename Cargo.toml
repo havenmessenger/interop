@@ -30,7 +30,7 @@ members = ["mimihubd", "mimihubd-api"]
 default-members = [".", "mimihubd", "mimihubd-api"]
 # tools/vc-vectors-xcheck is EXCLUDED, not a member: it depends on a git-pinned openmls-main fork
 # (see its own Cargo.toml comment), which would enter this root Cargo.lock as a member and trip the
-# manifest-purity guard (crates.io and one OpenMLS revision only, for the audited library). Excluding keeps it buildable on its
+# manifest-purity guard (crates.io, one OpenMLS revision and one mls-didwebvh revision only). Excluding keeps it buildable on its
 # own from its own directory without pulling that dependency into the workspace lock.
 exclude = ["tools/vc-vectors-xcheck"]
 
@@ -98,6 +98,11 @@ nursery = { level = "warn", priority = -1 }
 # would fragment the spec-traceability prose for no readability gain, and rewriting 24 first-paragraphs
 # risks subtly misstating spec semantics on a conformance reference impl. The rest of nursery is enforced.
 too_long_first_doc_paragraph = "allow"
+
+# mls-didwebvh (mimihubd's did_webvh credential) names its did:webvh verifier by a git revision; that revision's source
+# is the same as the crates.io release, which is taken instead, so the lock holds no git source for it.
+[patch."https://github.com/MarkAtwood/crate-jmap"]
+jmap-did-types = "=0.6.2"
 
 # Regenerates tests/vectors/protocol07-vectors.json; the replay test in tests/protocol07_vectors_replay.rs reads the
 # committed file and does not need this.
