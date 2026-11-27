@@ -27,6 +27,9 @@ Haven-specific - the protocol logic follows the IETF drafts, and Haven is one de
   peers, DIV-17), and room-policy-04, over MLS (RFC 9420) via openmls. `update` reads three of
   room-policy-04's components and refuses the other ten (DIV-15, DIV-18); a client can join a room by external
   Commit where the room allows it (DIV-1).
+- **More than one credential type.** The hub reads Basic credentials and the `did_webvh` credential of
+  draft-atwood-mls-didwebvh-credential side by side, verifying a `did_webvh` log offline and holding a room to that
+  draft's group rules; a deployment sets the code points or turns it off in its policy file (DIV-24).
 - **A runnable, installable hub.** `mimihubd` is an mTLS daemon you can stand up from its
   quickstart and point an implementation at; its README shows the output of the commands
   it lists. It also installs like a normal system service - a systemd unit, a `.deb`, prebuilt

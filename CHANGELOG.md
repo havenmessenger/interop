@@ -6,6 +6,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- Docs for the did_webvh credential: `docs/reasons.toml` has a row for each did_webvh refusal, quoting the draft's
+  rule; README and ARCHITECTURE name the credential types the hub reads and where its rules are checked; DIV-24 says
+  which answer a refusal is.
 - `mimihubd`'s lab MLS client (`examples/mls_lab.rs`) takes `--did-webvh`: its members carry did_webvh credentials, its
   rooms the did_webvh_heads record and `app_components`, and each add the record update (or leaves it out with
   `"record": false`), so a lab walk can run with did_webvh members end to end.

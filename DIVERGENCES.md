@@ -848,7 +848,8 @@ the user it is published for, and to know which provider a client belongs to. It
   `did_webvh` leaf is checked on the tree openmls gives after it: Expected Heads, Record matches, Consistency with the
   reference entry, Authorization, with the `mls-didwebvh` crate's implementation of them. A seed is checked as a joiner
   checks its Welcome. A group with `did_webvh` members must name the record in its GroupContext `app_components`, and
-  no `did_webvh` credential may be an external sender. A refusal is `invalidProposal`, naming the rule.
+  no `did_webvh` credential may be an external sender. A Commit refused by a rule is answered `invalidProposal`, a seed
+  refused by one `notAllowed`, each naming the rule; `docs/reasons.toml` quotes the draft for each.
 
   Through `update`: the Commit decoder every update passes through first (`mimi_core::commit_wire`) reads an Add of
   any credential type, and hands back the AppDataUpdates it does not read. The hub takes the record's, and refuses

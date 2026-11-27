@@ -202,6 +202,96 @@ divergence = "DIV-15"
 reason = "A room whose group was created without a roles_list cannot get its first one by Commit; draft-ietf-mimi-room-policy-04 does not say this, the open pull request does."
 
 [[reason]]
+id = "did-webvh-leaf-binding"
+surfaces_as = "update answer invalidProposal; reported by a client in the room"
+spec = "draft-atwood-mls-didwebvh-credential-00"
+section = "Binding to the LeafNode"
+quote = "The `signature_key` of the LeafNode containing the credential MUST equal the 32-byte public key of an authorized key in the head's DID document."
+divergence = "DIV-24"
+reason = "A did_webvh leaf whose log does not verify offline (Log Verification), or whose signature key is not an authorized key of its own log's head."
+
+[[reason]]
+id = "did-webvh-expected-heads"
+surfaces_as = "update answer invalidProposal; reported by a client in the room"
+spec = "draft-atwood-mls-didwebvh-credential-00"
+section = "Expected Heads"
+quote = "If R exists and L's head version number is greater than R's, L MUST contain an entry whose `versionId` is R's `version_id`; a Commit for which it does not MUST be rejected."
+divergence = ""
+reason = "The newest log the tree carries for an SCID does not contain the head the room recorded for it, so it does not continue that log."
+
+[[reason]]
+id = "did-webvh-record-matches"
+surfaces_as = "update answer invalidProposal; reported by a client in the room"
+spec = "draft-atwood-mls-didwebvh-credential-00"
+section = "Expected Heads"
+quote = "The `did_webvh_heads` component in the resulting GroupContext MUST contain exactly the expected entries."
+divergence = ""
+reason = "The room's did_webvh_heads record after the Commit is not the one the draft's rules give, for example after an add of a did_webvh member without the update that records its head."
+
+[[reason]]
+id = "did-webvh-consistency"
+surfaces_as = "update answer invalidProposal; reported by a client in the room"
+spec = "draft-atwood-mls-didwebvh-credential-00"
+section = "Rules"
+quote = "Every credential with SCID S whose head version number is at least R's contains an entry whose `versionId` is R's `version_id`."
+divergence = ""
+reason = "A did_webvh credential in the tree does not contain the head the room recorded for its SCID, or is not a prefix of the newest log for that SCID."
+
+[[reason]]
+id = "did-webvh-authorization"
+surfaces_as = "update answer invalidProposal; reported by a client in the room"
+spec = "draft-atwood-mls-didwebvh-credential-00"
+section = "Rules"
+quote = "Every leaf with SCID S has a `signature_key` in the `authorized_keys` of the recorded head of S."
+divergence = ""
+reason = "A did_webvh leaf's key is not among the keys the room's recorded head for its SCID authorizes, for example a revoked device left in the tree."
+
+[[reason]]
+id = "did-webvh-join-checks"
+surfaces_as = "update answer notAllowed; reported by a client in the room"
+spec = "draft-atwood-mls-didwebvh-credential-00"
+section = "Rules"
+quote = "It instead checks that `did_webvh_heads` has an entry for each SCID in the tree, in sorted order with no duplicates, and the consistency and authorization rules, taking R for each SCID from the GroupContext it receives."
+divergence = ""
+reason = "The Commit that seeds a room's tree, checked as a joiner checks the GroupContext it receives: a record with no entry for an SCID in the tree, a leaf newer than its recorded head, a recorded head whose keys differ from the DID document a leaf carries, or the Commit rules' other checks."
+
+[[reason]]
+id = "did-webvh-record-update"
+surfaces_as = "update answer invalidProposal; reported by a client in the room"
+spec = "draft-atwood-mls-didwebvh-credential-00"
+section = "The Heads Component"
+quote = "An update that does not decode, or whose entries are not sorted, is invalid."
+divergence = ""
+reason = "A did_webvh_heads update that does not decode or is not sorted, or that removes the record, which keeps every entry it has held: an entry is never removed."
+
+[[reason]]
+id = "did-webvh-external-sender"
+surfaces_as = "update answer invalidProposal; reported by a client in the room"
+spec = "draft-atwood-mls-didwebvh-credential-00"
+section = "Binding to the LeafNode"
+quote = "A `did_webvh` credential MUST NOT appear in the `external_senders` GroupContext extension."
+divergence = ""
+reason = "The room's external_senders would name a did_webvh credential."
+
+[[reason]]
+id = "did-webvh-app-components"
+surfaces_as = "update answer invalidProposal; reported by a client in the room"
+spec = "local"
+section = ""
+quote = ""
+divergence = "DIV-24"
+reason = "A group with did_webvh members whose GroupContext app_components does not name did_webvh_heads: the record is a component its members implement (mls-extensions 7.5), and the hub checks the did_webvh rules for every group that has such members."
+
+[[reason]]
+id = "did-webvh-untracked-room"
+surfaces_as = "update answer notAllowed"
+spec = "local"
+section = ""
+quote = ""
+divergence = "DIV-24"
+reason = "A did_webvh member added, or a did_webvh_heads change made, to a room whose ratchet tree the hub does not keep. The draft's rules are checked over the tree, so such a change is taken only as the Commit that seeds the room's tree, with a Full GroupInfo and the ratchet tree, whatever the deployment's untracked_rooms setting."
+
+[[reason]]
 id = "room-is-tracked"
 surfaces_as = "problem room-is-tracked, 409"
 spec = "local"

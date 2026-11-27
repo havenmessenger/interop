@@ -50,7 +50,10 @@ This crate tracks the relevant IETF drafts/RFCs. Known divergences from the draf
 termination, and durable storage. It reads which user a member's credential names in one module,
 `mimihubd/src/credential.rs`, credential type by credential type (DIV-24): Basic, and `did_webvh`,
 whose log the `mls-didwebvh` crate verifies; `gate` hands it a KeyPackage's leaf credential and key
-after the gate's checks, whatever its type. All library modules are dependency-free of FRB and the app;
+after the gate's checks, whatever its type. A tracked room's `did_webvh` group rules are checked in one more,
+`mimihubd/src/didwebvh_rules.rs`, on the tree and GroupContext after each Commit and on each seed, over
+`mls-didwebvh`'s rules; its tests run the reference implementation's interop vectors and the DIF did:webvh test
+suite's logs through it (`tests/vectors/didwebvh/`). All library modules are dependency-free of FRB and the app;
 each module's tests are self-contained.
 
 ## Enforcement direction
