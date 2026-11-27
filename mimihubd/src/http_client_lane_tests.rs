@@ -226,6 +226,38 @@ async fn a_key_package_with_a_credential_the_hub_does_not_read_is_refused() {
     );
 }
 
+/// A did_webvh KeyPackage is bound to the user its log names, for the key its leaf carries: Bob's own is stored, and
+/// one whose log names Alice is refused, as a Basic one naming her would be.
+#[tokio::test]
+async fn a_did_webvh_key_package_is_bound_to_the_user_its_log_names() {
+    use openmls::prelude::tls_codec::Serialize as _;
+    let lane = lane("publish-did-webvh");
+    let encode = |member: crate::mls_fixtures::Member| {
+        STANDARD.encode(member.key_package().tls_serialize_detached().unwrap())
+    };
+    let bobs = encode(crate::mls_fixtures::Member::did_webvh(BOB, "bob"));
+    let alices = encode(crate::mls_fixtures::Member::did_webvh(ALICE, "alice"));
+    let publish = |kp: &str| {
+        signed(
+            &lane.key,
+            "publishKeyPackages",
+            BOB,
+            &format!(r#"{{"key_packages":["{kp}"]}}"#),
+        )
+    };
+    let (status, answer) = call(&lane.router, publish(&bobs)).await;
+    assert_eq!(
+        (status, answer["count"].as_u64()),
+        (StatusCode::OK, Some(1)),
+        "PLANT-LANE-DIDWEBVH-PUBLISH: {answer}"
+    );
+    let (status, answer) = call(&lane.router, publish(&alices)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+    assert!(answer["type"]
+        .as_str()
+        .is_some_and(|t| t.ends_with("#material-not-accepted")));
+}
+
 /// The user publishes their own KeyPackage, and it is stored under their name here, where a peer's keyMaterial claim
 /// looks for it. Revert check: skip the credential check, and Alice's KeyPackage is stored for Bob.
 #[tokio::test]

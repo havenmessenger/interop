@@ -47,6 +47,40 @@ impl Member {
         }
     }
 
+    /// A client whose credential is a `did_webvh` credential: a one-entry log at `example.com/<path>` authorizing this
+    /// client's key and naming `uri` in `alsoKnownAs`.
+    pub(crate) fn did_webvh(uri: &str, path: &str) -> Self {
+        let mut member = Self::new(uri);
+        let key: mls_didwebvh::PublicKey = member
+            .credential
+            .signature_key
+            .as_slice()
+            .try_into()
+            .unwrap();
+        let seed = path
+            .bytes()
+            .fold(0x5a_u8, |acc, b| acc.wrapping_mul(31).wrapping_add(b));
+        let log = crate::didwebvh_fixtures::log(path, seed, &[key], &[uri]);
+        member.credential.credential =
+            crate::didwebvh_fixtures::mls_credential(&log.credential().unwrap());
+        member
+    }
+
+    /// The capabilities this client's leaves advertise: [`capabilities`], with the `did_webvh` credential type too when
+    /// its credential is one.
+    pub(crate) fn leaf_capabilities(&self) -> Capabilities {
+        match self.credential.credential.credential_type() {
+            CredentialType::Basic => capabilities(),
+            other => Capabilities::new(
+                None,
+                Some(&[SUITE]),
+                Some(&[ExtensionType::AppDataDictionary]),
+                Some(&[ProposalType::AppDataUpdate]),
+                Some(&[CredentialType::Basic, other]),
+            ),
+        }
+    }
+
     /// The same client on a fresh store: its signing key and credential with a new provider, as a client that lost its
     /// group state and rejoins with the key its leaf holds (a resync, RFC 9420 §12.4.3.2).
     pub(crate) fn on_a_fresh_store(&self) -> Self {
@@ -60,7 +94,7 @@ impl Member {
     /// A KeyPackage for this member to be added with, advertising the app data dictionary and AppDataUpdate.
     pub(crate) fn key_package(&self) -> KeyPackage {
         KeyPackage::builder()
-            .leaf_node_capabilities(capabilities())
+            .leaf_node_capabilities(self.leaf_capabilities())
             .build(SUITE, &self.provider, &self.signer, self.credential.clone())
             .unwrap()
             .key_package()
@@ -70,7 +104,7 @@ impl Member {
     /// A KeyPackage bundle (with its private keys in this member's provider), for a join that processes the Welcome.
     pub(crate) fn key_package_bundle(&self) -> KeyPackageBundle {
         KeyPackage::builder()
-            .leaf_node_capabilities(capabilities())
+            .leaf_node_capabilities(self.leaf_capabilities())
             .build(SUITE, &self.provider, &self.signer, self.credential.clone())
             .unwrap()
     }
@@ -89,7 +123,7 @@ impl Member {
         let mut builder = MlsGroupCreateConfig::builder()
             .ciphersuite(SUITE)
             .wire_format_policy(PURE_PLAINTEXT_WIRE_FORMAT_POLICY)
-            .capabilities(capabilities());
+            .capabilities(self.leaf_capabilities());
         if !components.is_empty() {
             let mut dictionary = AppDataDictionary::new();
             for (id, value) in components {

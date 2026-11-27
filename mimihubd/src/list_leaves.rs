@@ -33,9 +33,9 @@ pub(crate) struct RemovedLeaf {
     pub proposer: Option<String>,
 }
 
-/// A client the Commit gives a new leaf: the credential of its leaf before (`None` if the tree had no leaf there), and
-/// of its new leaf.
-pub(crate) type Renewal = (Option<Credential>, Credential);
+/// A client the Commit gives a new leaf: the credential and signature key of its leaf before (`None` if the tree had no
+/// leaf there), and of its new leaf.
+pub(crate) type Renewal = (Option<(Credential, Vec<u8>)>, (Credential, Vec<u8>));
 
 /// A tracked room's participant list and clients around one Commit.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -51,7 +51,7 @@ pub(crate) struct ListAndLeaves {
     /// The user of each client in the group after the Commit.
     pub leaves_after: Vec<Option<String>>,
     /// Each client the Commit gives a new leaf (an Update, or the committer's leaf in its update path): its credential
-    /// before and its new leaf's.
+    /// and signature key before, and its new leaf's.
     pub renewed: Vec<Renewal>,
 }
 
@@ -75,9 +75,9 @@ pub(crate) fn require_paired(
 ) -> Result<(), &'static str> {
     let listed_after = |user: &str| view.after.iter().any(|listed| listed == user);
     if view.renewed.iter().any(|(before, after)| {
-        !before
-            .as_ref()
-            .is_some_and(|before| crate::credential::is_successor(before, after))
+        !before.as_ref().is_some_and(|(credential, key)| {
+            crate::credential::is_successor((credential, key), (&after.0, &after.1))
+        })
     }) {
         return Err(CLIENT_CHANGES_USER);
     }

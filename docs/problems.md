@@ -140,8 +140,8 @@ message are refused and delivered to no one. A Commit or a proposal goes to `upd
 | `status` | 400 |
 
 A `publishKeyPackages` carried a KeyPackage whose leaf credential is of a type this hub does not read. The hub binds each
-published KeyPackage to the user its credential names, and reads Basic credentials only, so a credential of another type
-names no user (DIV-24). Nothing in the request is stored.
+published KeyPackage to the user its credential names, and reads Basic and `did_webvh` credentials only, so a
+credential of another type names no user (DIV-24). Nothing in the request is stored.
 
 ## key-material-rate-limited
 

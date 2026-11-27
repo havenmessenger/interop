@@ -94,3 +94,25 @@ fn a_room_on_another_domain_is_another_hubs() {
     );
     assert_eq!(other_hub("mimi://a.example/r/room", "a.example"), None);
 }
+
+/// A requester with a did_webvh credential is the lane user when its log names the user and authorizes the key that
+/// signed the request. Another key carrying a copy of the same credential is not: the log does not authorize it.
+#[test]
+fn a_did_webvh_requester_is_the_user_its_log_names_for_its_own_key() {
+    let alice = Member::did_webvh(ALICE, "alice");
+    assert_eq!(
+        check_key_material_request(&request(&alice, ALICE, ROOM), ALICE),
+        Ok(())
+    );
+    let mallory = Member::new("mimi://a.example/u/mallory");
+    let mut copied = KeyMaterialRequest::minimal(ALICE, BOB).unwrap();
+    copied.room_id = IdentifierUri(ROOM.into());
+    copied.requester_signature_key = mallory.credential.signature_key.clone();
+    copied.requester_credential = alice.credential.credential.clone();
+    copied.sign(&mallory.signer).unwrap();
+    assert_eq!(
+        check_key_material_request(&copied, ALICE),
+        Err(KeyMaterialRefusal::NotTheUser),
+        "a key the log does not authorize does not speak for its user"
+    );
+}

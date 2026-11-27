@@ -182,12 +182,13 @@ pub fn mimi_gate_keypackage(key_package_bytes: &[u8], accepted: &[u16]) -> Resul
     refuse_unless_accepted(u16::from(validated.ciphersuite()), accepted)
 }
 
-/// The credential in a KeyPackage's leaf, after the checks [`mimi_gate_keypackage`] makes: an accepted ciphersuite, no
-/// trailing bytes, a valid signature. Whatever its type: how a credential names a user is the caller's reading.
+/// The credential in a KeyPackage's leaf and the leaf's signature key, after the checks [`mimi_gate_keypackage`] makes:
+/// an accepted ciphersuite, no trailing bytes, a valid signature. Whatever its type: how a credential names a user is the
+/// caller's reading, and some credentials name one only for a key they authorize.
 pub fn keypackage_credential(
     key_package_bytes: &[u8],
     accepted: &[u16],
-) -> Result<Credential, GateError> {
+) -> Result<CredentialWithKey, GateError> {
     refuse_foreign_keypackage_suite(key_package_bytes, accepted)?;
     let provider = OpenMlsRustCrypto::default();
     let (kp_in, consumed) = deserialize_keypackage_in_no_panic(key_package_bytes)?;
@@ -201,7 +202,10 @@ pub fn keypackage_credential(
         .validate(provider.crypto(), ProtocolVersion::Mls10)
         .map_err(|e| GateError::KeyPackageValidation(format!("{e:?}")))?;
     refuse_unless_accepted(u16::from(validated.ciphersuite()), accepted)?;
-    Ok(validated.leaf_node().credential().clone())
+    Ok(CredentialWithKey {
+        credential: validated.leaf_node().credential().clone(),
+        signature_key: validated.leaf_node().signature_key().clone(),
+    })
 }
 
 /// The identity in a KeyPackage's basic credential, after the checks [`keypackage_credential`] makes. A KeyPackage whose
@@ -210,7 +214,7 @@ pub fn keypackage_basic_identity(
     key_package_bytes: &[u8],
     accepted: &[u16],
 ) -> Result<Vec<u8>, GateError> {
-    let credential = keypackage_credential(key_package_bytes, accepted)?;
+    let credential = keypackage_credential(key_package_bytes, accepted)?.credential;
     let basic = BasicCredential::try_from(credential).map_err(|_| {
         GateError::KeyPackageValidation("the leaf carries no basic credential".into())
     })?;

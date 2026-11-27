@@ -48,8 +48,9 @@ This crate tracks the relevant IETF drafts/RFCs. Known divergences from the draf
 
 `mimihubd/` (the reference hub daemon) consumes these modules and adds the HTTP transport, mTLS
 termination, and durable storage. It reads which user a member's credential names in one module,
-`mimihubd/src/credential.rs`, credential type by credential type (DIV-24); `gate` hands it a
-KeyPackage's leaf credential after the gate's checks, whatever its type. All library modules are dependency-free of FRB and the app;
+`mimihubd/src/credential.rs`, credential type by credential type (DIV-24): Basic, and `did_webvh`,
+whose log the `mls-didwebvh` crate verifies; `gate` hands it a KeyPackage's leaf credential and key
+after the gate's checks, whatever its type. All library modules are dependency-free of FRB and the app;
 each module's tests are self-contained.
 
 ## Enforcement direction

@@ -276,7 +276,11 @@ pub(crate) async fn key_material_answer(
     use mimi_core::protocol_wire::{IdentifierUri, KeyMaterialResponse, KeyMaterialUserCode};
     log_key_material_identity_claim(
         &req.requesting_user.0,
-        crate::credential::stated_uri(&req.requester_credential),
+        crate::credential::stated_uri(
+            &req.requester_credential,
+            req.requester_signature_key.as_slice(),
+        )
+        .as_deref(),
     );
     let now = now_unix();
     let room_uri = (!req.room_id.0.is_empty()).then_some(req.room_id.0.as_str());

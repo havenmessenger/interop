@@ -68,11 +68,15 @@ impl Provider {
             else {
                 return Ok(Err(PublishRefusal::NotAccepted(at)));
             };
-            if !crate::credential::is_read(&credential) {
+            if !crate::credential::is_read(&credential.credential) {
                 return Ok(Err(PublishRefusal::CredentialNotSupported(at)));
             }
             // As the credential states it, not canonicalized: a KeyPackage is bound to the user it names exactly.
-            if crate::credential::stated_uri(&credential) != Some(user.as_str()) {
+            let stated = crate::credential::stated_uri(
+                &credential.credential,
+                credential.signature_key.as_slice(),
+            );
+            if stated.as_deref() != Some(user.as_str()) {
                 return Ok(Err(PublishRefusal::NotTheUser(at)));
             }
         }

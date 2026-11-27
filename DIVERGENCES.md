@@ -816,10 +816,31 @@ RFC 9420 leaves which identifiers a credential presents for a member to the appl
 is responsible for specifying which identifiers it finds acceptable for each member in a group", §5.3.1), and MIMI has
 not settled how a credential names a user. The hub needs the user of each member's leaf: to check a Commit's
 participant-list change against the clients it adds and removes (protocol-07 §7.5), to bind a published KeyPackage to
-the user it is published for, and to know which provider a client belongs to. It reads one credential type today, a
-Basic credential, whose identity bytes are the user's URI. A credential of any other type names no user, whatever its
-content: it is never read as if it were Basic. Where the hub must know the user (a published KeyPackage, a client a
+the user it is published for, and to know which provider a client belongs to. It reads two credential types:
+
+- **Basic**: the identity bytes are the user's URI.
+- **`did_webvh`** (draft-atwood-mls-didwebvh-credential): the credential's log is verified, offline, by the
+  reference implementation's `mls-didwebvh` crate, and must authorize the leaf's signature key (§Binding to the
+  LeafNode). The user is the one entry of the head DID document's `alsoKnownAs` whose scheme is `mimi`, in any case;
+  none, or more than one, names no user. This reading is the reference implementation's (its `mimi_user_uri`), kept
+  exactly so a hub and the members using it bind the same leaf to the same user; the draft itself makes the log's SCID
+  the credential's identity and says nothing of a MIMI URI. The DID's own domain is not compared with the URI's
+  provider: the draft lets a portable DID move ("The DID string can change if the controller moves the DID, but the
+  SCID cannot"), and "a moved DID lists its previous DID in `alsoKnownAs`", which the log verification checks.
+
+  The draft's code points contradict each other until IANA assigns them. Its IANA table asks for "TBD1 (suggested value
+  0x0008)" for the credential type, and the next paragraph says "Until IANA assigns a value, implementations use the
+  suggested value 0xF013"; 0xF013 is also the suggested value of the `did_webvh_heads` component. The hub reads the
+  credential type 0x0008 and the component 0xF013, the `mls-didwebvh` crate's defaults and the values the reference
+  implementation uses, so that the implementations that run agree.
+
+  Not built yet: the draft's Group Consistency Rules (the `did_webvh_heads` record, Expected Heads, Authorization).
+  Until they are, the hub orders a room of `did_webvh` members by its participant list alone, as it does for Basic
+  ones; the members' own clients check the rules.
+
+A credential of any other type names no user, whatever its content: it is never read as if it were one of these. Where the hub must know the user (a published KeyPackage, a client a
 Commit adds, an external Commit's joiner, a renewed leaf), it is refused; a published KeyPackage is answered
 `credential-not-supported`. A renewed leaf's new credential must be "valid as a successor" to the old one "according to the
-application's policy" (RFC 9420 §5.3.1); for a Basic credential the hub's policy is exactly the same identity bytes. All of this is read in one module, `mimihubd/src/credential.rs`, so
+application's policy" (RFC 9420 §5.3.1); for a Basic credential the hub's policy is exactly the same identity bytes, and for a `did_webvh` credential the same
+SCID with the old log a prefix of the new (the draft's §Successor Credentials) and the same `mimi:` URI. All of this is read in one module, `mimihubd/src/credential.rs`, so
 a further credential type is added there.

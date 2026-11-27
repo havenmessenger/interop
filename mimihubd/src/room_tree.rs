@@ -146,7 +146,10 @@ impl StagedRoomCommit {
         let mut added: Vec<Option<String>> = self
             .staged
             .add_proposals()
-            .map(|add| user_uri(add.add_proposal().key_package().leaf_node().credential()))
+            .map(|add| {
+                let leaf = add.add_proposal().key_package().leaf_node();
+                user_uri(leaf.credential(), leaf.signature_key().as_slice())
+            })
             .collect();
         if let Some(joiner) = &self.joiner {
             added.push(Some(joiner.clone()));
@@ -155,21 +158,33 @@ impl StagedRoomCommit {
             .group
             .members()
             .filter(|member| !removed_at.contains(&member.index))
-            .map(|member| user_uri(&member.credential))
+            .map(|member| user_uri(&member.credential, &member.signature_key))
             .collect();
         leaves_after.extend(added.iter().cloned());
         // A client's new leaf must name the user its old one did: each Update by its sender, and a member committer's
         // leaf in its update path (an external Commit's joiner is a new client, counted among the added).
-        let credential_before =
-            |leaf: LeafNodeIndex| self.group.leaf(leaf).map(|node| node.credential().clone());
+        let credential_before = |leaf: LeafNodeIndex| {
+            self.group.leaf(leaf).map(|node| {
+                (
+                    node.credential().clone(),
+                    node.signature_key().as_slice().to_vec(),
+                )
+            })
+        };
         let mut renewed: Vec<Renewal> = self
             .staged
             .update_proposals()
             .filter_map(|update| match update.sender() {
-                Sender::Member(leaf) => Some((
-                    credential_before(*leaf),
-                    update.update_proposal().leaf_node().credential().clone(),
-                )),
+                Sender::Member(leaf) => {
+                    let new = update.update_proposal().leaf_node();
+                    Some((
+                        credential_before(*leaf),
+                        (
+                            new.credential().clone(),
+                            new.signature_key().as_slice().to_vec(),
+                        ),
+                    ))
+                }
                 _ => None,
             })
             .collect();
@@ -177,7 +192,10 @@ impl StagedRoomCommit {
             if let Some(leaf) = self.staged.update_path_leaf_node() {
                 renewed.push((
                     self.committer_leaf.and_then(credential_before),
-                    leaf.credential().clone(),
+                    (
+                        leaf.credential().clone(),
+                        leaf.signature_key().as_slice().to_vec(),
+                    ),
                 ));
             }
         }
@@ -479,7 +497,7 @@ fn provider_of(uri: &str) -> Option<String> {
 fn member_uri(group: &PublicGroup, leaf: LeafNodeIndex) -> Option<String> {
     group
         .leaf(leaf)
-        .and_then(|node| user_uri(node.credential()))
+        .and_then(|node| user_uri(node.credential(), node.signature_key().as_slice()))
 }
 
 /// A tracked room's proposals, verified against its tree and not queued yet.
@@ -716,7 +734,7 @@ impl Provider {
         let joiner = external
             .then(|| staged.update_path_leaf_node())
             .flatten()
-            .and_then(|leaf| user_uri(leaf.credential()));
+            .and_then(|leaf| user_uri(leaf.credential(), leaf.signature_key().as_slice()));
         if external && joiner.is_none() {
             return Err(refused(
                 "an external Commit whose joiner names no user",
@@ -963,7 +981,7 @@ impl Provider {
         }
         let members: Vec<String> = candidate
             .members()
-            .filter_map(|member| user_uri(&member.credential))
+            .filter_map(|member| user_uri(&member.credential, &member.signature_key))
             .collect();
         if listed
             .iter()
@@ -1052,7 +1070,8 @@ impl Provider {
                 .collect(),
         };
         if candidate.members().any(|member| {
-            user_uri(&member.credential).is_none_or(|user| !listed_after.contains(&user))
+            user_uri(&member.credential, &member.signature_key)
+                .is_none_or(|user| !listed_after.contains(&user))
         }) {
             return Err(Some(
                 "a client in its tree is not a client of a participant it lists",
@@ -1212,3 +1231,7 @@ mod seed_metadata_tests;
 #[cfg(test)]
 #[path = "room_tree_seed_atomic_tests.rs"]
 mod seed_atomic_tests;
+
+#[cfg(test)]
+#[path = "room_tree_didwebvh_tests.rs"]
+mod didwebvh_tests;

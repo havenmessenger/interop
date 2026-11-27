@@ -220,8 +220,11 @@ fn a_listed_user_with_no_client_left_is_valid() {
 #[test]
 fn a_client_whose_new_leaf_names_another_user_is_refused() {
     let dave = "mimi://d.example/u/dave";
-    let basic = |user: &str| -> openmls::prelude::Credential {
-        openmls::prelude::BasicCredential::new(user.as_bytes().to_vec()).into()
+    let basic = |user: &str| -> (openmls::prelude::Credential, Vec<u8>) {
+        (
+            openmls::prelude::BasicCredential::new(user.as_bytes().to_vec()).into(),
+            vec![7; 32],
+        )
     };
     // Another listed user, an unlisted one, and Bob's own URI with its host in another case: each is another
     // credential, though the last names the same user in canonical form.

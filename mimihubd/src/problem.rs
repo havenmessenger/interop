@@ -219,7 +219,7 @@ pub const CREDENTIAL_NOT_SUPPORTED: ProblemType = ProblemType {
     anchor: "credential-not-supported",
     title: "The credential type is not supported",
     status: StatusCode::BAD_REQUEST,
-    detail: "The hub binds a KeyPackage to the user its credential names, and reads Basic credentials only.",
+    detail: "The hub binds a KeyPackage to the user its credential names, and reads Basic and did_webvh credentials only.",
 };
 
 /// Every problem type, for the page check and the fallback.

@@ -6,6 +6,12 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimihubd` reads a member's user from a `did_webvh` credential (draft-atwood-mls-didwebvh-credential): the log is
+  verified with `mls-didwebvh` and must authorize the leaf's signature key, and the user is the one `mimi:` URI in its
+  head DID document's `alsoKnownAs`, as the reference implementation reads it. A portable DID that has moved names the
+  same user. A renewed `did_webvh` leaf must carry the same log extended, naming the same URI. The credential type is
+  0x0008 and the record component 0xF013, the crate's defaults (the draft's own text gives two values; DIV-24). A
+  verified log is remembered by its bytes (64 MiB, 4096 logs at most). The draft's group rules are not checked yet.
 - `mimihubd` links `mls-didwebvh`, the did_webvh credential's log verification and group rules from its reference
   implementation (draft-atwood-mls-didwebvh-credential), at one revision of its repository until it is on crates.io;
   its did:webvh verifier, jmap-did-types, comes from crates.io. Nothing reads it yet. The manifest-purity check allows
@@ -19,7 +25,8 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   credential's identity is the user URI, as before; a credential of any other type names no user, where before its
   content was read as a URI whatever its type. A published KeyPackage with such a credential is answered 400
   `credential-not-supported` (it was `material-not-accepted`). Basic credentials are handled exactly as they were
-  (DIV-24). `mimi-core` adds `gate::keypackage_credential`, the leaf credential of a KeyPackage after the gate's checks.
+  (DIV-24). `mimi-core` adds `gate::keypackage_credential`, the leaf credential and signature key of a KeyPackage after the
+  gate's checks.
 - `mimihubd`: a Commit is fanned out to the providers and local members of the room's participants before it, no longer
   also to those it adds. protocol-07 §5.5 sends a Commit to "providers with active participants", and its Figures 3 and 5
   send the provider of a user being added only the Welcome; that provider has no member of the room until the Welcome,
