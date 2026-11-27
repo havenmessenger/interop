@@ -103,15 +103,23 @@ pub(crate) fn check_commit(
         return check_external_senders(after);
     }
     check_context(after, !leaves.is_empty())?;
-    let resulting = record(after)?.unwrap_or_default();
-    let refs: Vec<Leaf<'_>> = leaves
-        .iter()
-        .map(|(key, log)| Leaf {
-            signature_key: key,
-            log,
-        })
-        .collect();
-    rules::check_commit(&previous.unwrap_or_default(), &resulting, &refs).map_err(rule)
+    commit_on_records(previous.as_ref(), record(after)?.as_ref(), &leaves)
+}
+
+/// The rules for a Commit over the records before and after it (absent: empty) and the tree's `did_webvh` leaves after
+/// it: Expected Heads, Record matches, Consistency, Authorization.
+pub(crate) fn commit_on_records(
+    previous: Option<&DidWebvhHeads>,
+    resulting: Option<&DidWebvhHeads>,
+    leaves: &[VerifiedLeaf],
+) -> Result<(), &'static str> {
+    let empty = DidWebvhHeads::new();
+    rules::check_commit(
+        previous.unwrap_or(&empty),
+        resulting.unwrap_or(&empty),
+        &as_leaves(leaves),
+    )
+    .map_err(rule)
 }
 
 /// A seed's checks: the tree and GroupContext a joiner receives ("A member joining by Welcome has no previous epoch ...
@@ -127,22 +135,34 @@ pub(crate) fn check_join(
         return check_external_senders(context);
     }
     check_context(context, !leaves.is_empty())?;
-    let refs: Vec<Leaf<'_>> = leaves
+    join_on_records(heads.as_ref(), &leaves)
+}
+
+/// The rules a joiner checks over the record it receives (absent: empty) and the tree's `did_webvh` leaves.
+pub(crate) fn join_on_records(
+    heads: Option<&DidWebvhHeads>,
+    leaves: &[VerifiedLeaf],
+) -> Result<(), &'static str> {
+    let empty = DidWebvhHeads::new();
+    rules::check_join(heads.unwrap_or(&empty), &as_leaves(leaves)).map_err(rule)
+}
+
+fn as_leaves(leaves: &[VerifiedLeaf]) -> Vec<Leaf<'_>> {
+    leaves
         .iter()
         .map(|(key, log)| Leaf {
             signature_key: key,
             log,
         })
-        .collect();
-    rules::check_join(&heads.unwrap_or_default(), &refs).map_err(rule)
+        .collect()
 }
 
 /// A `did_webvh` leaf as the rules read it: its signature key and its verified log.
-type VerifiedLeaf = (Vec<u8>, Arc<VerifiedLog>);
+pub(crate) type VerifiedLeaf = (Vec<u8>, Arc<VerifiedLog>);
 
 /// The tree's `did_webvh` leaves, each with its verified log; a `did_webvh` leaf whose log does not verify or authorize
 /// its key fails the Commit.
-fn did_webvh_leaves(
+pub(crate) fn did_webvh_leaves(
     members: impl Iterator<Item = (Credential, Vec<u8>)>,
 ) -> Result<Vec<VerifiedLeaf>, &'static str> {
     members
@@ -290,3 +310,7 @@ fn rule(error: RuleError) -> &'static str {
 #[cfg(test)]
 #[path = "didwebvh_rules_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "didwebvh_vectors_tests.rs"]
+mod vectors_tests;

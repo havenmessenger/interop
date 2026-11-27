@@ -164,6 +164,15 @@ pub(crate) fn external_sender_credential(sender: &ExternalSender) -> Option<Cred
     Credential::tls_deserialize_exact(rest).ok()
 }
 
+/// A `did_webvh` credential's log as §Log Verification checks it, whatever leaf carries it: `None` when it is not a
+/// `did_webvh` credential this hub reads or its log does not verify. [`verified_log`] adds the leaf's binding.
+pub(crate) fn verify_log(credential: &Credential) -> Option<Arc<VerifiedLog>> {
+    if kind(credential)? != Kind::DidWebvh {
+        return None;
+    }
+    VerifiedLogs::global().verify(credential.serialized_content())
+}
+
 /// A `did_webvh` credential's verified log, when its log verifies (§Log Verification) and authorizes `signature_key`
 /// (§Binding to the LeafNode). Binding is checked on every call; the verification itself is remembered (see
 /// [`VerifiedLogs`]).
@@ -171,10 +180,7 @@ pub(crate) fn verified_log(
     credential: &Credential,
     signature_key: &[u8],
 ) -> Option<Arc<VerifiedLog>> {
-    if kind(credential)? != Kind::DidWebvh {
-        return None;
-    }
-    let log = VerifiedLogs::global().verify(credential.serialized_content())?;
+    let log = verify_log(credential)?;
     mls_didwebvh::rules::check_binding(signature_key, &log).ok()?;
     Some(log)
 }

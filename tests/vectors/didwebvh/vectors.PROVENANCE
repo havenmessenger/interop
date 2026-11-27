@@ -1,0 +1,15 @@
+vectors.json: interop vectors for draft-atwood-mls-didwebvh-credential-00.
+
+Generator: generate.mjs (this directory), run as `node generate.mjs` with
+Node v26.13.1, built-in crypto only, no npm packages. It
+implements JCS (RFC 8785), base58btc, multihash, did:webvh v1.0 entry
+construction (spec-v1.0 at decentralized-identity/didwebvh 91f3cba) and
+eddsa-jcs-2022 proofs itself, independently of mimid's Rust code, and
+checks its JCS and multihash against the entry-hash example in did:webvh
+v1.0 §Generate Entry Hash before writing anything. Every expected outcome
+is written in generate.mjs from the draft's text, with its section.
+Output is deterministic (keys from fixed names, fixed times).
+
+SHA-256:
+ce588e5f0d1146b51fa51bc3513581eafaab74e441b4e2365875ad6b38e9a5b9  generate.mjs
+caa841d812deddcc5ba3a5246dec63760a296c99ee53970cc8df0963caded863  vectors.json

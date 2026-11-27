@@ -6,6 +6,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimihubd`'s tests read the did_webvh credential's interop vectors from its reference implementation (generated
+  independently of its Rust code) and the DIF did:webvh test suite's logs, `tests/vectors/didwebvh/` with their
+  provenance, through the hub's own credential and group-rule code: every log, binding, Commit and join vector gets the
+  draft's answer, and the hub takes no successor the draft refuses.
 - `mimihubd`'s policy file gains a `[did_webvh]` table: `enabled` (default true), `credential_type` (default 0x0008)
   and `heads_component` (default 0xF013), checked against the values the credential may not take; the startup log
   shows them. A keyMaterial request that requires the `did_webvh` credential type is answered only with a KeyPackage
