@@ -478,9 +478,21 @@ const MLS_PROPOSAL_TYPE_EXTERNAL_INIT: u16 = 0x0006;
 /// A client a Commit adds: the identity bytes of the credential in its KeyPackage, and the KeyPackage as sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddedClient {
-    /// `Credential::identity`, which for a `BasicCredential` is read as the user URI of the client's user (DIV-10).
-    pub identity: Vec<u8>,
+    /// The identity of the KeyPackage's credential when it is a `BasicCredential`, read as the user URI of the client's
+    /// user (DIV-10); `None` for a credential of any other type, whose user (if any) a caller reads from `key_package`
+    /// as it reads that type.
+    pub identity: Option<Vec<u8>>,
     pub key_package: Vec<u8>,
+}
+
+/// An AppDataUpdate a Commit carries for a component this crate does not read (mls-extensions §4.7), handed back to the
+/// caller to accept or refuse; this crate reads only the participant list and the room-policy components.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadAppData {
+    /// The component the AppDataUpdate addresses.
+    pub component: u16,
+    /// Whether it removes the component (`op` remove) rather than updating it.
+    pub remove: bool,
 }
 
 /// What a `PublicMessage`-wrapped Commit proposes: its participant-list and room-policy changes by value (in a combination
@@ -500,6 +512,9 @@ pub struct DecodedCommit {
     /// An external Commit (sender `new_member_commit`): its joiner is not yet a member, and it carries one
     /// `ExternalInit`.
     pub external: bool,
+    /// The AppDataUpdates it carries for components this crate does not read, in order: the caller decides whether a
+    /// Commit carrying them is taken.
+    pub unread_app_data: Vec<UnreadAppData>,
 }
 
 /// The epoch and the `Commit.proposals` window of a member-sent `PublicMessage` Commit, read through the rewrite of its
@@ -567,6 +582,7 @@ pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError>
     let mut adds = Vec::new();
     let mut removes = Vec::new();
     let mut references = Vec::new();
+    let mut unread_app_data = Vec::new();
     let mut at: &[u8] = &window;
     let mut entries = 0usize;
     while !at.is_empty() {
@@ -614,16 +630,13 @@ pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError>
                         what: "Add.key_package",
                         detail: e.to_string(),
                     })?;
-                // Only a BasicCredential names a client here; its identity bytes are read as the user URI (DIV-10).
+                // A BasicCredential's identity bytes are read as the user URI (DIV-10); a credential of another type is
+                // the caller's to read, from the KeyPackage.
                 let identity = openmls::credentials::BasicCredential::try_from(
                     key_package.unverified_credential().credential,
                 )
-                .map_err(|_| WireError::Codec {
-                    what: "Add.key_package",
-                    detail: "the KeyPackage's credential is not a BasicCredential".into(),
-                })?
-                .identity()
-                .to_vec();
+                .ok()
+                .map(|basic| basic.identity().to_vec());
                 adds.push(AddedClient {
                     identity,
                     key_package: body[..body.len() - tail.len()].to_vec(),
@@ -638,6 +651,19 @@ pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError>
             MLS_PROPOSAL_TYPE_EXTERNAL_INIT if external => {
                 let (_kem_output, tail) = read_opaque_vec(body, "ExternalInit.kem_output")?;
                 external_inits += 1;
+                at = tail;
+            }
+            APP_DATA_UPDATE_UNREAD_TYPE => {
+                // An AppDataUpdate for a component this crate does not read, as normalized: its component, its
+                // operation and its update, as sent. Handed back, not read.
+                let (payload, tail) = read_opaque_vec(body, "Proposal.custom_payload")?;
+                let (component, after_component) =
+                    read_u16(&payload, "AppDataUpdate.component_id")?;
+                let (op, _) = read_u8(after_component, "AppDataUpdate.op")?;
+                unread_app_data.push(UnreadAppData {
+                    component,
+                    remove: op == APP_DATA_UPDATE_OP_REMOVE,
+                });
                 at = tail;
             }
             _ => {
@@ -677,6 +703,7 @@ pub fn decode_commit_proposals(bytes: &[u8]) -> Result<DecodedCommit, WireError>
         removes,
         references,
         external,
+        unread_app_data,
     })
 }
 
@@ -890,6 +917,10 @@ pub(crate) mod app_data_tests;
 #[cfg(test)]
 #[path = "commit_wire_reference_tests.rs"]
 mod reference_tests;
+
+#[cfg(test)]
+#[path = "commit_wire_unread_tests.rs"]
+mod unread_tests;
 
 #[cfg(test)]
 mod tests {

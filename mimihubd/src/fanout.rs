@@ -189,7 +189,10 @@ impl Provider {
                 .map(|decoded| decoded.adds)
                 .unwrap_or_default();
             for client in added {
-                let user = String::from_utf8_lossy(&client.identity).to_string();
+                let Some(user) = crate::credential::added_user(&client, self.accepted_suites())
+                else {
+                    continue;
+                };
                 if let Ok(uri) = mimi_core::uri::MimiUri::parse(&user) {
                     if !uri.is_local_to(&self.domain) {
                         providers.insert(uri.authority.to_ascii_lowercase());

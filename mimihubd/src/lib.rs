@@ -86,7 +86,9 @@ use mimi_core::participant_list::{
     apply_update, decode_participant_list_update, ParticipantListData, ParticipantListUpdate,
     UserRolePair, MIMI_PARTICIPANT_LIST_PROPOSAL_TYPE,
 };
-use mimi_core::protocol_wire::{GroupInfoOption, HandshakeBundle, WireError};
+use mimi_core::protocol_wire::{
+    GroupInfoOption, GroupInfoRepresentation, HandshakeBundle, WireError,
+};
 use mimi_core::room_policy::{
     RoomPolicy, MIMI_BASE_ROOM_POLICY_PROPOSAL_TYPE, MIMI_ROLES_LIST_PROPOSAL_TYPE,
 };
@@ -429,7 +431,7 @@ impl Provider {
             "unsupported": {
                 "groupInfo_joining_code": "DIV-1: a GroupInfoRequest with a joining code is refused; preauthorized users are not read",
                 "assets_ohttp": "DIV-3: v1 is messaging-only",
-                "update_wire_endpoint_mixed_commits": "DIV-10: a Commit is applied when it carries participant-list changes, room-policy changes, or both (one change per policy component; a role list never beside a participant-list change, room-policy-04 §3), alone or with Add and Remove proposals beside it; proposals by reference are accepted only when they are the ones this hub holds for a member's leave. A second change of one policy component, a role list beside a participant-list change, a Commit with no change, any other proposal type and any other proposal by reference are refused",
+                "update_wire_endpoint_mixed_commits": "DIV-10: a Commit is applied when it carries participant-list changes, room-policy changes, or both (one change per policy component; a role list never beside a participant-list change, room-policy-04 §3), alone or with Add and Remove proposals beside it, and in a room whose tree this hub keeps an AppDataUpdate of the did_webvh_heads record (DIV-24); proposals by reference are accepted only when they are the ones this hub holds for a member's leave. A second change of one policy component, a role list beside a participant-list change, a Commit with no change, any other proposal type and any other proposal by reference are refused",
                 "reportAbuse_with_abusive_messages": "DIV-9: a report attaching an AbusiveMessage is refused (its Frank cannot yet be verified) - metadata-only reports are accepted"
             }
         });
@@ -1239,6 +1241,18 @@ impl Provider {
                 change_refusal,
             )
         })?;
+        // What the shared decoder does not read is decided here. The did_webvh_heads record is taken, for the room's
+        // group rules to check (`didwebvh_rules`); any other component this hub has no rule for is refused as
+        // unreadable, as before the decoder handed such updates back.
+        if commit
+            .unread_app_data
+            .iter()
+            .any(|unread| unread.component != crate::didwebvh_rules::heads_component())
+        {
+            return Err(UpdateRefusal::Invalid(
+                "the commit is not one this hub can read",
+            ));
+        }
         // A KeyPackage the gate refuses (a foreign suite, a bad signature) refuses the whole Commit before anything changes.
         for added in &commit.adds {
             mimi_core::gate::mimi_gate_keypackage(&added.key_package, self.accepted_suites())
@@ -1270,6 +1284,24 @@ impl Provider {
             )?),
             None => None,
         };
+        // A did_webvh client or the record is held to the group rules, which need the room's tree. A room whose tree the
+        // hub does not keep takes either only in the Commit that seeds it, with the seed verified first (the rules a
+        // joiner checks, `room_tree::verify_seed`), whatever the policy for untracked rooms.
+        let all_basic = commit.adds.iter().all(crate::credential::added_is_basic);
+        let did_webvh_content = !all_basic || !commit.unread_app_data.is_empty();
+        if tracked.is_none() && did_webvh_content {
+            let seeds = bundle.is_some_and(|(group_info, ratchet_tree)| {
+                group_info.representation == GroupInfoRepresentation::Full
+                    && crate::room_tree::full_ratchet_tree(ratchet_tree).is_some()
+            });
+            if !seeds {
+                return Err(UpdateRefusal::Policy(if all_basic {
+                    "a did_webvh_heads change to a room whose ratchet tree this hub does not keep"
+                } else {
+                    "a client whose credential is not Basic, added to a room whose ratchet tree this hub does not keep"
+                }));
+            }
+        }
         // An external Commit is verified against the room's tree, which only a tracked room has.
         if commit.external && tracked.is_none() {
             return Err(UpdateRefusal::Policy(
@@ -1298,8 +1330,9 @@ impl Provider {
         // An untracked room hosted here takes its first Commit, or one carrying a participant-list or room-policy change,
         // only with a bundle that seeds its tree (`hosted_untracked.rs`).
         let needs_seed = tracked.is_none()
-            && self.policy.untracked_rooms == policy::UntrackedRooms::Refuse
-            && self.untracked_needs_seed(room_uri, &commit)?;
+            && (did_webvh_content
+                || (self.policy.untracked_rooms == policy::UntrackedRooms::Refuse
+                    && self.untracked_needs_seed(room_uri, &commit)?));
         let by_value = commit.updates.clone();
         // A tracked room's changes carried by value are the committer's to make (room-policy-04 §8.1); a change named
         // by reference was authorized for its own proposer when it was held.
@@ -1768,30 +1801,30 @@ impl Provider {
             .store
             .list_participant_rows(room_uri)
             .map_err(|_| UpdateRefusal::Store)?;
-        // Stored URIs and a decoded update's are canonical; an Add's identity is compared in the same form.
-        let canonical_identity = |identity: &[u8]| {
-            std::str::from_utf8(identity)
-                .ok()
-                .map(mimi_core::uri::canonical)
-        };
-        let named = |identity: &[u8]| -> bool {
-            canonical_identity(identity).is_some_and(|uri| {
-                rows.iter().any(|row| row.member_uri == uri)
+        // Stored URIs and a decoded update's are canonical; an Add's user is read in the same form, by its credential.
+        let added_users: Vec<Option<String>> = commit
+            .adds
+            .iter()
+            .map(|added| crate::credential::added_user(added, self.accepted_suites()))
+            .collect();
+        let named = |user: &Option<String>| -> bool {
+            user.as_ref().is_some_and(|uri| {
+                rows.iter().any(|row| &row.member_uri == uri)
                     || update
                         .added_participants
                         .iter()
-                        .any(|added| added.user_uri == uri)
+                        .any(|added| &added.user_uri == uri)
             })
         };
-        if commit.adds.iter().any(|added| !named(&added.identity)) {
+        if added_users.iter().any(|user| !named(user)) {
             return Err(MISMATCH);
         }
         for added in &update.added_participants {
             // An external Commit's joiner arrives by its ExternalInit, not by an Add.
             if joiner != Some(added.user_uri.as_str())
-                && !commit.adds.iter().any(|add| {
-                    canonical_identity(&add.identity).is_some_and(|uri| uri == added.user_uri)
-                })
+                && !added_users
+                    .iter()
+                    .any(|user| user.as_deref() == Some(added.user_uri.as_str()))
             {
                 return Err(MISMATCH);
             }
@@ -2120,6 +2153,10 @@ mod key_package_user_tests;
 #[cfg(test)]
 #[path = "hosted_untracked_tests.rs"]
 mod hosted_untracked_tests;
+
+#[cfg(test)]
+#[path = "update_didwebvh_tests.rs"]
+mod update_didwebvh_tests;
 
 #[cfg(test)]
 #[path = "welcome_room_tests.rs"]

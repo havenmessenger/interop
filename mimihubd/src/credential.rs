@@ -106,6 +106,23 @@ pub(crate) fn is_successor(old: (&Credential, &[u8]), new: (&Credential, &[u8]))
     }
 }
 
+/// The user a Commit's added client belongs to, in canonical form: the user its KeyPackage's credential names for the
+/// KeyPackage's leaf key, read as [`user_uri`] reads it, once the KeyPackage passes the gate's checks for `accepted`
+/// suites. `None` when it names none.
+pub(crate) fn added_user(
+    added: &mimi_core::commit_wire::AddedClient,
+    accepted: &[u16],
+) -> Option<String> {
+    let leaf = mimi_core::gate::keypackage_credential(&added.key_package, accepted).ok()?;
+    user_uri(&leaf.credential, leaf.signature_key.as_slice())
+}
+
+/// Whether a Commit's added client carries a Basic credential: the one credential type a room whose tree the hub does
+/// not keep can bind a user from, since it has no tree to hold any other to its rules.
+pub(crate) fn added_is_basic(added: &mimi_core::commit_wire::AddedClient) -> bool {
+    added.identity.is_some()
+}
+
 /// Whether `credential` is of the `did_webvh` type this hub reads.
 pub(crate) fn is_did_webvh(credential: &Credential) -> bool {
     kind(credential) == Some(Kind::DidWebvh)

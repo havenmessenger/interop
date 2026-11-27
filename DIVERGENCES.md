@@ -843,10 +843,11 @@ the user it is published for, and to know which provider a client belongs to. It
   checks its Welcome. A group with `did_webvh` members must name the record in its GroupContext `app_components`, and
   no `did_webvh` credential may be an external sender. A refusal is `invalidProposal`, naming the rule.
 
-  Not built yet: the Commit decoder every `update` passes through first (`mimi_core::commit_wire`) reads an Add only
-  when its KeyPackage carries a Basic credential, and reads an AppDataUpdate only for the components it knows, so an
-  `update` that adds a `did_webvh` member or changes the record is refused there, before the room's tree is consulted.
-  The rules above are reached by a seed and by Commits that carry neither.
+  Through `update`: the Commit decoder every update passes through first (`mimi_core::commit_wire`) reads an Add of
+  any credential type, and hands back the AppDataUpdates it does not read. The hub takes the record's, and refuses
+  any other component it has no rule for. A room whose tree the hub does not keep takes a `did_webvh` client or the
+  record only in the Commit that seeds it, with the seed verified first, whatever the deployment's policy for
+  untracked rooms; without the tree to seed from, it is refused.
 
 A credential of any other type names no user, whatever its content: it is never read as if it were one of these. Where the hub must know the user (a published KeyPackage, a client a
 Commit adds, an external Commit's joiner, a renewed leaf), it is refused; a published KeyPackage is answered

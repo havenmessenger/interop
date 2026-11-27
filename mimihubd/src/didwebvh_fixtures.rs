@@ -365,6 +365,8 @@ pub(crate) struct Change<'a> {
     pub(crate) record: Option<Vec<u8>>,
     /// An AppDataUpdate removing the record.
     pub(crate) remove_record: bool,
+    /// Other AppDataUpdates, each (component, the update, the component's value after it).
+    pub(crate) updates: Vec<(u16, Vec<u8>, Vec<u8>)>,
     /// The committer's new leaf credential, in its update path.
     pub(crate) credential: Option<Credential>,
     /// A GroupContextExtensions proposal setting these.
@@ -400,6 +402,11 @@ pub(crate) fn commit_welcoming(
             AppDataUpdateProposal::update(heads(), record.clone()),
         ))]);
     }
+    for (component, update, _) in &change.updates {
+        builder = builder.add_proposals([Proposal::AppDataUpdate(Box::new(
+            AppDataUpdateProposal::update(*component, update.clone()),
+        ))]);
+    }
     if change.remove_record {
         builder = builder.add_proposals([Proposal::AppDataUpdate(Box::new(
             AppDataUpdateProposal::remove(heads()),
@@ -421,11 +428,15 @@ pub(crate) fn commit_welcoming(
         );
     }
     let mut stage = builder.load_psks(by.provider.storage()).unwrap();
-    if change.record.is_some() || change.remove_record {
+    if change.record.is_some() || change.remove_record || !change.updates.is_empty() {
         let mut updater = stage.app_data_dictionary_updater();
         match &change.record {
             Some(record) => updater.set(ComponentData::from_parts(heads(), record.clone().into())),
-            None => updater.remove(&heads()),
+            None if change.remove_record => updater.remove(&heads()),
+            None => {}
+        }
+        for (component, _, after) in &change.updates {
+            updater.set(ComponentData::from_parts(*component, after.clone().into()));
         }
         stage.with_app_data_dictionary_updates(updater.changes());
     }

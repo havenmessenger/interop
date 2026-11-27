@@ -198,7 +198,7 @@ Output from the sequence above:
         "assets_ohttp": "DIV-3: v1 is messaging-only",
         "groupInfo_external_commit_join": "DIV-1: not built yet; joins are add-driven",
         "reportAbuse_with_abusive_messages": "DIV-9: a report attaching an AbusiveMessage is refused (its Frank cannot yet be verified) - metadata-only reports are accepted",
-        "update_wire_endpoint_mixed_commits": "DIV-10: a Commit is applied when it carries exactly one participant-list or room-policy change, alone or with Add and Remove proposals beside it; proposals by reference are accepted only when they are the ones this hub holds for a member's leave. A second change, a Commit with no change, any other proposal type and any other proposal by reference are refused"
+        "update_wire_endpoint_mixed_commits": "DIV-10: a Commit is applied when it carries participant-list changes, room-policy changes, or both (one change per policy component; a role list never beside a participant-list change, room-policy-04 §3), alone or with Add and Remove proposals beside it, and in a room whose tree this hub keeps an AppDataUpdate of the did_webvh_heads record (DIV-24); proposals by reference are accepted only when they are the ones this hub holds for a member's leave. A second change of one policy component, a role list beside a participant-list change, a Commit with no change, any other proposal type and any other proposal by reference are refused"
     },
     "wireEndpoints": {
         "identifierQuery": "/mimi/pl/identifierQuery/{domain}",

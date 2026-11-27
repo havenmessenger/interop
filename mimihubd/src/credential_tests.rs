@@ -291,13 +291,18 @@ fn verified_logs_are_remembered_within_their_bound() {
 /// check: read `serialized_content()` in another hub module, and this fails naming it.
 #[test]
 fn no_other_module_reads_a_credential() {
-    const READS: [&str; 6] = [
+    // An added client's identity from the Commit decoder is a Basic credential's only, so its user is read here too
+    // (`added_user`), never from that field elsewhere.
+    const READS: [&str; 9] = [
         "serialized_content(",
         "BasicCredential::try_from",
         "keypackage_basic_identity",
         "requester_credential_identity",
         "verify_credential(",
         "DidWebvhCredential::decode",
+        "added.identity",
+        "client.identity",
+        "add.identity",
     ];
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut found = Vec::new();

@@ -199,3 +199,105 @@ async fn a_leave_on_the_lane_is_its_senders_own() {
         "PLANT-LANE-UPDATE-REQUESTER: Bob's own leave on the lane was refused: {body}"
     );
 }
+
+/// A did_webvh room through the lane's own HTTP `update`: Alice's group starts with the components `createRoom` gave,
+/// the list naming her in the creator's role, and the did_webvh record and `app_components`; her first Commit adds Bob,
+/// a did_webvh client, with his head and his listing. The lane answers `success` and the room is tracked. Revert check:
+/// let the Commit decoder refuse a non-Basic Add, and the lane answers `invalidProposal`.
+#[tokio::test]
+async fn a_did_webvh_room_seeds_through_the_lanes_update() {
+    use crate::didwebvh_fixtures::{
+        app_components, commit, group_with, head_of, heads, record, Change, APP_COMPONENTS,
+    };
+    use crate::mls_fixtures::Member;
+    use crate::room_tree::PARTICIPANT_LIST_COMPONENT;
+    use mimi_core::participant_list::{
+        encode_participant_list_data, encode_participant_list_update, ParticipantListData,
+        ParticipantListUpdate, UserRolePair,
+    };
+    use mimi_core::protocol_wire::{GroupInfoOption, GroupInfoRepresentation, HandshakeBundle};
+    let list = |pairs: &[(&str, u32)]| {
+        encode_participant_list_data(&ParticipantListData {
+            participants: pairs
+                .iter()
+                .map(|(user, role)| UserRolePair {
+                    user_uri: (*user).to_string(),
+                    role_index: *role,
+                })
+                .collect(),
+        })
+        .unwrap()
+    };
+    let l = lane("did-webvh-update");
+    let (status, created) = call(&l.router, signed(&l.key, "createRoom", ALICE, CREATE)).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let room = created["room"].as_str().unwrap().to_string();
+    let creator_role = u32::try_from(created["creator_role"].as_u64().unwrap()).unwrap();
+    let mut components: Vec<(u16, Vec<u8>)> = created["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|component| {
+            (
+                u16::try_from(component["id"].as_u64().unwrap()).unwrap(),
+                STANDARD
+                    .decode(component["data"].as_str().unwrap())
+                    .unwrap(),
+            )
+        })
+        .collect();
+    let alice = Member::did_webvh(ALICE, "alice");
+    let bob = Member::did_webvh(BOB, "bob");
+    components.push((PARTICIPANT_LIST_COMPONENT, list(&[(ALICE, creator_role)])));
+    components.push((APP_COMPONENTS, app_components(&[heads()])));
+    components.push((heads(), record([head_of(&alice)])));
+    let mut group = group_with(&alice, room.as_bytes(), &components);
+    let listing = ParticipantListUpdate {
+        added_participants: vec![UserRolePair {
+            user_uri: BOB.to_string(),
+            role_index: ROLE_MEMBER,
+        }],
+        ..ParticipantListUpdate::default()
+    };
+    let (commit, group_info, tree) = commit(
+        &mut group,
+        &alice,
+        Change {
+            adds: vec![&bob],
+            record: Some(record([head_of(&alice), head_of(&bob)])),
+            updates: vec![(
+                PARTICIPANT_LIST_COMPONENT,
+                encode_participant_list_update(&listing).unwrap(),
+                list(&[(ALICE, creator_role), (BOB, ROLE_MEMBER)]),
+            )],
+            ..Change::default()
+        },
+    );
+    let request = HandshakeBundle::Commit {
+        proposal_or_commit: commit,
+        welcome: None,
+        group_info_option: GroupInfoOption {
+            representation: GroupInfoRepresentation::Full,
+            payload: group_info,
+        },
+        ratchet_tree_option: [&[1u8][..], &tree].concat(),
+    }
+    .encode()
+    .unwrap();
+    let body = format!(
+        r#"{{"room":"{room}","update":"{}"}}"#,
+        STANDARD.encode(&request)
+    );
+    let (status, answer) = call(&l.router, signed(&l.key, "update", ALICE, &body)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        answer["answer"], "success",
+        "PLANT-LANE-HTTP-DIDWEBVH: {answer}"
+    );
+    let p = l.provider.lock().unwrap();
+    assert!(
+        p.room_tracking(&room).unwrap().is_some(),
+        "the room is tracked"
+    );
+    assert_eq!(p.list_participants(&room).unwrap().len(), 2);
+}

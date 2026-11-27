@@ -6,6 +6,16 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- **Breaking, `mimi-core`:** `commit_wire::AddedClient::identity` is now `Option<Vec<u8>>`, the identity of a Basic
+  credential and `None` for any other type, and `decode_commit_proposals` decodes an Add of any credential type
+  instead of refusing it. `DecodedCommit` gains `unread_app_data`, the AppDataUpdates for components this crate does
+  not read, handed back as `UnreadAppData { component, remove }` instead of refused. `gate::keypackage_credential`
+  returns the leaf's `CredentialWithKey`.
+- `mimihubd` takes a `did_webvh` client and the `did_webvh_heads` record through `update`, on the wire and the client
+  lane. It reads an added client's user from its KeyPackage's credential, refuses an AppDataUpdate for any other
+  component it has no rule for (as before), and takes either in a room whose tree it does not keep only in the Commit
+  that seeds it, verified first, whatever the policy for untracked rooms; without a tree to seed from, such a Commit is
+  refused.
 - `mimihubd` reads a member's user from a `did_webvh` credential (draft-atwood-mls-didwebvh-credential): the log is
   verified with `mls-didwebvh` and must authorize the leaf's signature key, and the user is the one `mimi:` URI in its
   head DID document's `alsoKnownAs`, as the reference implementation reads it. A portable DID that has moved names the
@@ -19,8 +29,7 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   `did_webvh` members names the record in `app_components`, and no `did_webvh` credential is an external sender. A
   refusal is `invalidProposal`. Rooms with no record and no `did_webvh` leaf are not affected, but for one change: an
   AppDataUpdate creating the record in such a room, refused before as a component the hub does not read, is refused
-  now as one that does not hold the expected (empty) record. The Commit decoder in
-  front of every `update` still refuses an Add of a `did_webvh` member and an AppDataUpdate of the record (DIV-24).
+  now as one that does not hold the expected (empty) record.
 - `mimihubd` links `mls-didwebvh`, the did_webvh credential's log verification and group rules from its reference
   implementation (draft-atwood-mls-didwebvh-credential), at one revision of its repository until it is on crates.io;
   its did:webvh verifier, jmap-did-types, comes from crates.io. Nothing reads it yet. The manifest-purity check allows

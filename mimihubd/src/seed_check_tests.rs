@@ -68,6 +68,7 @@ fn no_changes() -> DecodedCommit {
         removes: Vec::new(),
         references: Vec::new(),
         external: false,
+        unread_app_data: Vec::new(),
     }
 }
 
