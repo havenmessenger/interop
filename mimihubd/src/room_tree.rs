@@ -25,8 +25,8 @@ use openmls::group::{PublicGroup, StagedCommit};
 use openmls::messages::group_info::VerifiableGroupInfo;
 use openmls::prelude::tls_codec::{Deserialize as _, Serialize as _};
 use openmls::prelude::{
-    AppDataUpdateOperation, Credential, CredentialType, GroupId, LeafNodeIndex,
-    OpenMlsSignaturePublicKey, Proposal, ProposalStore, RatchetTreeIn, Verifiable as _,
+    AppDataUpdateOperation, GroupId, LeafNodeIndex, OpenMlsSignaturePublicKey, Proposal,
+    ProposalStore, RatchetTreeIn, Verifiable as _,
 };
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::OpenMlsProvider;
@@ -36,6 +36,7 @@ use mimi_core::partial_group_info::{PartialGroupInfo, TreeAt};
 use mimi_core::participant_list::{decode_participant_list_data, ParticipantListData};
 use mimi_core::protocol_wire::{GroupInfoOption, GroupInfoRepresentation};
 
+use crate::credential::user_uri;
 use crate::list_leaves::{ListAndLeaves, RemovedLeaf, Renewal};
 use crate::{Provider, UpdateRefusal};
 
@@ -145,7 +146,7 @@ impl StagedRoomCommit {
         let mut added: Vec<Option<String>> = self
             .staged
             .add_proposals()
-            .map(|add| credential_uri(add.add_proposal().key_package().leaf_node().credential()))
+            .map(|add| user_uri(add.add_proposal().key_package().leaf_node().credential()))
             .collect();
         if let Some(joiner) = &self.joiner {
             added.push(Some(joiner.clone()));
@@ -154,23 +155,20 @@ impl StagedRoomCommit {
             .group
             .members()
             .filter(|member| !removed_at.contains(&member.index))
-            .map(|member| credential_uri(&member.credential))
+            .map(|member| user_uri(&member.credential))
             .collect();
         leaves_after.extend(added.iter().cloned());
         // A client's new leaf must name the user its old one did: each Update by its sender, and a member committer's
         // leaf in its update path (an external Commit's joiner is a new client, counted among the added).
-        let identity_before = |leaf: LeafNodeIndex| {
-            self.group
-                .leaf(leaf)
-                .and_then(|node| basic_identity(node.credential()))
-        };
+        let credential_before =
+            |leaf: LeafNodeIndex| self.group.leaf(leaf).map(|node| node.credential().clone());
         let mut renewed: Vec<Renewal> = self
             .staged
             .update_proposals()
             .filter_map(|update| match update.sender() {
                 Sender::Member(leaf) => Some((
-                    identity_before(*leaf),
-                    basic_identity(update.update_proposal().leaf_node().credential()),
+                    credential_before(*leaf),
+                    update.update_proposal().leaf_node().credential().clone(),
                 )),
                 _ => None,
             })
@@ -178,8 +176,8 @@ impl StagedRoomCommit {
         if self.joiner.is_none() {
             if let Some(leaf) = self.staged.update_path_leaf_node() {
                 renewed.push((
-                    self.committer_leaf.and_then(identity_before),
-                    basic_identity(leaf.credential()),
+                    self.committer_leaf.and_then(credential_before),
+                    leaf.credential().clone(),
                 ));
             }
         }
@@ -471,15 +469,6 @@ pub(crate) fn app_data(context: &openmls::group::GroupContext, component: u16) -
         .and_then(|extension| extension.dictionary().get(&component))
 }
 
-/// The user URI a member's credential names: a BasicCredential whose identity is the URI (the reading this hub takes;
-/// how a credential binds a user is still open in the working group).
-fn credential_uri(credential: &Credential) -> Option<String> {
-    let identity = credential.serialized_content();
-    std::str::from_utf8(identity)
-        .ok()
-        .map(mimi_core::uri::canonical)
-}
-
 /// The provider a user URI belongs to: its authority.
 fn provider_of(uri: &str) -> Option<String> {
     mimi_core::uri::MimiUri::parse(uri)
@@ -487,17 +476,10 @@ fn provider_of(uri: &str) -> Option<String> {
         .map(|parsed| parsed.authority.to_ascii_lowercase())
 }
 
-/// A Basic credential's identity bytes, exactly; `None` for a credential of another type. A client's renewed leaf must
-/// carry the same bytes as the leaf it replaces, as its group's clients require.
-fn basic_identity(credential: &Credential) -> Option<Vec<u8>> {
-    (credential.credential_type() == CredentialType::Basic)
-        .then(|| credential.serialized_content().to_vec())
-}
-
 fn member_uri(group: &PublicGroup, leaf: LeafNodeIndex) -> Option<String> {
     group
         .leaf(leaf)
-        .and_then(|node| credential_uri(node.credential()))
+        .and_then(|node| user_uri(node.credential()))
 }
 
 /// A tracked room's proposals, verified against its tree and not queued yet.
@@ -734,7 +716,7 @@ impl Provider {
         let joiner = external
             .then(|| staged.update_path_leaf_node())
             .flatten()
-            .and_then(|leaf| credential_uri(leaf.credential()));
+            .and_then(|leaf| user_uri(leaf.credential()));
         if external && joiner.is_none() {
             return Err(refused(
                 "an external Commit whose joiner names no user",
@@ -981,7 +963,7 @@ impl Provider {
         }
         let members: Vec<String> = candidate
             .members()
-            .filter_map(|member| credential_uri(&member.credential))
+            .filter_map(|member| user_uri(&member.credential))
             .collect();
         if listed
             .iter()
@@ -1070,7 +1052,7 @@ impl Provider {
                 .collect(),
         };
         if candidate.members().any(|member| {
-            credential_uri(&member.credential).is_none_or(|user| !listed_after.contains(&user))
+            user_uri(&member.credential).is_none_or(|user| !listed_after.contains(&user))
         }) {
             return Err(Some(
                 "a client in its tree is not a client of a participant it lists",

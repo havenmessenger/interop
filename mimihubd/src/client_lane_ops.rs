@@ -22,8 +22,10 @@ pub enum PublishRefusal {
     TooMany,
     /// The KeyPackage at this index does not pass the suite gate or does not decode and validate.
     NotAccepted(usize),
-    /// The KeyPackage at this index names someone other than the user in its basic credential.
+    /// The KeyPackage at this index names someone other than the user in its credential.
     NotTheUser(usize),
+    /// The KeyPackage at this index carries a credential of a type this hub does not read, so it names no user.
+    CredentialNotSupported(usize),
 }
 
 /// One inbox read: the queued items after the given cursors, oldest first, and whether more are waiting.
@@ -62,10 +64,16 @@ impl Provider {
         }
         let user = mimi_core::uri::canonical(user);
         for (at, kp) in key_packages.iter().enumerate() {
-            match mimi_core::gate::keypackage_basic_identity(kp, self.accepted_suites()) {
-                Ok(identity) if identity == user.as_bytes() => {}
-                Ok(_) => return Ok(Err(PublishRefusal::NotTheUser(at))),
-                Err(_) => return Ok(Err(PublishRefusal::NotAccepted(at))),
+            let Ok(credential) = mimi_core::gate::keypackage_credential(kp, self.accepted_suites())
+            else {
+                return Ok(Err(PublishRefusal::NotAccepted(at)));
+            };
+            if !crate::credential::is_read(&credential) {
+                return Ok(Err(PublishRefusal::CredentialNotSupported(at)));
+            }
+            // As the credential states it, not canonicalized: a KeyPackage is bound to the user it names exactly.
+            if crate::credential::stated_uri(&credential) != Some(user.as_str()) {
+                return Ok(Err(PublishRefusal::NotTheUser(at)));
             }
         }
         for kp in key_packages {

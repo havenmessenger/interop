@@ -239,6 +239,9 @@ async fn publish(
         Ok(Err(PublishRefusal::NotAccepted(_) | PublishRefusal::NotTheUser(_))) => {
             crate::problem::MATERIAL_NOT_ACCEPTED.response()
         }
+        Ok(Err(PublishRefusal::CredentialNotSupported(_))) => {
+            crate::problem::CREDENTIAL_NOT_SUPPORTED.response()
+        }
         Err(error) => internal("publish", error),
     }
 }

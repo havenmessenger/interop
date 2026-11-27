@@ -125,9 +125,8 @@ pub fn check_key_material_request(
     if mimi_core::uri::canonical(&request.requesting_user.0) != user {
         return Err(KeyMaterialRefusal::NotTheUser);
     }
-    let credential = std::str::from_utf8(request.requester_credential_identity())
-        .map(mimi_core::uri::canonical)
-        .map_err(|_| KeyMaterialRefusal::NotTheUser)?;
+    let credential = crate::credential::user_uri(&request.requester_credential)
+        .ok_or(KeyMaterialRefusal::NotTheUser)?;
     if credential != user || !request.signature_verifies() {
         return Err(KeyMaterialRefusal::NotTheUser);
     }

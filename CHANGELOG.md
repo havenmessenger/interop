@@ -6,6 +6,11 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimihubd`: a member's user is read from its credential in one module (`credential.rs`), by credential type. A Basic
+  credential's identity is the user URI, as before; a credential of any other type names no user, where before its
+  content was read as a URI whatever its type. A published KeyPackage with such a credential is answered 400
+  `credential-not-supported` (it was `material-not-accepted`). Basic credentials are handled exactly as they were
+  (DIV-24). `mimi-core` adds `gate::keypackage_credential`, the leaf credential of a KeyPackage after the gate's checks.
 - `mimihubd`: a Commit is fanned out to the providers and local members of the room's participants before it, no longer
   also to those it adds. protocol-07 §5.5 sends a Commit to "providers with active participants", and its Figures 3 and 5
   send the provider of a user being added only the Welcome; that provider has no member of the room until the Welcome,

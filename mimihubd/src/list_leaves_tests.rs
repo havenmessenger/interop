@@ -220,12 +220,14 @@ fn a_listed_user_with_no_client_left_is_valid() {
 #[test]
 fn a_client_whose_new_leaf_names_another_user_is_refused() {
     let dave = "mimi://d.example/u/dave";
-    let bytes = |user: &str| Some(user.as_bytes().to_vec());
+    let basic = |user: &str| -> openmls::prelude::Credential {
+        openmls::prelude::BasicCredential::new(user.as_bytes().to_vec()).into()
+    };
     // Another listed user, an unlisted one, and Bob's own URI with its host in another case: each is another
     // credential, though the last names the same user in canonical form.
     for other in [CAROL, dave, "mimi://B.EXAMPLE/u/bob"] {
         let view = ListAndLeaves {
-            renewed: vec![(bytes(BOB), bytes(other))],
+            renewed: vec![(Some(basic(BOB)), basic(other))],
             ..room()
         };
         assert_eq!(
@@ -235,12 +237,12 @@ fn a_client_whose_new_leaf_names_another_user_is_refused() {
         );
     }
     let same = ListAndLeaves {
-        renewed: vec![(bytes(BOB), bytes(BOB))],
+        renewed: vec![(Some(basic(BOB)), basic(BOB))],
         ..room()
     };
     assert_eq!(require_paired(&same, Some(&may_remove_own())), Ok(()));
     let not_basic = ListAndLeaves {
-        renewed: vec![(None, bytes(BOB))],
+        renewed: vec![(None, basic(BOB))],
         ..room()
     };
     assert_eq!(

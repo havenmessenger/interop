@@ -31,6 +31,7 @@ pub mod client_lane_events;
 pub mod client_lane_ops;
 pub mod client_lane_relay;
 pub mod client_lane_rooms;
+mod credential;
 pub mod enroll;
 pub mod event_push;
 pub mod external_join;

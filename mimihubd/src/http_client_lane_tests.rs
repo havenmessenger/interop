@@ -172,6 +172,60 @@ pub(super) async fn call(
     )
 }
 
+/// A KeyPackage whose credential is of a type the hub does not read is refused, 400 `credential-not-supported`, even
+/// when its content is the user's URI: it names no user, and nothing in the request is stored. The same user's Basic
+/// KeyPackage is taken. Revert check: skip the credential-type check, and it is answered as a KeyPackage that names
+/// someone else (`material-not-accepted`).
+#[tokio::test]
+async fn a_key_package_with_a_credential_the_hub_does_not_read_is_refused() {
+    use openmls::prelude::{Credential, CredentialType};
+    let lane = lane("publish-unread-credential");
+    let unread = STANDARD.encode(crate::mls_fixtures::key_package_carrying(Credential::new(
+        CredentialType::Other(0xF0F0),
+        BOB.as_bytes().to_vec(),
+    )));
+    let (status, answer) = call(
+        &lane.router,
+        signed(
+            &lane.key,
+            "publishKeyPackages",
+            BOB,
+            &format!(r#"{{"key_packages":["{unread}"]}}"#),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+    assert!(
+        answer["type"]
+            .as_str()
+            .is_some_and(|t| t.ends_with("#credential-not-supported")),
+        "PLANT-LANE-UNREAD-CREDENTIAL: {answer}"
+    );
+    let stored = lane
+        .provider
+        .lock()
+        .unwrap()
+        .lane_key_package_count(BOB, now_unix())
+        .unwrap();
+    assert_eq!(stored, (0, false), "nothing was stored");
+    let bobs = STANDARD.encode(real_keypackage_for(BOB.as_bytes()));
+    let (status, _) = call(
+        &lane.router,
+        signed(
+            &lane.key,
+            "publishKeyPackages",
+            BOB,
+            &format!(r#"{{"key_packages":["{bobs}"]}}"#),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Bob's Basic KeyPackage is taken, so the refusal above is the credential's"
+    );
+}
+
 /// The user publishes their own KeyPackage, and it is stored under their name here, where a peer's keyMaterial claim
 /// looks for it. Revert check: skip the credential check, and Alice's KeyPackage is stored for Bob.
 #[tokio::test]

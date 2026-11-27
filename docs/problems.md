@@ -131,6 +131,18 @@ A `submitMessage` carried something other than an application message as RFC 942
 PrivateMessage whose content type is `application`. A PublicMessage, a Commit, a proposal, or bytes that are no MLS
 message are refused and delivered to no one. A Commit or a proposal goes to `update`.
 
+## credential-not-supported
+
+| field | value |
+|---|---|
+| `type` | `https://github.com/havenmessenger/interop/blob/main/docs/problems.md#credential-not-supported` |
+| `title` | The credential type is not supported |
+| `status` | 400 |
+
+A `publishKeyPackages` carried a KeyPackage whose leaf credential is of a type this hub does not read. The hub binds each
+published KeyPackage to the user its credential names, and reads Basic credentials only, so a credential of another type
+names no user (DIV-24). Nothing in the request is stored.
+
 ## key-material-rate-limited
 
 | field | value |

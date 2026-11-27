@@ -274,7 +274,10 @@ pub(crate) async fn key_material_answer(
 ) -> Result<Vec<u8>, Response> {
     use mimi_core::consent::KeyPackageAccess;
     use mimi_core::protocol_wire::{IdentifierUri, KeyMaterialResponse, KeyMaterialUserCode};
-    log_key_material_identity_claim(&req.requesting_user.0, req.requester_credential_identity());
+    log_key_material_identity_claim(
+        &req.requesting_user.0,
+        crate::credential::stated_uri(&req.requester_credential),
+    );
     let now = now_unix();
     let room_uri = (!req.room_id.0.is_empty()).then_some(req.room_id.0.as_str());
     // A user of another provider, by the request's `targetUser`: forwarded to it, for a room this hub hosts
@@ -407,11 +410,8 @@ pub(crate) async fn key_material_answer(
 /// persistent and more widely-readable sink than an ad hoc terminal, so it carries only a
 /// match/mismatch outcome - no client-supplied identifier - to avoid making the journal a durable
 /// store of unauthenticated identity claims.
-fn log_key_material_identity_claim(
-    requesting_user: &str,
-    requester_credential_identity: &[u8],
-) -> bool {
-    let matches = requester_credential_identity == requesting_user.as_bytes();
+fn log_key_material_identity_claim(requesting_user: &str, claimed: Option<&str>) -> bool {
+    let matches = claimed == Some(requesting_user);
     if matches {
         eprintln!("[mimihubd] keyMaterial: requesterCredential identity claim matched");
     } else {
@@ -1323,7 +1323,7 @@ mod tests {
     fn key_material_identity_claim_matches_when_credential_equals_requesting_user() {
         assert!(log_key_material_identity_claim(
             "mimi://a.example/u/alice",
-            b"mimi://a.example/u/alice"
+            Some("mimi://a.example/u/alice")
         ));
     }
 
@@ -1331,8 +1331,12 @@ mod tests {
     fn key_material_identity_claim_does_not_match_a_different_credential() {
         assert!(!log_key_material_identity_claim(
             "mimi://a.example/u/alice",
-            b"mimi://b.example/u/mallory"
+            Some("mimi://b.example/u/mallory")
         ));
+        assert!(
+            !log_key_material_identity_claim("mimi://a.example/u/alice", None),
+            "a credential this hub does not read claims no one"
+        );
     }
 
     /// Minimal percent-encoding for embedding a `mimi://` URI (which contains reserved `:`/`/`

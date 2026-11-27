@@ -318,3 +318,31 @@ pub(crate) fn public_application_message(group_id: &[u8], epoch: u64) -> Vec<u8>
     opaque(&mut out, &[0u8; 32]); // membership_tag
     out
 }
+
+/// A KeyPackage, as bytes, whose leaf carries `credential`, of whatever type, under a fresh key, with capabilities that
+/// list that credential type as well as Basic.
+pub(crate) fn key_package_carrying(credential: Credential) -> Vec<u8> {
+    let member = Member::new("mimi://example.com/u/unused");
+    let credential_type = credential.credential_type();
+    KeyPackage::builder()
+        .leaf_node_capabilities(Capabilities::new(
+            None,
+            Some(&[SUITE]),
+            Some(&[ExtensionType::AppDataDictionary]),
+            Some(&[ProposalType::AppDataUpdate]),
+            Some(&[CredentialType::Basic, credential_type]),
+        ))
+        .build(
+            SUITE,
+            &member.provider,
+            &member.signer,
+            CredentialWithKey {
+                credential,
+                signature_key: member.credential.signature_key.clone(),
+            },
+        )
+        .unwrap()
+        .key_package()
+        .tls_serialize_detached()
+        .unwrap()
+}

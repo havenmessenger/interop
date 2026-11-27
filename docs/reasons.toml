@@ -63,6 +63,15 @@ divergence = "DIV-19"
 reason = "An event stream acknowledgement names a seq past the last event written, which would skip events not yet written."
 
 [[reason]]
+id = "credential-not-supported"
+surfaces_as = "problem credential-not-supported, 400"
+spec = "local"
+section = ""
+quote = ""
+divergence = "DIV-24"
+reason = "A published KeyPackage whose credential is of a type this hub does not read, so it names no user to bind the KeyPackage to."
+
+[[reason]]
 id = "not-an-application-message"
 surfaces_as = "problem not-an-application-message, 400"
 spec = "RFC 9420"

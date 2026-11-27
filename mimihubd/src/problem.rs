@@ -214,14 +214,23 @@ pub const NOT_AN_APPLICATION_MESSAGE: ProblemType = ProblemType {
     detail: "submitMessage takes a PrivateMessage carrying application content (RFC 9420 §6). A Commit or a proposal goes to update.",
 };
 
+/// A KeyPackage whose credential is of a type this hub does not read, so it names no user to bind it to.
+pub const CREDENTIAL_NOT_SUPPORTED: ProblemType = ProblemType {
+    anchor: "credential-not-supported",
+    title: "The credential type is not supported",
+    status: StatusCode::BAD_REQUEST,
+    detail: "The hub binds a KeyPackage to the user its credential names, and reads Basic credentials only.",
+};
+
 /// Every problem type, for the page check and the fallback.
-pub const ALL: [&ProblemType; 23] = [
+pub const ALL: [&ProblemType; 24] = [
     &CLIENT_NOT_AUTHENTICATED,
     &CLIENT_RATE_LIMITED,
     &DELIVERY_MODE,
     &ACK_PAST_END,
     &GROUP_MISMATCH,
     &NOT_AN_APPLICATION_MESSAGE,
+    &CREDENTIAL_NOT_SUPPORTED,
     &KEY_MATERIAL_RATE_LIMITED,
     &NO_LOCAL_MEMBER,
     &MALFORMED_REQUEST,

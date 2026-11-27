@@ -307,8 +307,8 @@ on the wire.
   by the change; and a change that removes users has a `Remove` beside it. Otherwise the Commit is `invalidProposal` and
   nothing changes. Two limits stay: for an untracked room the hub holds no ratchet tree, so a `Remove` is a number and never a user (a `Remove`
   with no user removed from the list is read as one device leaving, and an `Add` for a listed user as a second device), and
-  the credential-to-user binding is open, so for a `BasicCredential` the identity bytes are read as the user URI (an
-  X.509 credential is refused). A Commit with the change alone is read as it always was, so a participant can be listed
+  the credential-to-user binding is open, so for a `BasicCredential` the identity bytes are read as the user URI, and a
+  credential of another type names no user (DIV-24). A Commit with the change alone is read as it always was, so a participant can be listed
   before any client is added. A Commit that carries a `GroupContextExtensions`, `Update`, `PreSharedKey`, `ReInit`,
   `ExternalInit`, `SelfRemove`, changes it may not carry together, or no change is still refused, whichever order it is
   in.
@@ -809,3 +809,17 @@ the provider being the domain the peer proved (429 `key-material-rate-limited`).
 counted: a peer can name any requester by naming a room on its own domain (DIV-6), so a count on it would let one peer
 spend the budget of another provider's users. A refused request is not counted. The operator's loopback route that serves a KeyPackage (DIV-16, "The operator's
 routes") is the operator's, and is neither gated nor limited.
+
+## DIV-24 - a member's user is read from the credential types this hub supports; any other names no user
+
+RFC 9420 leaves which identifiers a credential presents for a member to the application ("The application using MLS
+is responsible for specifying which identifiers it finds acceptable for each member in a group", §5.3.1), and MIMI has
+not settled how a credential names a user. The hub needs the user of each member's leaf: to check a Commit's
+participant-list change against the clients it adds and removes (protocol-07 §7.5), to bind a published KeyPackage to
+the user it is published for, and to know which provider a client belongs to. It reads one credential type today, a
+Basic credential, whose identity bytes are the user's URI. A credential of any other type names no user, whatever its
+content: it is never read as if it were Basic. Where the hub must know the user (a published KeyPackage, a client a
+Commit adds, an external Commit's joiner, a renewed leaf), it is refused; a published KeyPackage is answered
+`credential-not-supported`. A renewed leaf's new credential must be "valid as a successor" to the old one "according to the
+application's policy" (RFC 9420 §5.3.1); for a Basic credential the hub's policy is exactly the same identity bytes. All of this is read in one module, `mimihubd/src/credential.rs`, so
+a further credential type is added there.

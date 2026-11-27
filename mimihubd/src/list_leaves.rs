@@ -8,10 +8,11 @@
 //!   it commits or a Remove or SelfRemove it proposed; or by a member whose role holds `canKick`, which removes another
 //!   participant's clients without changing the list. Otherwise a member removes a user's clients only by taking the
 //!   user off the list;
-//! - a client keeps its credential: an Update, or the committer's new leaf, carries a Basic credential with exactly the
-//!   identity bytes of the leaf it replaces (RFC 9420 §5.3.1, a valid successor), so no client becomes another user's,
-//!   listed or not. This is byte equality, not the canonical form the list is matched in: it is the comparison the
-//!   room's clients make, so every renewal a client refuses is refused here first.
+//! - a client keeps its credential: an Update, or the committer's new leaf, carries a valid successor of the credential
+//!   of the leaf it replaces (RFC 9420 §5.3.1, [`crate::credential::is_successor`]), so no client becomes another
+//!   user's, listed or not. For a Basic credential that is byte equality of the identity, not the canonical form the
+//!   list is matched in: it is the comparison the room's clients make, so every renewal a client refuses is refused
+//!   here first.
 //!
 //! A listed user with no client is valid (an inactive participant). Users are compared in canonical form.
 //!
@@ -20,6 +21,7 @@
 //! hub's Add and Remove checks alone.
 
 use mimi_core::room_policy::{Capability, RoomPolicy};
+use openmls::prelude::Credential;
 
 /// A client a Commit removes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,9 +33,9 @@ pub(crate) struct RemovedLeaf {
     pub proposer: Option<String>,
 }
 
-/// A client the Commit gives a new leaf: the identity bytes of its Basic credential before, and of its new leaf's;
-/// `None` for a credential of another type.
-pub(crate) type Renewal = (Option<Vec<u8>>, Option<Vec<u8>>);
+/// A client the Commit gives a new leaf: the credential of its leaf before (`None` if the tree had no leaf there), and
+/// of its new leaf.
+pub(crate) type Renewal = (Option<Credential>, Credential);
 
 /// A tracked room's participant list and clients around one Commit.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -48,8 +50,8 @@ pub(crate) struct ListAndLeaves {
     pub removed: Vec<RemovedLeaf>,
     /// The user of each client in the group after the Commit.
     pub leaves_after: Vec<Option<String>>,
-    /// Each client the Commit gives a new leaf (an Update, or the committer's leaf in its update path): the identity
-    /// bytes of its Basic credential before and of its new leaf's, `None` for a credential of another type.
+    /// Each client the Commit gives a new leaf (an Update, or the committer's leaf in its update path): its credential
+    /// before and its new leaf's.
     pub renewed: Vec<Renewal>,
 }
 
@@ -72,11 +74,11 @@ pub(crate) fn require_paired(
     policy: Option<&RoomPolicy>,
 ) -> Result<(), &'static str> {
     let listed_after = |user: &str| view.after.iter().any(|listed| listed == user);
-    if view
-        .renewed
-        .iter()
-        .any(|(before, after)| before.is_none() || before != after)
-    {
+    if view.renewed.iter().any(|(before, after)| {
+        !before
+            .as_ref()
+            .is_some_and(|before| crate::credential::is_successor(before, after))
+    }) {
         return Err(CLIENT_CHANGES_USER);
     }
     if view
