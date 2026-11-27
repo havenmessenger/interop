@@ -9,7 +9,7 @@ use openmls::prelude::{Credential, CredentialType};
 use serde_json::Value;
 
 use super::{commit_on_records, did_webvh_leaves, join_on_records, VerifiedLeaf};
-use crate::credential::{is_successor, verified_log, verify_log, DID_WEBVH};
+use crate::credential::{is_successor, mimi_user_uri, verified_log, verify_log, DID_WEBVH};
 
 fn vectors() -> Value {
     serde_json::from_str(include_str!("../../tests/vectors/didwebvh/vectors.json")).unwrap()
@@ -129,6 +129,7 @@ fn the_binding_and_successor_vectors_hold() {
         );
     }
     for v in vectors["successor"].as_array().unwrap() {
+        let note = &v["note"];
         let (old, new) = (
             credential_of(&vectors, text(v, "old")),
             credential_of(&vectors, text(v, "new")),
@@ -139,11 +140,27 @@ fn the_binding_and_successor_vectors_hold() {
                 .map(|key| key.to_vec())
                 .unwrap_or_default()
         };
-        if v["valid"] != true {
+        let draft = v["valid"] == true;
+        let hub = is_successor((&old, &key(&old)), (&new, &key(&new)));
+        let (old_log, new_log) = (verify_log(&old).unwrap(), verify_log(&new).unwrap());
+        // The draft's rule (§Successor Credentials) decides the vector; the hub adds protocol-07 §7.5's: the same
+        // mimi: URI.
+        assert_eq!(
+            mls_didwebvh::rules::is_valid_successor(&old_log, &new_log),
+            draft,
+            "{note}: the draft's successor rule"
+        );
+        if hub {
             assert!(
-                !is_successor((&old, &key(&old)), (&new, &key(&new))),
-                "{}: the hub took a successor the draft refuses",
-                v["note"]
+                draft,
+                "PLANT-VECTORS-SUCCESSOR: {note}: the hub took a successor the draft's rule refuses"
+            );
+        }
+        if draft && !hub {
+            let (before, after) = (mimi_user_uri(&old_log), mimi_user_uri(&new_log));
+            assert!(
+                before.is_none() || before != after,
+                "{note}: the hub refused a successor the draft takes, and not by the §7.5 URI rule"
             );
         }
     }
@@ -201,8 +218,11 @@ fn the_join_vectors_get_the_drafts_answers() {
     }
 }
 
-/// The DIF test-suite subset through the hub's `verify_log`: every positive scenario verifies but the one that ends
-/// deactivated (the draft: the DID must not end deactivated), and every negative scenario is refused.
+/// The DIF test-suite subset through the hub's `verify_log`. Every positive scenario verifies, but one: `deactivate`,
+/// a valid did:webvh v1.0 log that ends deactivated, which the draft refuses on purpose (§Log Verification, change 5:
+/// "After every entry has been processed, the active value of the `deactivated` parameter MUST be false"), and
+/// mls-didwebvh names that rule. Every negative scenario is refused; `negative-versiontime-future` at its third entry,
+/// as the draft keeps the strict increase of `versionTime` but compares it with no clock (change 3).
 #[test]
 fn the_dif_logs_verify_as_the_draft_says() {
     let dir =
@@ -214,19 +234,31 @@ fn the_dif_logs_verify_as_the_draft_says() {
         let name = scenario.file_name().unwrap().to_string_lossy().into_owned();
         let log = std::fs::read(scenario.join("did.jsonl")).unwrap();
         let witness = std::fs::read(scenario.join("did-witness.json")).unwrap_or_default();
+        let did_webvh = DidWebvhCredential::new(log, witness).unwrap();
         let credential = Credential::new(
             CredentialType::Other(DID_WEBVH.credential_type()),
-            DidWebvhCredential::new(log, witness)
-                .unwrap()
-                .encode()
-                .unwrap(),
+            did_webvh.encode().unwrap(),
         );
         let verified = verify_log(&credential).is_some();
-        if name.starts_with("negative-") || name == "deactivate" {
+        let why = mls_didwebvh::verify_credential(&did_webvh).err();
+        if name == "deactivate" {
+            assert!(!verified, "deactivate: a deactivated log verified");
+            assert_eq!(
+                why,
+                Some(mls_didwebvh::LogError::Deactivated),
+                "deactivate: refused by §Log Verification change 5"
+            );
+        } else if name.starts_with("negative-") {
             assert!(!verified, "{name}: refused by the draft, verified here");
+            if name == "negative-versiontime-future" {
+                assert!(
+                    matches!(why, Some(mls_didwebvh::LogError::Webvh { entry: 3, .. })),
+                    "{name}: refused at its third entry, the one that goes back in time: {why:?}"
+                );
+            }
             negative += 1;
         } else {
-            assert!(verified, "{name}: a valid log did not verify");
+            assert!(verified, "{name}: a valid log did not verify: {why:?}");
             positive += 1;
         }
     }
