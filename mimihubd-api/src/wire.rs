@@ -15,6 +15,11 @@ pub enum EventKind {
     Message,
     /// A change to a consent record that concerns the user.
     Consent,
+    /// A kind this version of the lane does not know, from a newer hub. The rest of the event (user, room, bytes,
+    /// consent) reads as for any event, so a client keeps it and hands it on whole rather than dropping it or reading
+    /// it as another kind; one such event never fails the batch it comes in. A hub never writes one.
+    #[serde(other)]
+    Unrecognised,
 }
 
 /// A consent change: the directional record and its new state. `room` is the room of a room-scoped record. `state` is

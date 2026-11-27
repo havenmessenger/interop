@@ -4,7 +4,7 @@
 # Synchronous and runtime-free (no tokio, no HTTP stack): bring your own client and server.
 [package]
 name = "mimihubd-api"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 description = "The client lane of mimihubd, v1: its types, its request signatures, and the check of a pushed event batch"

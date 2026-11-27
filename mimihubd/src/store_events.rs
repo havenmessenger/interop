@@ -51,6 +51,7 @@ fn kind_str(kind: EventKind) -> &'static str {
         EventKind::Welcome => "welcome",
         EventKind::Message => "message",
         EventKind::Consent => "consent",
+        EventKind::Unrecognised => "unrecognised",
     }
 }
 
@@ -70,6 +71,8 @@ fn kind_cap(kind: EventKind) -> i64 {
         EventKind::Welcome => MAX_PENDING_WELCOMES,
         EventKind::Message => MAX_PENDING_MESSAGES,
         EventKind::Consent => MAX_PENDING_CONSENT,
+        // The hub writes only the kinds it knows; `append` refuses this one before any cap applies.
+        EventKind::Unrecognised => 0,
     }
 }
 
@@ -303,6 +306,11 @@ fn append_in(
             super::RECIPIENT_MAX_LEN
         ))
         .into());
+    }
+    if kind == EventKind::Unrecognised {
+        return Err(
+            QueueRefused("the hub writes no event of a kind it does not know".into()).into(),
+        );
     }
     let room = room.map(mimi_core::uri::canonical);
     let depth: i64 = tx.query_row(

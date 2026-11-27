@@ -234,3 +234,23 @@ fn the_cursor_survives_a_reopen() {
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// The hub writes only the kinds it knows: an `Unrecognised` event (a kind a newer hub's client reads) is refused, takes
+/// no `seq`, and leaves the stream as it was.
+#[test]
+fn the_hub_writes_no_unrecognised_event() {
+    let store = stream();
+    let refused = store.append_events(EventKind::Unrecognised, ALICE, None, &[b"x"], 1);
+    assert!(
+        refused.is_err_and(|e| e.to_string().contains("kind it does not know")),
+        "PLANT-EVENTKIND-HUB-REFUSES"
+    );
+    assert!(seqs(&store, 0).is_empty());
+    store
+        .append_events(EventKind::Message, ALICE, None, &[b"m"], 1)
+        .unwrap();
+    assert_eq!(
+        seqs(&store, 0),
+        vec![(1, EventKind::Message, ALICE.to_string())]
+    );
+}

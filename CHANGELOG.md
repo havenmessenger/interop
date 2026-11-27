@@ -6,6 +6,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- **Breaking for `mimihubd-api` (0.2.0):** `EventKind` gains `Unrecognised`, which an event of a kind this version does
+  not know reads as (`#[serde(other)]`), so one event of a newer hub's kind no longer fails the whole batch. A client
+  that matches `EventKind` exhaustively needs an arm for it, and should hand such an event on whole rather than drop it.
+  The hub never writes one: its event store refuses the kind.
 - Docs for the did_webvh credential: `docs/reasons.toml` has a row for each did_webvh refusal, quoting the draft's
   rule; README and ARCHITECTURE name the credential types the hub reads and where its rules are checked; DIV-24 says
   which answer a refusal is.
