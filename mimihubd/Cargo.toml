@@ -35,9 +35,8 @@ toml = "0.8"
 # (peer-trust allowlist) and the ring provider. axum-server's `tls-rustls` feature force-enables
 # aws-lc-rs, which needs cmake; `tls-rustls-no-provider` avoids that and the provider is supplied
 # via builder_with_provider instead.
-axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
-rustls-pemfile = "2"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }  # the TLS stream type the peer-identity acceptor names
 tower = "0.5"                                           # Layer, to attach the peer certificate to a connection
 # The outbound client (`outbound.rs`): an HTTP/1.1 client connection over our own TCP connect and TLS, so the address

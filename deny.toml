@@ -1,5 +1,6 @@
 # cargo-deny configuration: the advisory check for this lock. CI runs
-# `cargo deny --locked check -D unknown-advisory -D advisory-not-detected advisories`, so an ignore that no longer
+# `cargo deny --locked --workspace check -D unknown-advisory -D advisory-not-detected advisories` (every member's
+# graph, mimihubd's included), so an ignore that no longer
 # matches anything in the resolved graph, or names an advisory the database does not know, fails the job: an ignore
 # cannot outlive its reason unnoticed.
 #

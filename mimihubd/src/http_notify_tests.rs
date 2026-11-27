@@ -404,6 +404,7 @@ async fn over_a_real_connection_the_certificate_the_peer_presented_decides() {
     let tls = axum_server::tls_rustls::RustlsConfig::from_config(server_config);
     tokio::spawn(async move {
         let _ = axum_server::from_tcp_rustls(listener, tls)
+            .expect("the test listener")
             .map(PeerIdentityAcceptor::new)
             .serve(router.into_make_service())
             .await;

@@ -6,6 +6,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- CI: the advisory check (`cargo deny`) reads every workspace member's dependencies, mimihubd's and mimihubd-api's
+  included; it had read mimi-core's only. Two advisories it then found are fixed: tokio moves to 1.54.1
+  (RUSTSEC-2026-0386, `AsyncFd::new`), and rustls-pemfile, unmaintained (RUSTSEC-2025-0134), is no longer used:
+  axum-server moves to 0.8, which dropped it, and mimihubd reads its PEM files with rustls-pki-types.
 - `mimihubd`: a member's user is read from its credential in one module (`credential.rs`), by credential type. A Basic
   credential's identity is the user URI, as before; a credential of any other type names no user, where before its
   content was read as a URI whatever its type. A published KeyPackage with such a credential is answered 400

@@ -81,7 +81,9 @@ jobs:
       - name: cargo-deny advisories
         run: |
           cargo install cargo-deny --locked --version 0.20.2
-          cargo deny --locked check -D unknown-advisory -D advisory-not-detected advisories
+          # --workspace: the root manifest is a package as well as the workspace, and without it cargo-deny reads
+          # that package's graph only, not mimihubd's or mimihubd-api's.
+          cargo deny --locked --workspace check -D unknown-advisory -D advisory-not-detected advisories
           cargo deny --locked --manifest-path tools/vc-vectors-xcheck/Cargo.toml \
             check -D unknown-advisory -D advisory-not-detected advisories
       - name: ignore conditions

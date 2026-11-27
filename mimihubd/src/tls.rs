@@ -8,14 +8,14 @@ use std::sync::Arc;
 
 use crate::peer::PeerIdentityAcceptor;
 
+use rustls::pki_types::pem::PemObject as _;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig};
 
 /// Parse a PEM cert chain (one or more certificates).
 pub fn certs_from_pem(pem: &[u8]) -> anyhow::Result<Vec<CertificateDer<'static>>> {
-    let mut rd = std::io::BufReader::new(pem);
-    let certs = rustls_pemfile::certs(&mut rd).collect::<Result<Vec<_>, _>>()?;
+    let certs = CertificateDer::pem_slice_iter(pem).collect::<Result<Vec<_>, _>>()?;
     if certs.is_empty() {
         anyhow::bail!("no certificates found in PEM");
     }
@@ -40,9 +40,13 @@ pub fn certificate_fingerprints(pem: &[u8]) -> anyhow::Result<Vec<String>> {
 
 /// Parse a single PEM private key (PKCS#8 / PKCS#1 / SEC1).
 pub fn key_from_pem(pem: &[u8]) -> anyhow::Result<PrivateKeyDer<'static>> {
-    let mut rd = std::io::BufReader::new(pem);
-    rustls_pemfile::private_key(&mut rd)?
-        .ok_or_else(|| anyhow::anyhow!("no private key found in PEM"))
+    match PrivateKeyDer::from_pem_slice(pem) {
+        Ok(key) => Ok(key),
+        Err(rustls::pki_types::pem::Error::NoItemsFound) => {
+            anyhow::bail!("no private key found in PEM")
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Build the mTLS `ServerConfig`:
@@ -295,6 +299,8 @@ pub(crate) mod tests {
 
         // Bind a std listener to grab a free port, then hand it to axum-server.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        // tokio takes a std listener only in non-blocking mode.
+        listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port();
         let provider = Arc::new(Mutex::new(
             Provider::in_memory("havenmessenger.com").unwrap(),
@@ -306,6 +312,7 @@ pub(crate) mod tests {
         let tls = axum_server::tls_rustls::RustlsConfig::from_config(server_cfg);
         tokio::spawn(async move {
             let _ = axum_server::from_tcp_rustls(listener, tls)
+                .expect("the test listener")
                 .serve(router.into_make_service())
                 .await;
         });
