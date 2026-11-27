@@ -23,7 +23,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use mls_didwebvh::{CodePoints, DidWebvhCredential, VerifiedLog};
-use openmls::prelude::{Credential, CredentialType};
+use openmls::prelude::{Credential, CredentialType, ExternalSender};
 use sha2::{Digest, Sha256};
 
 /// The `did_webvh` credential type and record component this hub reads: the `mls-didwebvh` crate's defaults, the values
@@ -96,6 +96,21 @@ pub(crate) fn is_successor(old: (&Credential, &[u8]), new: (&Credential, &[u8]))
         }
         _ => false,
     }
+}
+
+/// Whether `credential` is of the `did_webvh` type this hub reads.
+pub(crate) fn is_did_webvh(credential: &Credential) -> bool {
+    kind(credential) == Some(Kind::DidWebvh)
+}
+
+/// The credential of an `external_senders` entry (RFC 9420 §12.1.8.1: `SignaturePublicKey signature_key; Credential
+/// credential;`), read from its encoding, since the MLS library does not expose it.
+pub(crate) fn external_sender_credential(sender: &ExternalSender) -> Option<Credential> {
+    use openmls::prelude::tls_codec::{Deserialize as _, Serialize as _, VLBytes};
+    let bytes = sender.tls_serialize_detached().ok()?;
+    let mut rest = bytes.as_slice();
+    VLBytes::tls_deserialize(&mut rest).ok()?;
+    Credential::tls_deserialize_exact(rest).ok()
 }
 
 /// A `did_webvh` credential's verified log, when its log verifies (§Log Verification) and authorizes `signature_key`

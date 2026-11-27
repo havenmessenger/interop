@@ -236,3 +236,215 @@ fn jcs(value: &Value) -> String {
         other => serde_json::to_string(other).unwrap(),
     }
 }
+
+/// The `app_components` component (mls-extensions §7.5, 0x0001): the components a group's members implement.
+pub(crate) const APP_COMPONENTS: u16 = 0x0001;
+
+/// An `app_components` value naming `ids`: `ComponentID component_ids<V>`.
+pub(crate) fn app_components(ids: &[u16]) -> Vec<u8> {
+    let mut out = vec![u8::try_from(ids.len() * 2).unwrap()];
+    for id in ids {
+        out.extend_from_slice(&id.to_be_bytes());
+    }
+    out
+}
+
+/// The record's component ID.
+pub(crate) fn heads() -> u16 {
+    DID_WEBVH.heads_component()
+}
+
+/// The head a member's did_webvh credential carries, as the record holds it.
+pub(crate) fn head_of(member: &crate::mls_fixtures::Member) -> mls_didwebvh::DidWebvhHead {
+    let log = crate::credential::verified_log(
+        &member.credential.credential,
+        member.credential.signature_key.as_slice(),
+    )
+    .expect("a did_webvh member whose log verifies");
+    mls_didwebvh::DidWebvhHead::from_log(&log)
+}
+
+/// A `did_webvh_heads` record holding `heads`.
+pub(crate) fn record(heads: impl IntoIterator<Item = mls_didwebvh::DidWebvhHead>) -> Vec<u8> {
+    let mut record = mls_didwebvh::DidWebvhHeads::new();
+    for head in heads {
+        record.insert(head);
+    }
+    record.encode().unwrap()
+}
+
+/// The `required_capabilities` a did_webvh room's GroupContext carries: the app data dictionary and AppDataUpdate, which
+/// openmls asks for before a GroupContextExtensions proposal may carry the dictionary.
+pub(crate) fn required() -> openmls::prelude::Extension {
+    use openmls::prelude::*;
+    Extension::RequiredCapabilities(RequiredCapabilitiesExtension::new(
+        &[ExtensionType::AppDataDictionary],
+        &[ProposalType::AppDataUpdate],
+        &[],
+    ))
+}
+
+/// A GroupContext dictionary holding `components`.
+pub(crate) fn dictionary(components: &[(u16, Vec<u8>)]) -> openmls::prelude::Extension {
+    use openmls::prelude::*;
+    let mut dictionary = AppDataDictionary::new();
+    for (id, value) in components {
+        let _ = dictionary.insert(*id, value.clone());
+    }
+    Extension::AppDataDictionary(AppDataDictionaryExtension::new(dictionary))
+}
+
+/// A group `creator` makes, whose GroupContext requires the app data dictionary, names the record in its
+/// `app_components` and records the creator's head.
+pub(crate) fn group(
+    creator: &crate::mls_fixtures::Member,
+    group_id: &[u8],
+) -> openmls::prelude::MlsGroup {
+    group_with(
+        creator,
+        group_id,
+        &[
+            (APP_COMPONENTS, app_components(&[heads()])),
+            (heads(), record([head_of(creator)])),
+        ],
+    )
+}
+
+/// A group `creator` makes, whose GroupContext requires the app data dictionary and holds `components`.
+pub(crate) fn group_with(
+    creator: &crate::mls_fixtures::Member,
+    group_id: &[u8],
+    components: &[(u16, Vec<u8>)],
+) -> openmls::prelude::MlsGroup {
+    use openmls::prelude::*;
+    let config = MlsGroupCreateConfig::builder()
+        .ciphersuite(crate::mls_fixtures::SUITE)
+        .wire_format_policy(PURE_PLAINTEXT_WIRE_FORMAT_POLICY)
+        .capabilities(creator.leaf_capabilities())
+        .with_group_context_extensions(
+            Extensions::from_vec(vec![required(), dictionary(components)]).unwrap(),
+        )
+        .build();
+    MlsGroup::new_with_group_id(
+        &creator.provider,
+        &creator.signer,
+        &config,
+        GroupId::from_slice(group_id),
+        creator.credential.clone(),
+    )
+    .unwrap()
+}
+
+/// `member` joins from `welcome` with the tree `tree` (serialized), as its own group.
+pub(crate) fn join(
+    member: &crate::mls_fixtures::Member,
+    welcome: openmls::prelude::Welcome,
+    tree: &[u8],
+) -> openmls::prelude::MlsGroup {
+    use openmls::prelude::tls_codec::Deserialize as _;
+    use openmls::prelude::*;
+    StagedWelcome::new_from_welcome(
+        &member.provider,
+        &MlsGroupJoinConfig::builder()
+            .wire_format_policy(PURE_PLAINTEXT_WIRE_FORMAT_POLICY)
+            .build(),
+        welcome,
+        Some(RatchetTreeIn::tls_deserialize_exact(tree).unwrap()),
+    )
+    .unwrap()
+    .into_group(&member.provider)
+    .unwrap()
+}
+
+/// What a fixture Commit carries.
+#[derive(Default)]
+pub(crate) struct Change<'a> {
+    pub(crate) adds: Vec<&'a crate::mls_fixtures::Member>,
+    pub(crate) removes: Vec<u32>,
+    /// An AppDataUpdate setting the record to this value.
+    pub(crate) record: Option<Vec<u8>>,
+    /// An AppDataUpdate removing the record.
+    pub(crate) remove_record: bool,
+    /// The committer's new leaf credential, in its update path.
+    pub(crate) credential: Option<Credential>,
+    /// A GroupContextExtensions proposal setting these.
+    pub(crate) extensions: Option<openmls::prelude::Extensions<openmls::prelude::GroupContext>>,
+}
+
+/// A Commit `by` makes in `group` carrying `change`, merged on its side: the Commit as MLSMessage bytes, and the
+/// group's GroupInfo and tree after it, as a Commit bundle carries them.
+pub(crate) fn commit(
+    group: &mut openmls::prelude::MlsGroup,
+    by: &crate::mls_fixtures::Member,
+    change: Change<'_>,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let (commit, group_info, tree, _welcome) = commit_welcoming(group, by, change);
+    (commit, group_info, tree)
+}
+
+/// [`commit`], and the Welcome the Commit makes for the members it adds.
+pub(crate) fn commit_welcoming(
+    group: &mut openmls::prelude::MlsGroup,
+    by: &crate::mls_fixtures::Member,
+    change: Change<'_>,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>, Option<openmls::prelude::Welcome>) {
+    use openmls::component::ComponentData;
+    use openmls::prelude::tls_codec::Serialize as _;
+    use openmls::prelude::*;
+    let mut builder = group
+        .commit_builder()
+        .propose_adds(change.adds.iter().map(|member| member.key_package()))
+        .propose_removals(change.removes.iter().copied().map(LeafNodeIndex::new));
+    if let Some(record) = &change.record {
+        builder = builder.add_proposals([Proposal::AppDataUpdate(Box::new(
+            AppDataUpdateProposal::update(heads(), record.clone()),
+        ))]);
+    }
+    if change.remove_record {
+        builder = builder.add_proposals([Proposal::AppDataUpdate(Box::new(
+            AppDataUpdateProposal::remove(heads()),
+        ))]);
+    }
+    if let Some(extensions) = change.extensions {
+        builder = builder
+            .propose_group_context_extensions(extensions)
+            .unwrap();
+    }
+    if let Some(credential) = change.credential {
+        builder = builder.leaf_node_parameters(
+            LeafNodeParameters::builder()
+                .with_credential_with_key(CredentialWithKey {
+                    credential,
+                    signature_key: by.credential.signature_key.clone(),
+                })
+                .build(),
+        );
+    }
+    let mut stage = builder.load_psks(by.provider.storage()).unwrap();
+    if change.record.is_some() || change.remove_record {
+        let mut updater = stage.app_data_dictionary_updater();
+        match &change.record {
+            Some(record) => updater.set(ComponentData::from_parts(heads(), record.clone().into())),
+            None => updater.remove(&heads()),
+        }
+        stage.with_app_data_dictionary_updates(updater.changes());
+    }
+    let bundle = stage
+        .build(by.provider.rand(), by.provider.crypto(), &by.signer, |_| {
+            true
+        })
+        .unwrap()
+        .stage_commit(&by.provider)
+        .unwrap();
+    let (commit, welcome, _) = bundle.into_contents();
+    group.merge_pending_commit(&by.provider).unwrap();
+    (
+        commit.tls_serialize_detached().unwrap(),
+        crate::mls_fixtures::group_info_after(group, by),
+        group
+            .export_ratchet_tree()
+            .tls_serialize_detached()
+            .unwrap(),
+        welcome,
+    )
+}

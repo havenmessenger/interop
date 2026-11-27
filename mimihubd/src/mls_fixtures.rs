@@ -28,6 +28,8 @@ pub(crate) struct Member {
     pub(crate) provider: OpenMlsRustCrypto,
     pub(crate) signer: MemorySigner,
     pub(crate) credential: CredentialWithKey,
+    /// Whether its leaves list the did_webvh credential type although its credential is Basic.
+    pub(crate) lists_did_webvh: bool,
 }
 
 impl Member {
@@ -44,6 +46,7 @@ impl Member {
                 credential: BasicCredential::new(uri.as_bytes().to_vec()).into(),
                 signature_key: SignaturePublicKey::from(public),
             },
+            lists_did_webvh: false,
         }
     }
 
@@ -69,16 +72,25 @@ impl Member {
     /// The capabilities this client's leaves advertise: [`capabilities`], with the `did_webvh` credential type too when
     /// its credential is one.
     pub(crate) fn leaf_capabilities(&self) -> Capabilities {
+        let did_webvh = CredentialType::Other(crate::credential::DID_WEBVH.credential_type());
         match self.credential.credential.credential_type() {
-            CredentialType::Basic => capabilities(),
-            other => Capabilities::new(
+            CredentialType::Basic if !self.lists_did_webvh => capabilities(),
+            _ => Capabilities::new(
                 None,
                 Some(&[SUITE]),
                 Some(&[ExtensionType::AppDataDictionary]),
                 Some(&[ProposalType::AppDataUpdate]),
-                Some(&[CredentialType::Basic, other]),
+                Some(&[CredentialType::Basic, did_webvh]),
             ),
         }
+    }
+
+    /// A client with a Basic credential whose leaves list the did_webvh credential type as well, so it can be a member
+    /// of a group with did_webvh members (RFC 9420 §7.2: every member supports every credential type in use).
+    pub(crate) fn basic_listing_did_webvh(uri: &str) -> Self {
+        let mut member = Self::new(uri);
+        member.lists_did_webvh = true;
+        member
     }
 
     /// The same client on a fresh store: its signing key and credential with a new provider, as a client that lost its
@@ -88,6 +100,7 @@ impl Member {
             provider: OpenMlsRustCrypto::default(),
             signer: MemorySigner(self.signer.0.clone()),
             credential: self.credential.clone(),
+            lists_did_webvh: self.lists_did_webvh,
         }
     }
 

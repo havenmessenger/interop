@@ -834,9 +834,19 @@ the user it is published for, and to know which provider a client belongs to. It
   credential type 0x0008 and the component 0xF013, the `mls-didwebvh` crate's defaults and the values the reference
   implementation uses, so that the implementations that run agree.
 
-  Not built yet: the draft's Group Consistency Rules (the `did_webvh_heads` record, Expected Heads, Authorization).
-  Until they are, the hub orders a room of `did_webvh` members by its participant list alone, as it does for Basic
-  ones; the members' own clients check the rules.
+  A tracked room is held to the draft's group rules (`mimihubd/src/didwebvh_rules.rs`). The record is the
+  `did_webvh_heads` component of the GroupContext's `app_data_dictionary`, and a Commit's AppDataUpdates to it are
+  resolved as the draft says ("each entry replaces the entry with the same `scid`, or is inserted at its place in the
+  sort order"; a `remove` is invalid). Every tracked Commit where the record exists or the tree after it holds a
+  `did_webvh` leaf is checked on the tree openmls gives after it: Expected Heads, Record matches, Consistency with the
+  reference entry, Authorization, with the `mls-didwebvh` crate's implementation of them. A seed is checked as a joiner
+  checks its Welcome. A group with `did_webvh` members must name the record in its GroupContext `app_components`, and
+  no `did_webvh` credential may be an external sender. A refusal is `invalidProposal`, naming the rule.
+
+  Not built yet: the Commit decoder every `update` passes through first (`mimi_core::commit_wire`) reads an Add only
+  when its KeyPackage carries a Basic credential, and reads an AppDataUpdate only for the components it knows, so an
+  `update` that adds a `did_webvh` member or changes the record is refused there, before the room's tree is consulted.
+  The rules above are reached by a seed and by Commits that carry neither.
 
 A credential of any other type names no user, whatever its content: it is never read as if it were one of these. Where the hub must know the user (a published KeyPackage, a client a
 Commit adds, an external Commit's joiner, a renewed leaf), it is refused; a published KeyPackage is answered

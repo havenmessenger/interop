@@ -322,6 +322,8 @@ enum StageError {
     AppDataDoesNotApply(Sender),
     /// It is not a Commit.
     NotACommit(Sender),
+    /// Its AppDataUpdates to the did_webvh_heads record do not apply (`crate::didwebvh_rules::resolve_heads`).
+    Heads(&'static str),
 }
 
 /// Verify `message` against `group` and stage it, without changing the group: its sender and the staged Commit. Each
@@ -356,8 +358,14 @@ fn stage_commit(
             let mut updater = group.app_data_dictionary_updater();
             for (component, changes) in &by_component {
                 let before = updater.old_value(*component);
-                let value =
-                    resolve_component(*component, before, changes).map_err(StageError::AppData)?;
+                let value = if *component == crate::didwebvh_rules::heads_component() {
+                    Some(
+                        crate::didwebvh_rules::resolve_heads(before, changes)
+                            .map_err(StageError::Heads)?,
+                    )
+                } else {
+                    resolve_component(*component, before, changes).map_err(StageError::AppData)?
+                };
                 match value {
                     Some(value) => updater.set(openmls::component::ComponentData::from_parts(
                         *component,
@@ -623,6 +631,7 @@ impl Provider {
                     UpdateRefusal::NotAllowed,
                 ),
                 StageError::AppData(error) => app_data_refusal(error),
+                StageError::Heads(why) => refused(why, None, UpdateRefusal::Invalid(why)),
                 StageError::AppDataDoesNotApply(sender) => refused(
                     "its AppDataUpdates do not apply",
                     sender_uri(&group, &sender).as_deref().and_then(provider_of),
@@ -742,6 +751,25 @@ impl Provider {
                 UpdateRefusal::NotAllowed,
             ));
         }
+        crate::didwebvh_rules::check_external_senders(staged.group_context())
+            .map_err(|why| refused(why, sender_provider.clone(), UpdateRefusal::Invalid(why)))?;
+        if crate::didwebvh_rules::may_apply(&group, &staged) {
+            let after = self.group_after(tracking, commit).ok_or_else(|| {
+                refused(
+                    "the hub could not build the room's tree after it to check its did_webvh rules",
+                    sender_provider.clone(),
+                    UpdateRefusal::Store,
+                )
+            })?;
+            crate::didwebvh_rules::check_commit(
+                group.group_context(),
+                staged.group_context(),
+                after
+                    .members()
+                    .map(|member| (member.credential, member.signature_key)),
+            )
+            .map_err(|why| refused(why, sender_provider.clone(), UpdateRefusal::Invalid(why)))?;
+        }
         let had_roles_list = app_data(group.group_context(), ROLES_LIST_COMPONENT).is_some();
         Ok(StagedRoomCommit {
             group,
@@ -800,6 +828,15 @@ impl Provider {
     /// The room's ratchet tree after `commit`, encoded. A PublicGroup's staged Commit exports no tree, so the Commit is
     /// staged again on a second copy of the group, which is merged in memory; the room's stored group is not touched.
     fn tree_after(&self, tracking: &RoomTracking, commit: &[u8]) -> Option<Vec<u8>> {
+        self.group_after(tracking, commit)?
+            .export_ratchet_tree()
+            .tls_serialize_detached()
+            .ok()
+    }
+
+    /// The room's group after `commit`, in memory: the Commit staged again on a second copy of the group and merged
+    /// there, so the room's stored group is not touched.
+    fn group_after(&self, tracking: &RoomTracking, commit: &[u8]) -> Option<PublicGroup> {
         let scratch = OpenMlsRustCrypto::default();
         let groups = self.store.groups();
         let mut group =
@@ -810,7 +847,7 @@ impl Provider {
             .ok()?;
         let (_, staged) = stage_commit(&group, scratch.crypto(), message).ok()?;
         group.merge_commit(scratch.storage(), staged).ok()?;
-        group.export_ratchet_tree().tls_serialize_detached().ok()
+        Some(group)
     }
 
     /// Verify a tracked room's proposals against its tree and queue them in its group for the Commit that will name them.
@@ -989,6 +1026,13 @@ impl Provider {
         {
             return Err(Some("a participant the hub lists is not in its tree"));
         }
+        crate::didwebvh_rules::check_join(
+            candidate.group_context(),
+            candidate
+                .members()
+                .map(|member| (member.credential, member.signature_key)),
+        )
+        .map_err(Some)?;
         // The room's policy and list are its GroupContext's from here (room-policy PR #52: a roles_list is set when the
         // group is created). Read and checked before anything is written.
         let context = candidate.group_context();

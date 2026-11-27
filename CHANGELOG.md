@@ -11,7 +11,14 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   head DID document's `alsoKnownAs`, as the reference implementation reads it. A portable DID that has moved names the
   same user. A renewed `did_webvh` leaf must carry the same log extended, naming the same URI. The credential type is
   0x0008 and the record component 0xF013, the crate's defaults (the draft's own text gives two values; DIV-24). A
-  verified log is remembered by its bytes (64 MiB, 4096 logs at most). The draft's group rules are not checked yet.
+  verified log is remembered by its bytes (64 MiB, 4096 logs at most).
+- `mimihubd` holds a tracked room to the `did_webvh` credential's group rules (draft-atwood-mls-didwebvh-credential
+  §Group Consistency Rules): the `did_webvh_heads` record (component 0xF013) is resolved by the draft's update rule, a
+  removal refused; every Commit where the record exists or a `did_webvh` leaf is in the tree after it is checked on that
+  tree (Expected Heads, Record matches, Consistency, Authorization), a seed as a joiner checks its Welcome; a group with
+  `did_webvh` members names the record in `app_components`, and no `did_webvh` credential is an external sender. A
+  refusal is `invalidProposal`. Rooms with no record and no `did_webvh` leaf are not affected. The Commit decoder in
+  front of every `update` still refuses an Add of a `did_webvh` member and an AppDataUpdate of the record (DIV-24).
 - `mimihubd` links `mls-didwebvh`, the did_webvh credential's log verification and group rules from its reference
   implementation (draft-atwood-mls-didwebvh-credential), at one revision of its repository until it is on crates.io;
   its did:webvh verifier, jmap-did-types, comes from crates.io. Nothing reads it yet. The manifest-purity check allows

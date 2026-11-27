@@ -34,6 +34,7 @@ pub mod client_lane_rooms;
 mod credential;
 #[cfg(test)]
 mod didwebvh_fixtures;
+mod didwebvh_rules;
 pub mod enroll;
 pub mod event_push;
 pub mod external_join;
