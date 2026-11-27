@@ -16,6 +16,13 @@ paths = [
     # for the example domain `a.example` were generated for these vectors only, and the file says so ("Test keys
     # only"). tests/joint_ietf127_vectors_replay.rs replays them; no running hub uses them.
     '''tests/vectors/joint-ietf127-mls-vectors\.json$''',
+    # The did_webvh credential's interop vectors and the DIF did:webvh test suite's logs (tests/vectors/didwebvh/, see its
+    # PROVENANCE). A did:webvh log is public by design: update keys, publicKeyMultibase values, pre-rotation key hashes
+    # and proof signatures. The interop vectors also carry their generator's device seeds, derived from fixed names
+    # ("keys from fixed names", vectors.PROVENANCE) for these vectors only. Copied byte for byte from their sources, as
+    # their SHA-256 records show; no running hub or client uses any of them.
+    '''tests/vectors/didwebvh/vectors\.json$''',
+    '''tests/vectors/didwebvh/dif/[a-z0-9-]+/did\.jsonl$''',
     # check_tell_scan.py's own self-test fixture: a deliberately-shaped fake AWS access key ID
     # that proves this repo's own secrets scanner catches that shape. Not a real credential;
     # removing it would silently disable the self-test's positive-detection proof for the
