@@ -192,6 +192,8 @@ async fn main() -> anyhow::Result<()> {
         Some(path) => HubPolicy::load(std::path::Path::new(path))?,
         None => HubPolicy::default(),
     };
+    // The did_webvh credential's code points, read by every credential check from here on.
+    mimihubd::configure_did_webvh(policy.did_webvh.code_points()?)?;
     eprintln!(
         "[mimihubd] policy ({}): {}",
         resolved["MIMI_POLICY"]

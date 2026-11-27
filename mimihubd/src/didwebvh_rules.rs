@@ -23,9 +23,10 @@ use crate::credential;
 /// implement.
 const APP_COMPONENTS: u16 = 0x0001;
 
-/// The record's component ID.
-pub(crate) fn heads_component() -> u16 {
-    credential::DID_WEBVH.heads_component()
+/// The record's component ID, `None` when the hub reads no `did_webvh` credential (then the record is a component it has
+/// no rule for).
+pub(crate) fn heads_component() -> Option<u16> {
+    credential::did_webvh().map(|points| points.heads_component())
 }
 
 /// The record's value after a Commit's AppDataUpdates to it, in the Commit's order, given its value before: "each entry
@@ -83,7 +84,7 @@ pub(crate) fn may_apply(
 }
 
 fn record_present(context: &GroupContext) -> bool {
-    crate::room_tree::app_data(context, heads_component()).is_some()
+    heads_component().is_some_and(|heads| crate::room_tree::app_data(context, heads).is_some())
 }
 
 /// A Commit's checks, given the GroupContext before it and after it and the members of the tree after it (each leaf's
@@ -156,7 +157,8 @@ fn did_webvh_leaves(
 
 /// The record in `context`, if it carries one.
 fn record(context: &GroupContext) -> Result<Option<DidWebvhHeads>, &'static str> {
-    crate::room_tree::app_data(context, heads_component())
+    heads_component()
+        .and_then(|heads| crate::room_tree::app_data(context, heads))
         .map(DidWebvhHeads::decode)
         .transpose()
         .map_err(|_| "the did_webvh_heads record does not decode")
@@ -168,7 +170,7 @@ fn check_context(context: &GroupContext, has_did_webvh_leaf: bool) -> Result<(),
     if has_did_webvh_leaf
         && !crate::room_tree::app_data(context, APP_COMPONENTS)
             .and_then(component_ids)
-            .is_some_and(|ids| ids.contains(&heads_component()))
+            .is_some_and(|ids| heads_component().is_some_and(|heads| ids.contains(&heads)))
     {
         return Err(
             "a group with did_webvh members does not name did_webvh_heads in its app_components",
@@ -188,6 +190,44 @@ pub(crate) fn check_external_senders(context: &GroupContext) -> Result<(), &'sta
         return Err("a did_webvh credential is an external sender");
     }
     Ok(())
+}
+
+/// Whether a KeyPackage meets a keyMaterial request's `required` capabilities as the draft reads them for `did_webvh`
+/// ("a provider answering a request that requires the `did_webvh` credential type MAY treat it as also requiring the
+/// component, and SHOULD return only KeyPackages whose LeafNode lists both"): when `required` names the `did_webvh`
+/// credential type, the leaf's `app_components` names `did_webvh_heads`. Any other request is not narrowed. The rest of
+/// what a request requires is `mimi_core::gate::keypackage_meets`'s.
+pub(crate) fn key_package_meets(
+    key_package: &[u8],
+    required: &openmls::prelude::RequiredCapabilitiesExtension,
+) -> bool {
+    use openmls::prelude::tls_codec::Deserialize as _;
+    let Some(points) = credential::did_webvh() else {
+        return true;
+    };
+    let did_webvh = openmls::prelude::CredentialType::Other(points.credential_type());
+    if !required.credential_types().contains(&did_webvh) {
+        return true;
+    }
+    let Ok(Ok(key_package)) = std::panic::catch_unwind(|| {
+        openmls::prelude::KeyPackageIn::tls_deserialize_exact(key_package)
+    }) else {
+        return false;
+    };
+    let provider = openmls_rust_crypto::OpenMlsRustCrypto::default();
+    let Ok(key_package) = key_package.validate(
+        openmls_traits::OpenMlsProvider::crypto(&provider),
+        openmls::prelude::ProtocolVersion::Mls10,
+    ) else {
+        return false;
+    };
+    key_package
+        .leaf_node()
+        .extensions()
+        .app_data_dictionary()
+        .and_then(|dictionary| dictionary.dictionary().get(&APP_COMPONENTS))
+        .and_then(component_ids)
+        .is_some_and(|ids| ids.contains(&points.heads_component()))
 }
 
 /// The component IDs of an `app_components` value: `ComponentID component_ids<V>` (mls-extensions §5), a vector of

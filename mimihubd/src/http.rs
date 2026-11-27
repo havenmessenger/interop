@@ -351,7 +351,7 @@ pub(crate) async fn key_material_answer(
                 bytes,
                 &req.acceptable_ciphersuites,
                 &req.required_capabilities,
-            )
+            ) && crate::didwebvh_rules::key_package_meets(bytes, &req.required_capabilities)
         },
     );
     let outcome = match gated {

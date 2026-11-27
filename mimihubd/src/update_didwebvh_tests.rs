@@ -378,3 +378,59 @@ fn a_did_webvh_seed_is_verified_even_where_untracked_rooms_are_accepted() {
         "Bob is not listed"
     );
 }
+
+/// A room whose `required_capabilities` lists the did_webvh credential type requires every member to support it, not to
+/// use it (draft §Negotiation: a room "can require this credential type for every member by listing it in the
+/// `required_capabilities` GroupContext extension and rejecting other credential types"; RFC 9420 §7.2). The hub adds
+/// no rule of its own: a Basic member whose leaf lists did_webvh is taken through `update`, and openmls refuses to make
+/// the Commit that adds one whose leaf does not.
+#[test]
+fn a_room_listing_did_webvh_takes_a_basic_member_that_supports_it() {
+    use openmls::prelude::CredentialType;
+    let p = Provider::in_memory(DOMAIN).unwrap();
+    let alice = Member::did_webvh(ALICE, "alice");
+    let did_webvh = CredentialType::Other(crate::credential::DID_WEBVH.credential_type());
+    let mut group = crate::didwebvh_fixtures::group_requiring(
+        &alice,
+        ROOM.as_bytes(),
+        &[
+            (APP_COMPONENTS, app_components(&[heads()])),
+            (heads(), record([head_of(&alice)])),
+            (PARTICIPANT_LIST_COMPONENT, list(&[(ALICE, 1)])),
+        ],
+        &[did_webvh],
+    );
+    let dave = Member::basic_listing_did_webvh(BOB);
+    let (commit, group_info, tree) = commit(
+        &mut group,
+        &alice,
+        Change {
+            adds: vec![&dave],
+            updates: vec![listing(BOB, 1, &[(ALICE, 1), (BOB, 1)])],
+            ..Change::default()
+        },
+    );
+    let answer =
+        p.apply_update_request(ROOM, &request(commit, group_info, tree), Some(&peer()), NOW);
+    assert_eq!(
+        answer,
+        Ok(()),
+        "a Basic member that supports did_webvh is taken: {answer:?}"
+    );
+    let erin = Member::new(CAROL);
+    let refused = group
+        .commit_builder()
+        .propose_adds([erin.key_package()])
+        .load_psks(openmls_traits::OpenMlsProvider::storage(&alice.provider))
+        .unwrap()
+        .build(
+            openmls_traits::OpenMlsProvider::rand(&alice.provider),
+            openmls_traits::OpenMlsProvider::crypto(&alice.provider),
+            &alice.signer,
+            |_| true,
+        );
+    assert!(
+        refused.is_err(),
+        "openmls made a Commit adding a member that does not support a required credential type"
+    );
+}

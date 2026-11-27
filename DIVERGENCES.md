@@ -832,7 +832,14 @@ the user it is published for, and to know which provider a client belongs to. It
   0x0008)" for the credential type, and the next paragraph says "Until IANA assigns a value, implementations use the
   suggested value 0xF013"; 0xF013 is also the suggested value of the `did_webvh_heads` component. The hub reads the
   credential type 0x0008 and the component 0xF013, the `mls-didwebvh` crate's defaults and the values the reference
-  implementation uses, so that the implementations that run agree.
+  implementation uses, so that the implementations that run agree. A deployment sets other values, or turns the
+  credential off, in its policy's `[did_webvh]` table.
+
+  A keyMaterial request that requires the `did_webvh` credential type is answered only with a KeyPackage whose leaf
+  names the record in its `app_components`, as the draft says a provider "SHOULD return only KeyPackages whose LeafNode
+  lists both". A room that lists the type in its `required_capabilities` requires every member to support it, as RFC
+  9420 §7.2 has it; the draft's "rejecting other credential types" is the room's policy, which no room policy component
+  expresses yet, so the hub takes a member of any credential type it reads in such a room.
 
   A tracked room is held to the draft's group rules (`mimihubd/src/didwebvh_rules.rs`). The record is the
   `did_webvh_heads` component of the GroupContext's `app_data_dictionary`, and a Commit's AppDataUpdates to it are
@@ -847,7 +854,9 @@ the user it is published for, and to know which provider a client belongs to. It
   any credential type, and hands back the AppDataUpdates it does not read. The hub takes the record's, and refuses
   any other component it has no rule for. A room whose tree the hub does not keep takes a `did_webvh` client or the
   record only in the Commit that seeds it, with the seed verified first, whatever the deployment's policy for
-  untracked rooms; without the tree to seed from, it is refused.
+  untracked rooms; without the tree to seed from, it is refused. Under the default policy (`untracked_rooms = "refuse"`) a
+  room's first Commit already had to seed with its seed verified; the rule matters to a deployment that accepts
+  untracked rooms, where a Commit is otherwise applied first and its seed tried after.
 
 A credential of any other type names no user, whatever its content: it is never read as if it were one of these. Where the hub must know the user (a published KeyPackage, a client a
 Commit adds, an external Commit's joiner, a renewed leaf), it is refused; a published KeyPackage is answered

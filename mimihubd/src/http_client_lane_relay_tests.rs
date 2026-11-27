@@ -125,3 +125,85 @@ async fn a_room_on_another_hub_without_an_outbound_client_is_502() {
     .await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
 }
+
+/// A keyMaterial request that requires the did_webvh credential type is answered only with a KeyPackage whose leaf names
+/// the did_webvh_heads record in its `app_components` (draft-atwood-mls-didwebvh-credential: a provider "SHOULD return
+/// only KeyPackages whose LeafNode lists both"): Bob's KeyPackage that lists the credential alone meets nothing, and
+/// the one naming the record too is served. Revert check: skip the record test, and the first is served.
+#[tokio::test]
+async fn key_material_requiring_did_webvh_is_answered_with_a_key_package_naming_the_record() {
+    use openmls::prelude::tls_codec::Serialize as _;
+    use openmls::prelude::{CredentialType, RequiredCapabilitiesExtension};
+    let l = lane("relay-km-did-webvh");
+    let (status, body) = call(&l.router, signed(&l.key, "createRoom", ALICE, "{}")).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let room = body["room"].as_str().unwrap().to_string();
+    l.provider
+        .lock()
+        .unwrap()
+        .record_consent_decision(
+            &ConsentEntry {
+                operation: ConsentOperation::Grant,
+                requester_uri: ALICE.into(),
+                target_uri: BOB.into(),
+                room_uri: None,
+                client_key_packages: Vec::new(),
+                consent_extensions: Vec::new(),
+            },
+            super::now_unix(),
+        )
+        .unwrap();
+    let bob = Member::did_webvh(BOB, "bob");
+    let heads = crate::didwebvh_fixtures::heads();
+    let lists_credential_only = bob.key_package().tls_serialize_detached().unwrap();
+    let names_the_record = bob
+        .key_package_naming_components(&[heads])
+        .tls_serialize_detached()
+        .unwrap();
+    let alice = Member::new(ALICE);
+    let request = || {
+        let mut request = KeyMaterialRequest::minimal(ALICE, BOB).unwrap();
+        request.room_id = IdentifierUri(room.clone());
+        request.required_capabilities = RequiredCapabilitiesExtension::new(
+            &[],
+            &[],
+            &[CredentialType::Other(
+                crate::credential::DID_WEBVH.credential_type(),
+            )],
+        );
+        request.requester_signature_key = alice.credential.signature_key.clone();
+        request.requester_credential = alice.credential.credential.clone();
+        request.sign(&alice.signer).unwrap();
+        serde_json::json!({ "request": STANDARD.encode(request.encode().unwrap()) }).to_string()
+    };
+    let accepted = l.provider.lock().unwrap().accepted_suites().to_vec();
+    let answer = |body: serde_json::Value| {
+        let bytes = STANDARD.decode(body["response"].as_str().unwrap()).unwrap();
+        KeyMaterialResponse::decode(&bytes, &accepted).unwrap()
+    };
+    l.provider
+        .lock()
+        .unwrap()
+        .publish_key_package("bob", &lists_credential_only, super::now_unix())
+        .unwrap();
+    let (status, body) = call(&l.router, signed(&l.key, "keyMaterial", ALICE, &request())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        !matches!(answer(body.clone()), KeyMaterialResponse::Success { .. }),
+        "PLANT-KM-DIDWEBVH-COMPONENT: a KeyPackage not naming the record was served: {body}"
+    );
+    l.provider
+        .lock()
+        .unwrap()
+        .publish_key_package("bob", &names_the_record, super::now_unix())
+        .unwrap();
+    let (status, body) = call(&l.router, signed(&l.key, "keyMaterial", ALICE, &request())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        matches!(
+            answer(body.clone()),
+            KeyMaterialResponse::Success { ref key_package, .. } if *key_package == names_the_record
+        ),
+        "the KeyPackage naming the record is served: {body}"
+    );
+}

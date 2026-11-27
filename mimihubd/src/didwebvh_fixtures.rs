@@ -316,13 +316,29 @@ pub(crate) fn group_with(
     group_id: &[u8],
     components: &[(u16, Vec<u8>)],
 ) -> openmls::prelude::MlsGroup {
+    group_requiring(creator, group_id, components, &[])
+}
+
+/// [`group_with`], its `required_capabilities` also naming `credential_types`, which every member must then support
+/// (RFC 9420 §7.2).
+pub(crate) fn group_requiring(
+    creator: &crate::mls_fixtures::Member,
+    group_id: &[u8],
+    components: &[(u16, Vec<u8>)],
+    credential_types: &[openmls::prelude::CredentialType],
+) -> openmls::prelude::MlsGroup {
     use openmls::prelude::*;
+    let required = Extension::RequiredCapabilities(RequiredCapabilitiesExtension::new(
+        &[ExtensionType::AppDataDictionary],
+        &[ProposalType::AppDataUpdate],
+        credential_types,
+    ));
     let config = MlsGroupCreateConfig::builder()
         .ciphersuite(crate::mls_fixtures::SUITE)
         .wire_format_policy(PURE_PLAINTEXT_WIRE_FORMAT_POLICY)
         .capabilities(creator.leaf_capabilities())
         .with_group_context_extensions(
-            Extensions::from_vec(vec![required(), dictionary(components)]).unwrap(),
+            Extensions::from_vec(vec![required, dictionary(components)]).unwrap(),
         )
         .build();
     MlsGroup::new_with_group_id(

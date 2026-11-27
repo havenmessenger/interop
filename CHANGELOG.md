@@ -6,6 +6,10 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
 
 ## Unreleased
 
+- `mimihubd`'s policy file gains a `[did_webvh]` table: `enabled` (default true), `credential_type` (default 0x0008)
+  and `heads_component` (default 0xF013), checked against the values the credential may not take; the startup log
+  shows them. A keyMaterial request that requires the `did_webvh` credential type is answered only with a KeyPackage
+  whose leaf names `did_webvh_heads` in its `app_components` (draft-atwood-mls-didwebvh-credential).
 - **Breaking, `mimi-core`:** `commit_wire::AddedClient::identity` is now `Option<Vec<u8>>`, the identity of a Basic
   credential and `None` for any other type, and `decode_commit_proposals` decodes an Add of any credential type
   instead of refusing it. `DecodedCommit` gains `unread_app_data`, the AppDataUpdates for components this crate does

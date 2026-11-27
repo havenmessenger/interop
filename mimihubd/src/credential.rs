@@ -26,9 +26,26 @@ use mls_didwebvh::{CodePoints, DidWebvhCredential, VerifiedLog};
 use openmls::prelude::{Credential, CredentialType, ExternalSender};
 use sha2::{Digest, Sha256};
 
-/// The `did_webvh` credential type and record component this hub reads: the `mls-didwebvh` crate's defaults, the values
-/// the reference implementation uses (DIV-24).
+/// The `did_webvh` code points the hub reads unless the deployment's policy says otherwise: the `mls-didwebvh` crate's
+/// defaults, the values the reference implementation uses (DIV-24).
 pub(crate) const DID_WEBVH: CodePoints = CodePoints::DEFAULT;
+
+/// The `did_webvh` code points this process reads, as the deployment's policy set them (`[did_webvh]`), or `None` when
+/// it does not read the credential at all. Set once, at startup, before any credential is read.
+static CONFIGURED: OnceLock<Option<CodePoints>> = OnceLock::new();
+
+/// Set the `did_webvh` code points this process reads (`None`: it reads no `did_webvh` credential). Called once at
+/// startup from the policy; a second call is refused, so the reading never changes while the hub runs.
+pub fn configure_did_webvh(points: Option<CodePoints>) -> anyhow::Result<()> {
+    CONFIGURED
+        .set(points)
+        .map_err(|_| anyhow::anyhow!("the did_webvh code points are set once, at startup"))
+}
+
+/// The `did_webvh` code points this process reads: as configured, else [`DID_WEBVH`].
+pub(crate) fn did_webvh() -> Option<CodePoints> {
+    *CONFIGURED.get().unwrap_or(&Some(DID_WEBVH))
+}
 
 /// Whether this hub reads credentials of `credential`'s type at all: one it does not read names no user, whatever it
 /// carries.
@@ -44,9 +61,18 @@ enum Kind {
 }
 
 fn kind(credential: &Credential) -> Option<Kind> {
+    kind_under(credential, did_webvh())
+}
+
+/// [`kind`] under `points`, the `did_webvh` code points read (`None`: none).
+fn kind_under(credential: &Credential, points: Option<CodePoints>) -> Option<Kind> {
     match credential.credential_type() {
         CredentialType::Basic => Some(Kind::Basic),
-        CredentialType::Other(code) if code == DID_WEBVH.credential_type() => Some(Kind::DidWebvh),
+        CredentialType::Other(code)
+            if points.is_some_and(|points| code == points.credential_type()) =>
+        {
+            Some(Kind::DidWebvh)
+        }
         _ => None,
     }
 }

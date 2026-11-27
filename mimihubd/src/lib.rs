@@ -32,6 +32,7 @@ pub mod client_lane_ops;
 pub mod client_lane_relay;
 pub mod client_lane_rooms;
 mod credential;
+pub use credential::configure_did_webvh;
 #[cfg(test)]
 mod didwebvh_fixtures;
 mod didwebvh_rules;
@@ -1247,7 +1248,7 @@ impl Provider {
         if commit
             .unread_app_data
             .iter()
-            .any(|unread| unread.component != crate::didwebvh_rules::heads_component())
+            .any(|unread| Some(unread.component) != crate::didwebvh_rules::heads_component())
         {
             return Err(UpdateRefusal::Invalid(
                 "the commit is not one this hub can read",

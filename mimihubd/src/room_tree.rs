@@ -358,7 +358,7 @@ fn stage_commit(
             let mut updater = group.app_data_dictionary_updater();
             for (component, changes) in &by_component {
                 let before = updater.old_value(*component);
-                let value = if *component == crate::didwebvh_rules::heads_component() {
+                let value = if Some(*component) == crate::didwebvh_rules::heads_component() {
                     Some(
                         crate::didwebvh_rules::resolve_heads(before, changes)
                             .map_err(StageError::Heads)?,

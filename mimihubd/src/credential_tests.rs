@@ -356,3 +356,34 @@ fn the_did_webvh_crate_gives_its_code_points() {
     );
     assert_eq!(DID_WEBVH, points, "the hub reads the crate's code points");
 }
+
+/// The code points a did_webvh credential is read under are the configured ones: a credential under another type is
+/// read when that type is configured and not under the default, and none is read when did_webvh is off. Revert check:
+/// read under the default whatever is configured, and the credential under 0xF0AA is not read.
+#[test]
+fn a_did_webvh_credential_is_read_under_the_configured_code_points() {
+    let content = log("alice", 1, &[DEVICE], &[ALICE])
+        .credential()
+        .unwrap()
+        .encode()
+        .unwrap();
+    let under_f0aa = Credential::new(CredentialType::Other(0xF0AA), content.clone());
+    let configured = mls_didwebvh::CodePoints::new(0xF0AA, 0xF0AB).unwrap();
+    assert_eq!(
+        super::kind_under(&under_f0aa, Some(configured)),
+        Some(super::Kind::DidWebvh),
+        "PLANT-CONFIGURED-POINTS: a credential under the configured type was not read"
+    );
+    assert_eq!(super::kind_under(&under_f0aa, Some(DID_WEBVH)), None);
+    let under_default = mls_credential(&log("alice", 1, &[DEVICE], &[ALICE]).credential().unwrap());
+    assert_eq!(
+        super::kind_under(&under_default, None),
+        None,
+        "off reads none"
+    );
+    assert_eq!(
+        super::kind_under(&basic(ALICE.as_bytes()), None),
+        Some(super::Kind::Basic),
+        "Basic is read whatever did_webvh is"
+    );
+}

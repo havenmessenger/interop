@@ -114,6 +114,24 @@ impl Member {
             .clone()
     }
 
+    /// A KeyPackage for this member whose leaf's `app_components` (mls-extensions §7.5, component 0x0001) names `ids`.
+    pub(crate) fn key_package_naming_components(&self, ids: &[u16]) -> KeyPackage {
+        let mut dictionary = AppDataDictionary::new();
+        let _ = dictionary.insert(0x0001, crate::didwebvh_fixtures::app_components(ids));
+        KeyPackage::builder()
+            .leaf_node_capabilities(self.leaf_capabilities())
+            .leaf_node_extensions(
+                Extensions::single(Extension::AppDataDictionary(
+                    AppDataDictionaryExtension::new(dictionary),
+                ))
+                .unwrap(),
+            )
+            .build(SUITE, &self.provider, &self.signer, self.credential.clone())
+            .unwrap()
+            .key_package()
+            .clone()
+    }
+
     /// A KeyPackage bundle (with its private keys in this member's provider), for a join that processes the Welcome.
     pub(crate) fn key_package_bundle(&self) -> KeyPackageBundle {
         KeyPackage::builder()

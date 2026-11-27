@@ -53,8 +53,41 @@ fn each_field_is_read() {
     );
     assert_eq!(
         policy.describe(),
-        "mls_ciphersuites=0x0001 identifier_discovery=enrolled require_nonce_on_key_material=true external_commit_when_unset=deny untracked_rooms=accept consent_provider_grants=true consent_revoke_notifies=true consent_kept_at_opt_out=true consent_request_days=7"
+        "mls_ciphersuites=0x0001 identifier_discovery=enrolled require_nonce_on_key_material=true external_commit_when_unset=deny untracked_rooms=accept consent_provider_grants=true consent_revoke_notifies=true consent_kept_at_opt_out=true consent_request_days=7 did_webvh=0x0008/0xf013"
     );
+}
+
+/// The `[did_webvh]` table: the reference implementation's code points by default; other values, or off, as written.
+/// Revert check: read the code points from the defaults whatever the table says, and the written ones are not used.
+#[test]
+fn the_did_webvh_table_is_read() {
+    let drafts = HubPolicy::default().did_webvh;
+    assert_eq!(
+        drafts.code_points().unwrap(),
+        Some(mls_didwebvh::CodePoints::DEFAULT)
+    );
+    let written = HubPolicy::parse(
+        r#"
+        [did_webvh]
+        credential_type = 0xF013
+        heads_component = 0xF014
+        "#,
+    )
+    .unwrap();
+    let points = written.did_webvh.code_points().unwrap().unwrap();
+    assert_eq!(
+        (points.credential_type(), points.heads_component()),
+        (0xF013, 0xF014),
+        "PLANT-POLICY-DIDWEBVH-POINTS: the table's code points were not read"
+    );
+    assert!(written.describe().ends_with("did_webvh=0xf013/0xf014"));
+    let off = HubPolicy::parse("[did_webvh]\nenabled = false\n").unwrap();
+    assert_eq!(
+        off.did_webvh.code_points().unwrap(),
+        None,
+        "PLANT-POLICY-DIDWEBVH-OFF: did_webvh was read though the policy turns it off"
+    );
+    assert!(off.describe().ends_with("did_webvh=off"));
 }
 
 /// A file that does not say what was meant stops the start: a misspelt key, an unknown value, an empty suite list, a
@@ -69,6 +102,10 @@ fn a_policy_that_is_not_what_was_meant_is_refused() {
         "consent_request_days = 0",
         "mls_ciphersuites = [0x0001, 0xbeef]",
         "mls_ciphersuites = \"0x0001\"",
+        // A credential type RFC 9420 assigns (x509), a GREASE component, and a key the table does not have.
+        "[did_webvh]\ncredential_type = 0x0002",
+        "[did_webvh]\nheads_component = 0x0A0A",
+        "[did_webvh]\ncredential = 0x0008",
     ] {
         assert!(HubPolicy::parse(raw).is_err(), "{raw:?} was taken");
     }

@@ -29,6 +29,14 @@
 //! consent_kept_at_opt_out = false
 //! # Days a consent request made of a user stays pending (default 30).
 //! consent_request_days = 30
+//!
+//! # The did_webvh credential (draft-atwood-mls-didwebvh-credential, DIVERGENCES DIV-24): whether this hub reads it, and
+//! # the code points it reads it under until IANA assigns them. Defaults: on, credential type 0x0008, record component
+//! # 0xF013 (the reference implementation's). Every member of a room must use the same values.
+//! [did_webvh]
+//! enabled = true
+//! credential_type = 0x0008
+//! heads_component = 0xF013
 //! ```
 //!
 //! A named file the hub cannot read, a key it does not know, an empty suite list or a suite the crypto provider does not
@@ -73,6 +81,42 @@ pub enum UntrackedRooms {
     Accept,
 }
 
+/// The did_webvh credential: whether the hub reads it, and the code points it reads it under (DIV-24).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DidWebvhPolicy {
+    /// Off: a did_webvh credential is a type the hub does not read, and its record a component it has no rule for.
+    pub enabled: bool,
+    /// The credential type it is read under.
+    pub credential_type: u16,
+    /// The `app_data_dictionary` component of its `did_webvh_heads` record.
+    pub heads_component: u16,
+}
+
+impl Default for DidWebvhPolicy {
+    fn default() -> Self {
+        let points = mls_didwebvh::CodePoints::DEFAULT;
+        Self {
+            enabled: true,
+            credential_type: points.credential_type(),
+            heads_component: points.heads_component(),
+        }
+    }
+}
+
+impl DidWebvhPolicy {
+    /// The code points the hub reads the credential under, `None` when it is off; values the credential cannot take
+    /// (reserved, already assigned, GREASE) are refused.
+    pub fn code_points(&self) -> anyhow::Result<Option<mls_didwebvh::CodePoints>> {
+        if !self.enabled {
+            return Ok(None);
+        }
+        mls_didwebvh::CodePoints::new(self.credential_type, self.heads_component)
+            .map(Some)
+            .map_err(|e| anyhow::anyhow!("[did_webvh]: {e}"))
+    }
+}
+
 /// The deployment's choices; [`Default`] is the drafts' behaviour.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -92,6 +136,8 @@ pub struct HubPolicy {
     pub consent_kept_at_opt_out: bool,
     /// Days a consent request made of a user stays pending before it is dropped.
     pub consent_request_days: u32,
+    /// The did_webvh credential (DIV-24).
+    pub did_webvh: DidWebvhPolicy,
 }
 
 impl Default for HubPolicy {
@@ -106,6 +152,7 @@ impl Default for HubPolicy {
             consent_revoke_notifies: false,
             consent_kept_at_opt_out: false,
             consent_request_days: 30,
+            did_webvh: DidWebvhPolicy::default(),
         }
     }
 }
@@ -136,6 +183,7 @@ impl HubPolicy {
                 "consent_request_days is 0, so every consent request would expire as it arrives"
             );
         }
+        self.did_webvh.code_points()?;
         let implemented = mimi_core::gate::default_mls_ciphersuites();
         if let Some(suite) = self
             .mls_ciphersuites
@@ -157,7 +205,7 @@ impl HubPolicy {
             Discovery::Enrolled => "enrolled",
         };
         format!(
-            "mls_ciphersuites={} identifier_discovery={discovery} require_nonce_on_key_material={} external_commit_when_unset={} untracked_rooms={} consent_provider_grants={} consent_revoke_notifies={} consent_kept_at_opt_out={} consent_request_days={}",
+            "mls_ciphersuites={} identifier_discovery={discovery} require_nonce_on_key_material={} external_commit_when_unset={} untracked_rooms={} consent_provider_grants={} consent_revoke_notifies={} consent_kept_at_opt_out={} consent_request_days={} did_webvh={}",
             hex_list(&self.mls_ciphersuites),
             self.require_nonce_on_key_material,
             match self.external_commit_when_unset {
@@ -172,6 +220,14 @@ impl HubPolicy {
             self.consent_revoke_notifies,
             self.consent_kept_at_opt_out,
             self.consent_request_days,
+            if self.did_webvh.enabled {
+                format!(
+                    "0x{:04x}/0x{:04x}",
+                    self.did_webvh.credential_type, self.did_webvh.heads_component
+                )
+            } else {
+                "off".to_owned()
+            },
         )
     }
 }

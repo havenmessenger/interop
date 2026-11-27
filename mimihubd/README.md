@@ -364,6 +364,14 @@ consent_revoke_notifies = false
 consent_kept_at_opt_out = false
 # Days a consent request made of a user stays pending (default 30; 0 stops the start).
 consent_request_days = 30
+# The did_webvh credential (draft-atwood-mls-didwebvh-credential, DIVERGENCES DIV-24): whether the hub reads it, and the
+# code points it reads it under until IANA assigns them. Defaults: on, credential type 0x0008, record component 0xF013
+# (the reference implementation's). Every member of a room must use the same values. Off: a did_webvh credential is a
+# type the hub does not read, and its record a component it has no rule for.
+[did_webvh]
+enabled = true
+credential_type = 0x0008
+heads_component = 0xF013
 ```
 
 A key the hub does not know, an empty suite list, or a suite the crypto provider does not implement stops the start,
