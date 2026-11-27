@@ -224,6 +224,36 @@ fn a_portable_did_names_its_mimi_uri_wherever_the_did_lives() {
     );
 }
 
+/// A user renamed in the log (a new `mimi:` URI, the same SCID) is not a successor, whether the DID stays or moves with
+/// it: the hub binds a client to the user its URI names, so a renamed member leaves each room and joins again under its
+/// new URI. Both logs verify, and both are the same identity to the draft (same SCID, the old log a prefix of the new),
+/// so this refusal is the URI rule's alone.
+#[test]
+fn a_user_renamed_in_its_log_is_not_a_successor() {
+    let old = "mimi://fleet-a.example/u/agent9".to_string();
+    let new = "mimi://fleet-b.example/u/agent9".to_string();
+    let mut log = PortableLog::create("fleet-a.example", "agent9", 6, &[DEVICE], &[old.clone()]);
+    let before = mls_credential(&log.credential().unwrap());
+    let previous = log.did_at("fleet-a.example");
+    log.append("fleet-b.example", &[DEVICE], &[previous, new.clone()]);
+    let after = mls_credential(&log.credential().expect("a move with a new URI verifies"));
+    assert_eq!(user_uri(&after, &DEVICE).as_deref(), Some(new.as_str()));
+    let (Some(before_log), Some(after_log)) = (
+        super::verified_log(&before, &DEVICE),
+        super::verified_log(&after, &DEVICE),
+    ) else {
+        panic!("both logs verify and bind");
+    };
+    assert!(
+        mls_didwebvh::rules::is_valid_successor(&before_log, &after_log),
+        "to the draft the renamed log is the same identity, extended"
+    );
+    assert!(
+        !is_successor((&before, &DEVICE), (&after, &DEVICE)),
+        "PLANT-DIDWEBVH-RENAME: a renamed user's leaf was taken as a successor"
+    );
+}
+
 /// A credential's verification is remembered by its bytes, outcome and all, and the oldest is let go past the bound.
 #[test]
 fn verified_logs_are_remembered_within_their_bound() {
