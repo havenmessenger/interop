@@ -79,6 +79,14 @@ pub(crate) fn user_uri(credential: &Credential, signature_key: &[u8]) -> Option<
 /// - Basic: the same identity bytes, exactly, as the group's clients require.
 /// - `did_webvh`: the same SCID with the old log a prefix of the new (§Successor Credentials), the new log authorizing
 ///   the new key, and the same `mimi:` URI, so a renewed leaf cannot rebind its client to another user.
+///
+/// The `mimi:` URI condition is stricter than the credential's own successor rule, on purpose, and it is a MIMI rule,
+/// not a credential rule. The participant list is keyed by user URI, and protocol-07 §7.5 has every client of a user
+/// carry that user's identifier: "In a room that has multiple MLS clients per "user", the identifier for each user in
+/// participants.user is the same across all that user's clients in the room." A leaf whose URI changes while its list
+/// entry stays breaks that for every member of the room, whatever its credential library says. So a renamed user
+/// (same SCID, new URI) is not a successor here: it leaves the room and joins again under its new URI. Do not relax
+/// this to `mls_didwebvh::rules::is_valid_successor` alone.
 pub(crate) fn is_successor(old: (&Credential, &[u8]), new: (&Credential, &[u8])) -> bool {
     match (kind(old.0), kind(new.0)) {
         (Some(Kind::Basic), Some(Kind::Basic)) => {

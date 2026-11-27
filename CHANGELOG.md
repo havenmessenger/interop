@@ -17,7 +17,9 @@ are in [DIVERGENCES.md](DIVERGENCES.md).
   removal refused; every Commit where the record exists or a `did_webvh` leaf is in the tree after it is checked on that
   tree (Expected Heads, Record matches, Consistency, Authorization), a seed as a joiner checks its Welcome; a group with
   `did_webvh` members names the record in `app_components`, and no `did_webvh` credential is an external sender. A
-  refusal is `invalidProposal`. Rooms with no record and no `did_webvh` leaf are not affected. The Commit decoder in
+  refusal is `invalidProposal`. Rooms with no record and no `did_webvh` leaf are not affected, but for one change: an
+  AppDataUpdate creating the record in such a room, refused before as a component the hub does not read, is refused
+  now as one that does not hold the expected (empty) record. The Commit decoder in
   front of every `update` still refuses an Add of a `did_webvh` member and an AppDataUpdate of the record (DIV-24).
 - `mimihubd` links `mls-didwebvh`, the did_webvh credential's log verification and group rules from its reference
   implementation (draft-atwood-mls-didwebvh-credential), at one revision of its repository until it is on crates.io;

@@ -852,5 +852,10 @@ A credential of any other type names no user, whatever its content: it is never 
 Commit adds, an external Commit's joiner, a renewed leaf), it is refused; a published KeyPackage is answered
 `credential-not-supported`. A renewed leaf's new credential must be "valid as a successor" to the old one "according to the
 application's policy" (RFC 9420 §5.3.1); for a Basic credential the hub's policy is exactly the same identity bytes, and for a `did_webvh` credential the same
-SCID with the old log a prefix of the new (the draft's §Successor Credentials) and the same `mimi:` URI. All of this is read in one module, `mimihubd/src/credential.rs`, so
+SCID with the old log a prefix of the new (the draft's §Successor Credentials) and the same `mimi:` URI. That last
+condition is stricter than the credential's own successor rule, and it is a MIMI rule: the participant list is keyed
+by user URI, and protocol-07 §7.5 has "the identifier for each user in participants.user ... the same across all that
+user's clients in the room", so a leaf whose URI changes under an unchanged list entry breaks that for every member.
+A user renamed in its log (same SCID, new URI) therefore leaves the room and joins again under its new URI. The
+reference implementation's hub refuses the same change (any Update or update path that changes a leaf's user). All of this is read in one module, `mimihubd/src/credential.rs`, so
 a further credential type is added there.

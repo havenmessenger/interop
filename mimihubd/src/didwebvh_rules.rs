@@ -58,14 +58,16 @@ pub(crate) fn resolve_heads(
         .map_err(|_| "the did_webvh_heads record does not encode")
 }
 
-/// Whether a Commit staged on `group` may be one the rules apply to: the room has a record, or a leaf before the Commit
-/// or one it brings (an Add, an Update, the committer's new leaf) is a `did_webvh` credential. Only then is the tree
-/// after it built to check.
+/// Whether a Commit staged on `group` may be one the rules apply to: the room has a record before or after it, or a leaf
+/// before the Commit or one it brings (an Add, an Update, the committer's new leaf) is a `did_webvh` credential. Only
+/// then is the tree after it built to check. A Commit that creates the record in a room with no `did_webvh` leaf is
+/// checked too, and refused: with no leaf to record, the expected record is empty.
 pub(crate) fn may_apply(
     group: &openmls::group::PublicGroup,
     staged: &openmls::group::StagedCommit,
 ) -> bool {
     record_present(group.group_context())
+        || record_present(staged.group_context())
         || group
             .members()
             .any(|member| credential::is_did_webvh(&member.credential))
@@ -94,7 +96,9 @@ pub(crate) fn check_commit(
 ) -> Result<(), &'static str> {
     let leaves = did_webvh_leaves(members_after)?;
     let previous = record(before)?;
-    if previous.is_none() && leaves.is_empty() {
+    // Nothing to check in a room that had no record, has no did_webvh leaf and is not given a record; one that is
+    // given a record with no leaf to record fails Record matches below, as the expected record is empty.
+    if previous.is_none() && leaves.is_empty() && !record_present(after) {
         return check_external_senders(after);
     }
     check_context(after, !leaves.is_empty())?;

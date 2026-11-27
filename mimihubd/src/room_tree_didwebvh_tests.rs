@@ -439,3 +439,91 @@ fn basic_and_did_webvh_members_share_a_room() {
     );
     assert!(answer.is_ok(), "{:?}", answer.err());
 }
+
+/// A room of Basic members never enters the did_webvh checks, and the hub's tree after each of its Commits is byte for
+/// byte the members' own: an Add and a Remove each stage as before, with nothing to build or check for did_webvh.
+#[test]
+fn a_basic_room_is_not_touched_by_the_did_webvh_rules() {
+    use crate::mls_fixtures::add_commit;
+    let alice = Member::new(ALICE);
+    let bob = Member::new(BOB);
+    let carol = Member::new(CAROL);
+    let mut group = alice.create_group(GROUP);
+    let (_commit, group_info, tree) = add_commit(&mut group, &alice, &[&bob]);
+    let p = hub_listing(&[ALICE, BOB]);
+    seed(&p, &group_info, &tree);
+    let step = |p: &Provider, group: &mut MlsGroup, commit: Vec<u8>, group_info: Vec<u8>| {
+        let tracking = p.room_tracking(ROOM).unwrap().unwrap();
+        let stored = openmls::group::PublicGroup::load(
+            &p.store.groups(),
+            &openmls::prelude::GroupId::from_slice(GROUP),
+        )
+        .unwrap()
+        .unwrap();
+        let staged = p
+            .stage_tracked_commit(ROOM, &tracking, &commit, Some(&full(&group_info)))
+            .unwrap();
+        assert!(
+            !crate::didwebvh_rules::may_apply(&stored, &staged.staged),
+            "a Basic room's Commit is not one the did_webvh rules apply to"
+        );
+        p.merge_tracked_commit(staged).unwrap();
+        let hub_tree = openmls::group::PublicGroup::load(
+            &p.store.groups(),
+            &openmls::prelude::GroupId::from_slice(GROUP),
+        )
+        .unwrap()
+        .unwrap()
+        .export_ratchet_tree();
+        assert_eq!(
+            hub_tree.tls_serialize_detached().unwrap(),
+            group
+                .export_ratchet_tree()
+                .tls_serialize_detached()
+                .unwrap(),
+            "the hub's tree is the members' tree"
+        );
+    };
+    let (commit, group_info, _tree) = add_commit(&mut group, &alice, &[&carol]);
+    step(&p, &mut group, commit, group_info);
+    let (commit, _welcome, _info) = group
+        .remove_members(
+            &alice.provider,
+            &alice.signer,
+            &[openmls::prelude::LeafNodeIndex::new(2)],
+        )
+        .unwrap();
+    group.merge_pending_commit(&alice.provider).unwrap();
+    let group_info = crate::mls_fixtures::group_info_after(&group, &alice);
+    step(
+        &p,
+        &mut group,
+        commit.tls_serialize_detached().unwrap(),
+        group_info,
+    );
+}
+
+/// A Commit that creates a did_webvh_heads record in a room with no did_webvh member is refused: with no leaf to
+/// record, the expected record is empty (§Rules, Record matches). Revert check: look for the record before the Commit
+/// only, and the record is created unchecked.
+#[test]
+fn a_record_created_in_a_basic_room_is_refused() {
+    use crate::mls_fixtures::{add_commit, app_data_commit};
+    let alice = Member::new(ALICE);
+    let bob = Member::new(BOB);
+    let mut group = alice.create_group(GROUP);
+    let (_commit, group_info, tree) = add_commit(&mut group, &alice, &[&bob]);
+    let p = hub_listing(&[ALICE, BOB]);
+    seed(&p, &group_info, &tree);
+    let invented =
+        crate::didwebvh_fixtures::log("ghost", 7, &[[0x44; 32]], &["mimi://example.com/u/ghost"]);
+    let value = record([mls_didwebvh::DidWebvhHead::from_log(invented.verified())]);
+    let commit = app_data_commit(&mut group, &alice, &[(heads(), value.clone(), value)]);
+    let tracking = p.room_tracking(ROOM).unwrap().unwrap();
+    let answer = p.stage_tracked_commit(ROOM, &tracking, &commit, None);
+    assert!(
+        refused_for(&answer).is_some_and(|why| why.contains("Record matches")),
+        "PLANT-DIDWEBVH-RECORD-CREATED: {:?}",
+        answer.err()
+    );
+}
